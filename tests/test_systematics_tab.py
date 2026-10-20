@@ -28,7 +28,7 @@ from cls_estimations.systematics import (  # noqa: E402
 )
 from gui.analysis.systematic_scan import Baseline, value_key  # noqa: E402
 from gui.analysis.systematics_tab import (  # noqa: E402
-    SeedDialog, SystematicsTab, draw_systematics,
+    MODE_RANGE, SeedDialog, SystematicsTab, draw_systematics,
 )
 
 PROJECT = "70Ge_T02"
@@ -85,10 +85,21 @@ def _records(slope=-13.0, base=-100.0, offsets=(-30.0, -20.0, -10.0),
     return out
 
 
+def _range_tab(analysis_tab):
+    """A tab on the even-grid scan. Every test in this file was written
+    for it -- the only mode before 2026-10-09; the three-offset batch
+    (common offset + zero crossings) is the default now and has its own
+    tests in test_systematics_calibration_mode.py."""
+    tab = SystematicsTab(analysis_tab)
+    tab._mode.setCurrentText(MODE_RANGE)
+    tab._definition.setCurrentText(HALF_WIDTH)
+    return tab
+
+
 class TabSetupTests(unittest.TestCase):
 
     def _tab(self, projects):
-        tab = SystematicsTab(_StubAnalysisTab(projects))
+        tab = _range_tab(_StubAnalysisTab(projects))
         self.addCleanup(tab.deleteLater)
         return tab
 
@@ -158,7 +169,7 @@ class IterationListingTests(unittest.TestCase):
             os.makedirs(os.path.join(self.dir, PROJECT, name))
 
     def _tab(self):
-        tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(tab.deleteLater)
         return tab
 
@@ -180,7 +191,7 @@ class IterationListingTests(unittest.TestCase):
             "iter_002")
 
     def test_a_project_with_no_output_says_so(self):
-        tab = SystematicsTab(_StubAnalysisTab([_StubProject("nothing")]))
+        tab = _range_tab(_StubAnalysisTab([_StubProject("nothing")]))
         self.addCleanup(tab.deleteLater)
         self.assertIn("no iteration",
                       tab._proj_table.cellWidget(0, 3).currentText())
@@ -190,7 +201,7 @@ class BandDisplayTests(unittest.TestCase):
     """What the tab makes of a finished scan."""
 
     def setUp(self):
-        self.tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        self.tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(self.tab.deleteLater)
         self.tab._baselines[PROJECT] = _baseline()
         self.tab._records = _records()
@@ -266,7 +277,7 @@ class ExclusionTests(unittest.TestCase):
     without being deleted -- it is evidence."""
 
     def setUp(self):
-        self.tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        self.tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(self.tab.deleteLater)
         self.tab._baselines[PROJECT] = _baseline()
         self.tab._records = _records()
@@ -295,7 +306,7 @@ class ExclusionTests(unittest.TestCase):
 class PlotTests(unittest.TestCase):
 
     def setUp(self):
-        self.tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        self.tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(self.tab.deleteLater)
         self.tab._baselines[PROJECT] = _baseline()
         self.tab._records = _records()
@@ -408,7 +419,7 @@ class PersistenceTests(unittest.TestCase):
     reopened."""
 
     def _tab(self):
-        tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(tab.deleteLater)
         return tab
 
@@ -466,7 +477,7 @@ class ExportTests(unittest.TestCase):
         real = sw.get_analysis_dir
         sw.get_analysis_dir = lambda: self.dir
         self.addCleanup(setattr, sw, "get_analysis_dir", real)
-        self.tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        self.tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(self.tab.deleteLater)
         self.tab._baselines[PROJECT] = _baseline()
         self.tab._records = _records()
@@ -524,7 +535,7 @@ class ChainGuardTests(unittest.TestCase):
     on uncorrected centroids and looks exactly like one that worked."""
 
     def setUp(self):
-        self.tab = SystematicsTab(_StubAnalysisTab([_StubProject(PROJECT)]))
+        self.tab = _range_tab(_StubAnalysisTab([_StubProject(PROJECT)]))
         self.addCleanup(self.tab.deleteLater)
         from PySide6.QtWidgets import QMessageBox
         self.asked = []
@@ -599,7 +610,7 @@ class EndToEndTests(unittest.TestCase):
     def setUp(self):
         self.p = _LiveProject("70Ge", slope=-13.0, base=100.0)
         self.addCleanup(self.p.deleteLater)
-        self.tab = SystematicsTab(_StubAnalysisTab([self.p]))
+        self.tab = _range_tab(_StubAnalysisTab([self.p]))
         self.addCleanup(self.tab.deleteLater)
         self.tab._baselines["70Ge"] = _baseline(value=100.0 + 13.0 * 20.0)
         self.tab._plot_project.addItem("70Ge")

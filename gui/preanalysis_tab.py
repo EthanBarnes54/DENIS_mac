@@ -731,7 +731,7 @@ class FileEntry(QWidget):
                 dlg = CentroidOffsetDialog(
                     run_number=self.run_number,
                     current_value=float(offset),
-                    parent=self)
+                    parent=self._dialog_parent())
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     self.centroid_offset_mhz = float(dlg.value())
                     # code review 2026-06-02, centroid-offset-no-feedback:
@@ -769,7 +769,8 @@ class FileEntry(QWidget):
                 # not reachable (FileEntry detached, headless tests).
                 pmt_gate = self._pmt_gate_from_parent()
                 ScanFilterDialog(
-                    scan_path, pmt_gate=pmt_gate, parent=self).exec()
+                    scan_path, pmt_gate=pmt_gate,
+                    parent=self._dialog_parent()).exec()
 
             scan_action.triggered.connect(_open_scan_filter)
 
@@ -852,7 +853,7 @@ class FileEntry(QWidget):
             run_label=f"run_{self.run_number}",
             physics=self._cal_physics(),
             peers=(tab._cal_peers() if tab is not None else None),
-            parent=self).exec()
+            parent=self._dialog_parent()).exec()
 
     def _open_calibration_overview(self):
         from gui.calibration_dialog import CalibrationOverviewDialog
@@ -861,7 +862,17 @@ class FileEntry(QWidget):
             return
         CalibrationOverviewDialog(
             tab._cal_peers(), physics=self._cal_physics(),
-            parent=self).exec()
+            parent=self._dialog_parent()).exec()
+
+    def _dialog_parent(self):
+        """The window, not this row, as the parent of a dialog it opens.
+
+        A selected row carries ``FileEntry, FileEntry * {background...}``
+        and a child dialog inherits it -- and so does every tooltip
+        shown over that dialog, which came out dark grey instead of the
+        theme's light one (Arda, 2026-10-09).
+        """
+        return self.window() or self
 
     def _pa_tab(self):
         """Walk up to the enclosing PreAnalysisTab (None when detached)."""
@@ -1158,7 +1169,8 @@ class MergedFileEntry(FileEntry):
                  source_info,
                  merge_cooler_v=None, merge_laser_sp=None,
                  merge_mass_amu=None, merge_harmonic=None,
-                 per_run=None,
+                 per_run=None, merged_x_cal=None,
+                 merged_cal_spread_v=None,
                  color="#333333", parent=None):
         # Pass dummy values to FileEntry.__init__
         super().__init__(
@@ -1169,6 +1181,15 @@ class MergedFileEntry(FileEntry):
         )
         self.merged_x = np.array(merged_x, dtype=float)
         self.merged_y = np.array(merged_y, dtype=float)
+        # A voltage merge's calibrated voltage per bin (None: frequency
+        # merge, or a voltage merge made before 2026-10-08).
+        self.merged_x_cal = (None if merged_x_cal is None
+                             else np.array(merged_x_cal, dtype=float))
+        # How far the merged runs' calibrations disagree (V) -- the
+        # projection warns above 0.1 V. Kept so it survives save/restore
+        # and the import into Analysis.
+        self.merged_cal_spread_v = (None if merged_cal_spread_v is None
+                                    else float(merged_cal_spread_v))
         self.merge_domain = merge_domain  # "voltage" or "frequency"
         self.source_info = _normalize_source_info(source_info)
         # Merge-level Doppler metadata, used when Doppler-shifting a
@@ -1244,8 +1265,15 @@ class MergedFileEntry(FileEntry):
                               for s in (self.source_info or [])],
             "source_files": [s.get("filepath")
                               for s in (self.source_info or [])],
-            "per_run":      list(self.per_run) if self.per_run else [],
+            "per_run":      ([dict(rd) for rd in self.per_run]
+                             if self.per_run else []),
             "metadata":     {},
+            # The domain on record, so readers never guess it from x_unit.
+            "merge_params": {"domain": self.merge_domain},
+            **({"x_cal": self.merged_x_cal}
+               if self.merged_x_cal is not None else {}),
+            **({"cal_spread_v": self.merged_cal_spread_v}
+               if self.merged_cal_spread_v is not None else {}),
         }
 
 
@@ -4734,6 +4762,8 @@ class PreAnalysisTab(QWidget):
             merge_mass_amu=mm.get("mass_amu"),
             merge_harmonic=mm.get("harmonic"),
             per_run=per_run,
+            merged_x_cal=merged_data.get("x_cal"),
+            merged_cal_spread_v=merged_data.get("cal_spread_v"),
         )
         # Override the synthetic "[merged] <name>" filepath with the
         # real on-disk path so the de-dup / save-config logic treats
@@ -5615,31 +5645,68 @@ class PreAnalysisTab(QWidget):
                 y = entry.merged_y.copy()
 
                 if entry.merge_domain == "voltage":
-                    # stored x = scanning voltage (V)
+                    # stored x = scanning voltage (V). Every other axis
+                    # goes through the fit's own conversion: the merge's
+                    # calibrated voltage (x_cal) and its own Doppler
+                    # metadata (merge.voltage_merge_physics /
+                    # project_voltage_merge_to_frequency), this tab's
+                    # values only filling gaps. The plot used to take the
+                    # RAW voltage and this tab's cooler/laser/mass for
+                    # every axis, and called the raw voltage "Calibrated"
+                    # (review 3, 2026-10-08) -- so it disagreed with the
+                    # fit and with View...
+                    from gui.analysis.merge import (
+                        project_voltage_merge_to_frequency,
+                        voltage_merge_physics)
+                    has_cal = entry.merged_x_cal is not None
+                    x_v = (np.asarray(entry.merged_x_cal, dtype=float)
+                           if has_cal else x)
                     if xaxis_mode == "Voltage":
                         xlabel = "Scanning voltage (V)"
                     elif xaxis_mode == "Calibrated voltage":
-                        xlabel = "Calibrated voltage (V)"
-                    elif xaxis_mode == "Calibrated beam energy":
-                        x = cooler_v - x
-                        xlabel = "Beam energy (V)"
-                    elif xaxis_mode == "Wavenumber":
-                        freq_MHz = self._voltage_to_frequency(
-                            cooler_v - x, mass, harmonic, laser_sp)
-                        x = freq_MHz * 1e6 / (C_LIGHT * 100.0) \
-                            - offset * harmonic
-                        xlabel = "Wavenumber (cm$^{-1}$)"
-                    else:  # Frequency
-                        freq_MHz = self._voltage_to_frequency(
-                            cooler_v - x, mass, harmonic, laser_sp)
-                        x = freq_MHz - offset * harmonic * C_LIGHT \
-                            * 100.0 / 1e6
-                        xlabel = "Frequency (MHz)"
+                        x = x_v.copy()
+                        xlabel = ("Calibrated voltage (V)" if has_cal
+                                  else "Scanning voltage (V), "
+                                       "no calibration on record")
+                    else:
+                        md = entry.to_merged_data()
+                        try:
+                            phys = voltage_merge_physics(
+                                md, defaults=(cooler_v, laser_sp, mass,
+                                              harmonic))
+                        except ValueError:
+                            continue
+                        if xaxis_mode == "Calibrated beam energy":
+                            x = phys[0] - x_v
+                            xlabel = "Beam energy (V)"
+                        else:
+                            md["merge_metadata"] = dict(zip(
+                                ("cooler_v", "laser_sp", "mass_amu",
+                                 "harmonic"), phys))
+                            freq_MHz = project_voltage_merge_to_frequency(
+                                md, {"ref_freq": self._get_transition_cm()
+                                     * C_LIGHT * 100.0})[0]
+                            if xaxis_mode == "Wavenumber":
+                                x = freq_MHz * 1e6 / (C_LIGHT * 100.0)
+                                xlabel = "Wavenumber (cm$^{-1}$)"
+                            else:  # Frequency
+                                x = freq_MHz
+                                xlabel = "Frequency (MHz)"
                 else:
-                    # stored x = frequency (MHz, absolute)
+                    # stored x = frequency in MHz RELATIVE to the
+                    # transition -- the merge backend runs
+                    # Compute_WL(ref=ref_freq) with ref_freq = the
+                    # transition -- i.e. already the detuning the
+                    # Frequency axis shows. It used to be shifted by the
+                    # transition a SECOND time, drawing every frequency
+                    # merge ~1e9 MHz off (2026-09-27; the display still
+                    # assumed the absolute axis of PA's own merge, which
+                    # the 2026-05-14 unification replaced).
+                    x = self._merged_detuning_mhz(x)
                     if xaxis_mode in ("Voltage", "Calibrated voltage",
                                       "Calibrated beam energy"):
-                        # Convert freq back to voltage via _mhz_to_xaxis
+                        # _mhz_to_xaxis takes detunings (it adds the
+                        # transition back), like the HFS overlay's.
                         x = self._mhz_to_xaxis(
                             x, xaxis_mode, harmonic, offset,
                             mass, cooler_v, laser_sp)
@@ -5650,11 +5717,9 @@ class PreAnalysisTab(QWidget):
                         else:
                             xlabel = "Beam energy (V)"
                     elif xaxis_mode == "Wavenumber":
-                        x = x * 1e6 / (C_LIGHT * 100.0) \
-                            - offset * harmonic
+                        x = x * 1e6 / (C_LIGHT * 100.0)
                         xlabel = "Wavenumber (cm$^{-1}$)"
-                    else:  # Frequency
-                        x = x - offset * harmonic * C_LIGHT * 100.0 / 1e6
+                    else:  # Frequency: the stored detuning as is
                         xlabel = "Frequency (MHz)"
 
                 if normalize and y.max() > 0:
@@ -6761,6 +6826,18 @@ class PreAnalysisTab(QWidget):
             (self._cool_ripple_fig, self._cool_ripple_canvas),
         ])
 
+    def _merged_detuning_mhz(self, x):
+        """A frequency merge's stored x as a detuning in MHz.
+
+        Merges since 2026-05-14 store the detuning (see _replot); PA's
+        own merge before that stored the absolute lab frequency. The two
+        cannot be confused: an absolute value sits at the transition
+        frequency (~1e8-1e9 MHz), a detuning is a small fraction of it.
+        """
+        from gui.analysis.merge import merged_detuning_mhz
+        return merged_detuning_mhz(
+            x, self._get_transition_cm() * C_LIGHT * 100.0 / 1e6)
+
     def _mhz_to_xaxis(self, freq_mhz, xaxis_mode, harmonic, offset,
                        mass, cooler_v, laser_sp):
         """Convert frequency in MHz to the current x-axis display units."""
@@ -7390,13 +7467,16 @@ class PreAnalysisTab(QWidget):
             merge_laser_sp=merge_laser_sp,
             merge_mass_amu=merge_mass_amu,
             merge_harmonic=merge_harmonic,
-            per_run=stripped_per_run or None)
+            per_run=stripped_per_run or None,
+            merged_x_cal=result.get("x_cal"),
+            merged_cal_spread_v=result.get("cal_spread_v"))
 
     def _add_merged_entry(self, name, merged_x, merged_y, domain,
                           source_info,
                           merge_cooler_v=None, merge_laser_sp=None,
                           merge_mass_amu=None, merge_harmonic=None,
-                          per_run=None,
+                          per_run=None, merged_x_cal=None,
+                          merged_cal_spread_v=None,
                           color="#333333", checked=True,
                           alpha=1.0, linestyle="-"):
         """Create and add a MergedFileEntry to the file list."""
@@ -7411,6 +7491,8 @@ class PreAnalysisTab(QWidget):
             merge_mass_amu=merge_mass_amu,
             merge_harmonic=merge_harmonic,
             per_run=per_run,
+            merged_x_cal=merged_x_cal,
+            merged_cal_spread_v=merged_cal_spread_v,
             color=color,
         )
         mfe.alpha = alpha
@@ -7634,7 +7716,9 @@ class PreAnalysisTab(QWidget):
             merge_laser_sp=merge_laser_sp,
             merge_mass_amu=merge_mass_amu,
             merge_harmonic=merge_harmonic,
-            per_run=stripped_per_run or None)
+            per_run=stripped_per_run or None,
+            merged_x_cal=result.get("x_cal"),
+            merged_cal_spread_v=result.get("cal_spread_v"))
 
     def _export_merged_entry(self, mfe):
         """Export a PA merged entry as a DENIS-labelled ASDF.
@@ -7693,6 +7777,10 @@ class PreAnalysisTab(QWidget):
                     "merge_laser_sp": fe.merge_laser_sp,
                     "merge_mass_amu": fe.merge_mass_amu,
                     "merge_harmonic": fe.merge_harmonic,
+                    **({"x_cal": fe.merged_x_cal.tolist()}
+                       if fe.merged_x_cal is not None else {}),
+                    **({"cal_spread_v": fe.merged_cal_spread_v}
+                       if fe.merged_cal_spread_v is not None else {}),
                     "color": fe.light_color,
                     "dark_color": fe.dark_color,
                     "alpha": fe.alpha,
@@ -7952,6 +8040,8 @@ class PreAnalysisTab(QWidget):
                 domain=mcfg.get("domain", "voltage"),
                 source_info=mcfg.get("source_info", []),
                 merge_cooler_v=mcfg.get("merge_cooler_v"),
+                merged_x_cal=mcfg.get("x_cal"),
+                merged_cal_spread_v=mcfg.get("cal_spread_v"),
                 merge_laser_sp=mcfg.get("merge_laser_sp"),
                 merge_mass_amu=mcfg.get("merge_mass_amu"),
                 merge_harmonic=mcfg.get("merge_harmonic"),

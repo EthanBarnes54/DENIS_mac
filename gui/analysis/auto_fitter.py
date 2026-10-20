@@ -36,6 +36,23 @@ from matplotlib.figure import Figure
 # code review 2026-06-02, worker-thread-exceptions-not-logged
 from gui import session_log
 
+
+def _display_yerr(source):
+    """Error bars for a source's plot: its yerr array, or sqrt(max(y, 1))
+    where the fit uses a callable (Model-based) error."""
+    yerr = source.get("yerr")
+    y = np.asarray(source["y"], dtype=float)
+    if yerr is None or callable(yerr):
+        return np.sqrt(np.maximum(y, 1.0))
+    return np.asarray(yerr, dtype=float)
+
+
+def _rank_key(result):
+    """What a start is ranked by: the objective its fit minimised
+    (chi-square, or -ln L under a likelihood). Results from before the
+    key existed fall back to chi2."""
+    return result.get("objective", result.get("chi2", 1e30))
+
 _log = session_log.get_logger("auto_fitter")
 
 
@@ -205,7 +222,12 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
         # only the non-fixed parameters over the full model set.
         from gui.analysis.fitting import (
             _build_models_on_source as _build_canonical,
-            resolve_llh_method)
+            resolve_llh_method, _residual_statistics,
+            _patch_satlas2_emcee_numpy2)
+        # The same satlas2 fixes the real fit runs with (this is a
+        # separate worker process; a lone Gaussian prior was dropped
+        # from Poisson fits here too).
+        _patch_satlas2_emcee_numpy2()
         from gui.analysis.naming import full_param_name, is_fit_param_name
         from gui.analysis.expr_validation import lower_model_expression
 
@@ -226,18 +248,18 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
         # model-local shares through shareModelParams -- mirroring the regular
         # simultaneous fit. The old code unioned both into shareModelParams,
         # mis-routing 'All' shares (code review 2026-06-02).
-        if multi and shared_all_params:
-            for pname in shared_all_params:
-                try:
-                    fitter.shareParams(pname)
-                except Exception:
-                    pass
-        if multi and shared_params:
-            for pname in shared_params:
-                try:
-                    fitter.shareModelParams(pname)
-                except Exception:
-                    pass
+        # Explicit ties, exactly as the regular fit builds them (satlas2's
+        # share calls split a name into letters and shared nothing).
+        # Whether to share follows the FIT MODE, not the source count:
+        # the simultaneous fit ties an 'All' share across two models of
+        # one source too, the separate fit never shares (review 3).
+        _separate = (fitter_config or {}).get("separate", not multi)
+        if not _separate and (shared_params or shared_all_params):
+            from gui.analysis.fitting import share_ties
+            for _full, _head in share_ties(
+                    sources, shared_params or [],
+                    shared_all_params or []).items():
+                fitter.setExpr(_full, _head)
 
         # Apply the model-block expression ties: bare model-local names
         # are lowered to full lmfit names per source. Without this the
@@ -321,8 +343,37 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
              "llh": bool(fcfg.get("llh"))})
         fitter.fit(**fit_kwargs)
 
-        chi2 = float(fitter.chisqr) if hasattr(fitter, 'chisqr') else 1e30
-        redchi = float(fitter.redchi) if hasattr(fitter, 'redchi') else 1e30
+        # Rank by what the fit minimised. Under a likelihood that is the
+        # SUM of the per-point -ln L terms (priors included); lmfit's
+        # chisqr is the sum of their SQUARES, which for counts above e
+        # puts a better Poisson fit below a worse one (review
+        # 2026-10-08: true optimum 5.76e7, a local one 4.19e7).
+        if fcfg.get("llh"):
+            objective = float(_np.sum(fitter.result.residual))
+            objective_name = "-ln L"
+        else:
+            objective = (float(fitter.chisqr)
+                         if hasattr(fitter, 'chisqr') else 1e30)
+            objective_name = "chi2"
+        # Goodness of fit from the residuals, the same number the
+        # regular fit report gives for every objective.
+        _y, _f, _e = [], [], []
+        for si, src in enumerate(sources):
+            sd = sources_data[si]
+            yy = _np.asarray(sd["y"], dtype=float)
+            ff = _np.asarray(src.evaluate(_np.asarray(sd["x"])),
+                             dtype=float)
+            ee = sd["yerr"]
+            ee = (_np.sqrt(_np.maximum(ff, 1.0)) if callable(ee)
+                  else _np.asarray(ee, dtype=float))
+            _y.append(yy)
+            _f.append(ff)
+            _e.append(ee)
+        _st = _residual_statistics(
+            _np.concatenate(_y), _np.concatenate(_f), _np.concatenate(_e),
+            len(vary_keys))
+        chi2 = _st["chisqr"]
+        redchi = _st["redchi"]
 
         # Extract fitted values matching vary_keys order
         fitted_vals = []
@@ -373,6 +424,8 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
         # Backward-compatible top-level keys (from first source)
         return {
             "success": True,
+            "objective": objective,
+            "objective_name": objective_name,
             "chi2": chi2,
             "redchi": redchi,
             "fitted_vals": fitted_vals,
@@ -385,6 +438,7 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
         }
     except Exception as e:
         return {"success": False, "chi2": 1e30, "redchi": 1e30,
+                "objective": 1e30,
                 "error": str(e), "fitted_vals": list(perturbed_values),
                 "x_smooth": [], "y_smooth": [], "components": {},
                 "per_source": []}
@@ -394,8 +448,24 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
 #  Worker Thread
 # ══════════════════════════════════════════════════════════════════
 
+def _run_one_fit_tracked(started_queue, index, fit_fn, *args):
+    """``fit_fn(*args)`` (_run_one_fit), announcing itself first -- so
+    the worker times a start from when it RUNS, not from when it was
+    queued (a queued start must never time out). The function travels
+    as an argument, resolved in the parent at submit time."""
+    try:
+        started_queue.put_nowait(index)
+    except Exception:  # noqa: BLE001
+        pass
+    return fit_fn(*args)
+
+
 class _MultiStartWorker(QThread):
     """Run N perturbed leastsq fits in parallel."""
+
+    #: Seconds one start may run before it is cut off (class attribute,
+    #: so tests can shorten it).
+    START_TIMEOUT_S = 60
 
     # fit_index, completed_count, total_count, result_dict
     result_ready = Signal(int, int, int, object)
@@ -437,41 +507,99 @@ class _MultiStartWorker(QThread):
                     p[j] = rng.normal(self.center[j], spread)
                 perturbations.append(p)
 
-            # Run fits in parallel
-            completed = 0
-
-            with ProcessPoolExecutor(max_workers=self.n_cores) as pool:
-                futures = {}
-                for i, pvals in enumerate(perturbations):
-                    if self._cancelled:
-                        break
-                    f = pool.submit(
-                        _run_one_fit,
-                        self.sources_data, self.model_configs,
-                        pvals, self.vary_keys, self.shared_params,
-                        self.shared_all_params, self.fitter_config)
-                    futures[f] = i
-
-                for future in as_completed(futures):
-                    if self._cancelled:
-                        break
-                    fit_idx = futures[future]
-                    completed += 1
-                    try:
-                        result = future.result(timeout=60)
-                    except Exception as e:
-                        result = {"success": False, "chi2": 1e30,
-                                  "redchi": 1e30, "error": str(e),
-                                  "fitted_vals": [], "x_smooth": [],
-                                  "y_smooth": [], "components": {}}
-
-                    self.result_ready.emit(
-                        fit_idx, completed, self.n_starts, result)
-
+            self._run_pool(perturbations)
             self.all_done.emit()
 
         except Exception as e:
             self.error.emit(str(e))
+
+    @staticmethod
+    def _failed(message):
+        return {"success": False, "chi2": 1e30, "redchi": 1e30,
+                "error": message, "fitted_vals": [], "x_smooth": [],
+                "y_smooth": [], "components": {}}
+
+    def _run_pool(self, perturbations):
+        """Run the starts; return when all are in, on Stop, or after
+        cutting off the ones that hang.
+
+        Polled, so Stop is seen within half a second (it used to wait
+        for the next start to FINISH, then run every queued one). The
+        time limit counts from the child's own "started" message: the
+        old future.result(timeout=60) sat on futures as_completed had
+        already finished, so it never fired (review 3, 2026-10-08).
+        """
+        import time
+        from concurrent.futures import FIRST_COMPLETED, wait
+        from multiprocessing import Manager
+        from queue import Empty
+        from gui.analysis.fitting import _terminate_pool
+
+        manager = Manager()
+        started_q = manager.Queue()
+        completed = 0
+
+        def submit(pool, i):
+            return pool.submit(
+                _run_one_fit_tracked, started_q, i, _run_one_fit,
+                self.sources_data, self.model_configs,
+                perturbations[i], self.vary_keys, self.shared_params,
+                self.shared_all_params, self.fitter_config)
+
+        pool = ProcessPoolExecutor(max_workers=self.n_cores)
+        futures = {}
+        try:
+            for i in range(len(perturbations)):
+                if self._cancelled:
+                    break
+                futures[submit(pool, i)] = i
+            started_at: dict = {}
+            while futures and not self._cancelled:
+                done, _ = wait(list(futures), timeout=0.5,
+                               return_when=FIRST_COMPLETED)
+                for f in done:
+                    i = futures.pop(f)
+                    completed += 1
+                    try:
+                        result = f.result()
+                    except Exception as e:  # noqa: BLE001
+                        result = self._failed(str(e))
+                    self.result_ready.emit(i, completed, self.n_starts,
+                                           result)
+                now = time.monotonic()
+                while True:
+                    try:
+                        started_at.setdefault(started_q.get_nowait(), now)
+                    except (Empty, EOFError, OSError):
+                        break
+                running = set(futures.values())
+                hung = [i for i, t in started_at.items()
+                        if i in running and now - t > self.START_TIMEOUT_S]
+                if not hung:
+                    continue
+                # A hung start holds its worker for good: replace the
+                # pool and give the unfinished starts a fresh one.
+                for f, i in list(futures.items()):
+                    if i in hung:
+                        futures.pop(f)
+                        completed += 1
+                        self.result_ready.emit(
+                            i, completed, self.n_starts, self._failed(
+                                f"timed out after {self.START_TIMEOUT_S} s"))
+                rest = sorted(futures.values())
+                _terminate_pool(pool)
+                pool = ProcessPoolExecutor(max_workers=self.n_cores)
+                futures = {submit(pool, i): i for i in rest}
+                started_at = {}
+        finally:
+            if futures or self._cancelled:
+                _terminate_pool(pool)
+            else:
+                pool.shutdown(wait=True)
+            try:
+                manager.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -503,7 +631,9 @@ class AutoFitterDialog(QDialog):
         # Backward-compat aliases for single-source plotting
         self._x = np.asarray(sources_data[0]["x"], dtype=float)
         self._y = np.asarray(sources_data[0]["y"], dtype=float)
-        self._yerr = np.asarray(sources_data[0]["yerr"], dtype=float)
+        # Error bars to DRAW; the fit itself gets sources_data's yerr,
+        # which for Model-based errors is the callable sqrt(model).
+        self._yerr = _display_yerr(sources_data[0])
         self._model_configs = model_configs
         self._fitter_config = fitter_config or {}
         self._worker = None
@@ -524,8 +654,15 @@ class AutoFitterDialog(QDialog):
             self._fitter_config.get("shared_params", []))
         self._shared_all_params = list(
             self._fitter_config.get("shared_all_params", []))
+        # Shares apply exactly when the fit itself applies them: in a
+        # simultaneous fit, however many sources (review 3, 2026-10-08).
+        self._apply_shares = not self._fitter_config.get(
+            "separate", not self._multi)
         shared_set = ((set(self._shared_params) | set(self._shared_all_params))
-                      if self._multi else set())
+                      if self._apply_shares else set())
+        all_shared = (set(self._shared_all_params)
+                      if self._apply_shares else set())
+        seen_all: set = set()
         n_sources = len(sources_data)
 
         # Build vary keys and initial values
@@ -540,6 +677,12 @@ class AutoFitterDialog(QDialog):
                     continue
                 if (pdata.get("expr") or "").strip():
                     continue  # expression-tied params are derived, not fit
+                if pname in all_shared:
+                    # An 'All' share is ONE parameter: the first model
+                    # carrying it is varied, every later copy is tied.
+                    if pname in seen_all:
+                        continue
+                    seen_all.add(pname)
                 if self._multi and pname not in shared_set:
                     for si in range(n_sources):
                         self._vary_keys.append((i, pname, si))
@@ -803,7 +946,7 @@ class AutoFitterDialog(QDialog):
             for si, sd in enumerate(self._sources_data):
                 cc = colors[si % len(colors)]
                 self._ax.errorbar(
-                    sd["x"], sd["y"], yerr=sd["yerr"],
+                    sd["x"], sd["y"], yerr=_display_yerr(sd),
                     fmt='.', ms=3, alpha=0.5, capsize=1,
                     color=cc, label=sd["name"], zorder=1)
         else:
@@ -852,7 +995,7 @@ class AutoFitterDialog(QDialog):
                 cc = colors[si % len(colors)]
                 if self._show_data.isChecked():
                     self._ax.errorbar(
-                        sd["x"], sd["y"], yerr=sd["yerr"],
+                        sd["x"], sd["y"], yerr=_display_yerr(sd),
                         fmt='.', ms=3, alpha=0.5, capsize=1,
                         color=cc, label=sd["name"], zorder=1)
                 if si < len(per_source) and self._show_fit.isChecked():
@@ -973,9 +1116,10 @@ class AutoFitterDialog(QDialog):
             spread_frac=self._spread.value(),
             n_starts=n_fits,
             n_cores=n_cores,
-            shared_params=self._shared_params if self._multi else None,
+            shared_params=(self._shared_params
+                           if self._apply_shares else None),
             shared_all_params=(self._shared_all_params
-                               if self._multi else None),
+                               if self._apply_shares else None),
             fitter_config=self._fitter_config,
         )
         self._worker.result_ready.connect(self._on_result_ready)
@@ -988,6 +1132,15 @@ class AutoFitterDialog(QDialog):
             self._worker.cancel()
         self._stop_btn.setEnabled(False)
         self._status.setText("Stopping...")
+
+    def done(self, r):
+        """Accept, Reject and the window's X all end here: a round still
+        running is stopped (its pool killed), not left behind."""
+        w = self._worker
+        if w is not None and w.isRunning():
+            w.cancel()
+            w.wait(15000)
+        super().done(r)
 
     # ── Live result callbacks ──
 
@@ -1012,9 +1165,9 @@ class AutoFitterDialog(QDialog):
 
         # Insert into sorted results (successful only)
         if result.get("success"):
-            chi2 = result.get("chi2", 1e30)
-            keys = [r["chi2"] for r in self._results]
-            idx = bisect.bisect_left(keys, chi2)
+            key = _rank_key(result)
+            keys = [_rank_key(r) for r in self._results]
+            idx = bisect.bisect_left(keys, key)
             self._results.insert(idx, result)
         else:
             self._failed_results.append(result)
@@ -1046,7 +1199,16 @@ class AutoFitterDialog(QDialog):
     def _update_results_table(self):
         """Rebuild the top-10 results table from the sorted list."""
         show = self._results[:10]
-        best_chi2 = show[0].get("chi2", 0) if show else 0
+        best_chi2 = _rank_key(show[0]) if show else 0
+        obj_name = (show[0].get("objective_name", "chi2") if show
+                    else "chi2")
+        self._res_table.setHorizontalHeaderLabels(
+            ["Rank",
+             "\u2212ln L" if obj_name == "-ln L" else "\u03c7\u00b2",
+             "\u03c7\u00b2_red",
+             "\u0394(\u2212ln L)" if obj_name == "-ln L"
+             else "\u0394\u03c7\u00b2",
+             "Parameters"])
 
         self._res_table.blockSignals(True)
         self._res_table.setRowCount(len(show))
@@ -1054,13 +1216,13 @@ class AutoFitterDialog(QDialog):
             self._res_table.setItem(
                 row, 0, QTableWidgetItem(f"#{row + 1}"))
             self._res_table.setItem(
-                row, 1, QTableWidgetItem(f"{r.get('chi2', 0):.2f}"))
+                row, 1, QTableWidgetItem(f"{_rank_key(r):.2f}"))
             self._res_table.setItem(
                 row, 2, QTableWidgetItem(f"{r.get('redchi', 0):.4f}"))
             # Distance from the best start. Exact zeros are the
             # point of the column: they say "same minimum, identical
             # preview", which the chi2 column (2 dp) cannot.
-            d_chi2 = r.get("chi2", 0) - best_chi2
+            d_chi2 = _rank_key(r) - best_chi2
             d_item = QTableWidgetItem(
                 "0" if d_chi2 == 0 else f"{d_chi2:.3g}")
             if d_chi2 == 0 and row > 0:
@@ -1119,8 +1281,9 @@ class AutoFitterDialog(QDialog):
         nvarys = len(self._vary_keys)
 
         self._progress.setValue(100)
+        stopped = bool(getattr(self._worker, "_cancelled", False))
         self._status.setText(
-            f"Round {self._round} done  |  "
+            f"Round {self._round} {'stopped' if stopped else 'done'}  |  "
             f"{n_success}/{total} converged  |  "
             f"best \u03c7\u00b2_red = {redchi:.4f}")
         self._result_label.setText(

@@ -78,8 +78,14 @@ class PerStepBasicsTests(unittest.TestCase):
 
     def test_pmt_gate_excludes_other_channels(self):
         data = make_fake([0.0, 10.0], events_per_step=12, tdc=1)
-        # All events are on channel 1; gating to [3,4] leaves nothing.
+        # All events are on channel 1; gating to [3,4] leaves no counts.
+        # The measured steps stay as zero bins (review 2, 2026-10-08);
+        # the fit then refuses the spectrum (fitting.require_counts).
         x, y, _ = _per_step_frequency_bins(data, None, [3, 4], None, None)
+        self.assertEqual(len(x), 2)
+        self.assertEqual(float(np.sum(y)), 0.0)
+        x, y, _ = _per_step_frequency_bins(data, None, [3, 4], None, None,
+                                           keep_empty_steps=False)
         self.assertEqual(len(x), 0)
         self.assertEqual(len(y), 0)
 

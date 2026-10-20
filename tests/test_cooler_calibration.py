@@ -143,12 +143,19 @@ class LineFitTests(unittest.TestCase):
         tight = fit_line(x, y, [0.1, 0.1, 0.1, 0.1, 100.0])
         self.assertAlmostEqual(tight.slope, 0.1, delta=0.005)
 
-    def test_a_zero_error_is_weighted_not_dropped(self):
-        """A parameter pinned at a bound comes back with sigma = 0.
-        Dropping it would quietly change which runs the calibration
-        rests on."""
+    def test_a_point_without_an_error_is_left_out(self):
+        """A fit pinned at a bound has no usable error; unit weight made
+        its pull depend on the unit (review 3, 2026-10-08). It is left
+        out of the line -- not quietly: the calibration flags it, draws
+        it and lists it (ScanPoint.flag, CalibrationResult.excluded)."""
+        line = fit_line([-50, 0, 50, 25], [-6.0, -1.0, 4.0, 900.0],
+                        [0.1, 0.1, 0.1, 0.0])
+        self.assertEqual(line.n, 3)
+        self.assertAlmostEqual(line.slope, 0.1, delta=1e-6)
+
+    def test_without_two_errors_the_line_is_unweighted(self):
         line = fit_line([-50, 0, 50], [-6.0, -1.0, 4.0],
-                        [0.0, 0.1, 0.1])
+                        [0.0, 0.1, float("nan")])
         self.assertEqual(line.n, 3)
         self.assertAlmostEqual(line.slope, 0.1, delta=1e-6)
 

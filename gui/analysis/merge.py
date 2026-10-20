@@ -158,10 +158,21 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
     from gui.calibration import get_registry as _get_cal_registry
     from gui.calibration import load_run_calibrated as _load_calibrated
     cal_map = _get_cal_registry().to_dict()
+    # Scan exclusions, read the way the fit reads them. The merge used to
+    # skip them, so an excluded scan came back in every merge it was part
+    # of (review 2026-10-08).
+    from gui.scan_filter import get_registry as _get_sf_registry
+    from gui.scan_filter import filter_data_for_binning
+    sf_registry = _get_sf_registry()
+    cooler_offset = float(source_config.get("cooler_offset_v", 0.0) or 0.0)
 
     for fpath in file_paths:
         data = _cls.CLSDataFrame()
         cal_res = _load_calibrated(data, fpath, cal_map, cal_order=cal_order)
+        # The run's own cooler voltage in volts, before any override
+        # touches VCoolDiv (as pipeline.prepare_run_data records it).
+        header_cooler_v = float(getattr(data, "Vcool_init", 0) or 0) * float(
+            getattr(data, "VCoolDiv", 10000) or 10000)
 
         # Honor the SourceBlock's "Cooler / Laser Override" TICK, not just
         # the spinbox values -- prepare_run_data (the fit/preview path)
@@ -174,9 +185,19 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         _use_src_override = bool(source_config.get("override_enabled"))
         cooler_override = (source_config.get("cooler_override", 0)
                            if _use_src_override else 0)
-        if cooler_override > 0:
-            data.VCoolDiv = 0
-            data.VCoolOffset = cooler_override
+        # The cooler OFFSET (Yb calibration) on top of the override, else
+        # on top of the run's own recorded voltage -- exactly as
+        # pipeline.prepare_run_data does for a run's fit. Ignored here
+        # until 2026-10-08: with the offset on, the runs moved ~450 MHz
+        # and their merge did not.
+        # The same plan as pipeline.prepare_run_data: on top of the
+        # override, else on top of each event's own cooler readback.
+        from gui.analysis.pipeline import (
+            apply_cooler, resolve_cooler, stepsize_frame)
+        cooler_plan = resolve_cooler(cooler_override, cooler_offset,
+                                     header_cooler_v,
+                                     what=os.path.basename(fpath))
+        apply_cooler(data, cooler_plan)
         laser_override = (source_config.get("laser_override", 0)
                           if _use_src_override else 0)
         if laser_override > 0:
@@ -194,7 +215,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # visually flat noise even when the underlying bunch arrival
         # is a clear peak. Re-bin into 1 µs bins so the bunch peak is
         # visible.
-        data.Compute_ToF(V_gate=v_gate, PMT_gate=pmt_gate)
+        from gui.analysis.binning import strict_pmt_gate
+        with strict_pmt_gate(data, pmt_gate):
+            data.Compute_ToF(V_gate=v_gate, PMT_gate=pmt_gate)
         tof_idx_fine = np.array(data.ToF_binned.index.to_list(),
                                   dtype=float)
         tof_cts_fine = np.array(data.ToF_binned.values[:, 0],
@@ -239,12 +262,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
             # prep; previously missing here, so an overridden frequency merge
             # got a degenerate stepsize -- code review 2026-06-02,
             # merge-cooler-override-missing-vcool-fix).
-            if cooler_override > 0:
-                data.Vcool_init = cooler_override
-                data.VCoolDiv = 1
-            data.Compute_WL(Mass=mass, ref=ref_freq, harmonic=harmonic)
-            if cooler_override > 0:
-                data.VCoolDiv = 0
+            # (A per-event offset: step size only, as in pipeline.)
+            with stepsize_frame(data, cooler_plan):
+                data.Compute_WL(Mass=mass, ref=ref_freq, harmonic=harmonic)
             ref_shift = source_config.get("ref_shift", 0.0)
             if ref_shift != 0.0:
                 # Compose with ref_freq instead of overwriting --
@@ -263,7 +283,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # voltage-axis data labelled x_unit="MHz".
         eff_cfg = dict(eff_cfg)
         eff_cfg["bin_mode"] = "Raw Voltage" if use_voltage else "Frequency"
-        res = compute_binned(data, eff_cfg)
+        excluded_scans = sorted(sf_registry.get(fpath))
+        with filter_data_for_binning(data, excluded_scans, asdf_path=fpath):
+            res = compute_binned(data, eff_cfg)
         run_x, run_y = res["x"], res["y"]
         x_unit = "V" if use_voltage else "MHz"
 
@@ -317,7 +339,13 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
             "ts_stop": getattr(data, "TSstop", 0),
             "n_events": getattr(data, "Size", 0),
             "laser_set": getattr(data, "Laser_set", 0),
-            "cooler_v": getattr(data, "Vcool_init", 0),
+            # Volts. This was the raw readback (Vcool_init, ~2.99), so the
+            # cooler-spread warnings could never fire and a projection
+            # falling back on it clipped the beam to 1 V (review 2).
+            "cooler_v": header_cooler_v,
+            # The calibration this run's voltages are read with, for the
+            # merged spectrum's calibrated voltage axis.
+            "cal_coeffs_v": [float(c) for c in cal_res.coeffs_v],
             "dwell_time": getattr(data, "Dwell_Time", 0),
             "experiment": getattr(data, "Experiment", ""),
             "date": getattr(data, "Date", ""),
@@ -334,6 +362,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
             "calibration": cal_res.to_report_dict(),
             "vcool_div": getattr(data, "VCoolDiv", 10000),
             "vacc_div": getattr(data, "VAccDiv", 1000),
+            # What else shaped this run's axis and counts.
+            "cooler_offset_v": cooler_offset,
+            "excluded_scans": excluded_scans,
             # Audit: record what (if anything) was actually subtracted
             # from this file's MHz axis pre-merge. Zero / zero / None
             # when no correction ran.
@@ -392,6 +423,25 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         y_merged = y_merged[lo_idx:hi_idx]
 
     x_merged = bin_centers
+    x_cal = None
+    cal_spread_v = 0.0
+    if use_voltage:
+        # The merged axis stays the raw DAC voltage (a Raw-Voltage fit of
+        # the merge then matches single-run Raw-Voltage fits), but its
+        # projection into frequency needs the CALIBRATED voltage of each
+        # bin: each run's calibration evaluated there, averaged over the
+        # runs -- the spread is how much the runs disagree.
+        cal_rows = []
+        for rd in per_run:
+            coeffs = rd.get("cal_coeffs_v")
+            if coeffs:
+                cal_rows.append(np.polyval(
+                    np.asarray(coeffs, float)[::-1], bin_centers))
+        if cal_rows:
+            cal_rows = np.asarray(cal_rows)
+            x_cal = cal_rows.mean(axis=0)
+            cal_spread_v = float(np.max(cal_rows.max(axis=0)
+                                        - cal_rows.min(axis=0)))
     # Poisson sqrt(y+1): matches the default yerr the simultaneous fit and the
     # auto-fitter use for merged spectra, so all three fit paths weight a
     # merged spectrum identically (code review 2026-06-02, merged-yerr-
@@ -407,6 +457,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         "bin_step_mhz": bin_step,
         "x_unit": x_unit,
     }
+    if x_cal is not None:
+        out["x_cal"] = x_cal
+        out["cal_spread_v"] = cal_spread_v
 
     # Surfaced via the fit-report channel: re-bin approximation note, the
     # voltage-merge setpoint-spread warning, and the manual-offset note.
@@ -497,6 +550,66 @@ def _build_merge_warnings(per_run, use_voltage, manual_map):
     return warnings
 
 
+def merged_detuning_mhz(x, transition_mhz):
+    """A frequency merge's stored x as a detuning in MHz.
+
+    Merges since 2026-05-14 store the detuning (compute_merged_spectrum
+    runs Compute_WL(ref=transition)); Pre-Analysis's own merge before
+    that stored the absolute lab frequency. The two cannot be confused:
+    an absolute value sits at the transition frequency (~1e8-1e9 MHz), a
+    detuning is a small fraction of it. The one test both the PA plot
+    and the PA -> Analysis import use.
+    """
+    x = np.asarray(x, dtype=float)
+    if (transition_mhz and transition_mhz > 0 and x.size
+            and abs(float(np.median(x))) > 0.5 * transition_mhz):
+        return x - transition_mhz
+    return x
+
+
+def voltage_merge_physics(merged_data, defaults=None):
+    """(cooler_v, laser_cm, mass_amu, harmonic) a voltage merge is
+    projected with: the merge's own metadata, else the means over its
+    runs, else *defaults* (same order). Raises ValueError when a value
+    is still missing. The fit, View... and the Pre-Analysis plot all
+    take the merge's physics from here."""
+    mm = merged_data.get("merge_metadata") or {}
+    # Fall back to per_run means when the user left a merge-level
+    # field unset. The MergeDialog converts 0.0 -> None for the three
+    # float fields (cooler/laser/mass) before emitting merge_metadata,
+    # so `mm["cooler_v"]` is either None or a non-zero float -- the
+    # `mm.get(...) or _mean_from_per_run(...)` chain below treats
+    # missing/None the same as 0 (both fall through to per_run).
+    per_run = merged_data.get("per_run") or []
+
+    def _mean_from_per_run(key):
+        vals = [rd.get(key) for rd in per_run
+                if isinstance(rd.get(key), (int, float))
+                and rd.get(key)]
+        if key == "cooler_v":
+            # Merges made before 2026-10-08 stored the /10000 readback
+            # (~2.99): not a beam energy, never average it in.
+            vals = [v for v in vals if v > 100.0]
+        return float(np.mean(vals)) if vals else None
+
+    d_cool, d_laser, d_mass, d_harm = (defaults or (None,) * 4)
+    cooler_v = mm.get("cooler_v") or _mean_from_per_run("cooler_v") \
+        or d_cool
+    laser_cm = mm.get("laser_sp") or _mean_from_per_run("laser_set") \
+        or _mean_from_per_run("laser_sp") or d_laser
+    mass_amu = mm.get("mass_amu") or _mean_from_per_run("mass_amu") \
+        or d_mass
+    harmonic = mm.get("harmonic") or _mean_from_per_run("harmonic") \
+        or d_harm
+    if not (cooler_v and laser_cm and mass_amu and harmonic):
+        raise ValueError(
+            "Voltage-merged spectrum needs a complete merge_metadata "
+            "(cooler_v, laser_sp, mass_amu, harmonic) to be projected "
+            "into frequency space for a fit. Open the merge dialog and "
+            "set them, or switch Source 'Bin mode' to 'Raw Voltage'.")
+    return float(cooler_v), float(laser_cm), float(mass_amu), harmonic
+
+
 def project_voltage_merge_to_frequency(merged_data, source_config):
     """Return (x_mhz, y, yerr, warnings) for a voltage-merged spectrum
     fitted in frequency mode.
@@ -540,47 +653,65 @@ def project_voltage_merge_to_frequency(merged_data, source_config):
     """
     from cls_estimations.doppler import voltage_to_frequency_array
 
-    x_v = np.asarray(merged_data["x"], dtype=float)
+    # The calibrated voltage of each bin when the merge recorded it; the
+    # raw DAC value of a merge made before 2026-10-08 (warned below).
+    x_cal = merged_data.get("x_cal")
+    x_v = np.asarray(x_cal if x_cal is not None else merged_data["x"],
+                     dtype=float)
     y = np.asarray(merged_data["y"], dtype=float)
     yerr = np.asarray(
         merged_data.get("yerr", np.sqrt(y + 1.0)),  # sqrt(y+1): see merge yerr
         dtype=float)
 
-    mm = merged_data.get("merge_metadata") or {}
-    # Fall back to per_run means when the user left a merge-level
-    # field unset. The MergeDialog converts 0.0 -> None for the three
-    # float fields (cooler/laser/mass) before emitting merge_metadata,
-    # so `mm["cooler_v"]` is either None or a non-zero float -- the
-    # `mm.get(...) or _mean_from_per_run(...)` chain below treats
-    # missing/None the same as 0 (both fall through to per_run).
     per_run = merged_data.get("per_run") or []
+    cooler_v, laser_cm, mass_amu, harmonic = voltage_merge_physics(
+        merged_data)
 
-    def _mean_from_per_run(key):
-        vals = [rd.get(key) for rd in per_run
-                if isinstance(rd.get(key), (int, float))
-                and rd.get(key)]
-        return float(np.mean(vals)) if vals else None
-
-    cooler_v = mm.get("cooler_v") or _mean_from_per_run("cooler_v")
-    laser_cm = mm.get("laser_sp") or _mean_from_per_run("laser_set") \
-        or _mean_from_per_run("laser_sp")
-    mass_amu = mm.get("mass_amu") or _mean_from_per_run("mass_amu")
-    harmonic = mm.get("harmonic") or _mean_from_per_run("harmonic")
-    if not (cooler_v and laser_cm and mass_amu and harmonic):
-        raise ValueError(
-            "Voltage-merged spectrum needs a complete merge_metadata "
-            "(cooler_v, laser_sp, mass_amu, harmonic) to be projected "
-            "into frequency space for a fit. Open the merge dialog and "
-            "set them, or switch Source 'Bin mode' to 'Raw Voltage'.")
-
-    ref_freq_hz = float(source_config.get("ref_freq", 0.0))
+    # The same reference and beam energy a run's own fit uses
+    # (pipeline.prepare_run_data): ref_freq PLUS the Source block's
+    # reference shift, and the cooler voltage PLUS its cooler offset.
+    # Both used to be ignored here -- a 10 MHz shift or a -24 V offset
+    # left the projected axis unchanged (review 2026-10-08).
+    ref_freq_hz = (float(source_config.get("ref_freq", 0.0))
+                   + float(source_config.get("ref_shift", 0.0) or 0.0))
+    cooler_offset = float(source_config.get("cooler_offset_v", 0.0) or 0.0)
+    if cooler_offset:
+        cooler_v = float(cooler_v) + cooler_offset
+        if cooler_v <= 0:
+            raise ValueError(
+                f"cooler offset {cooler_offset:+.3f} V takes the merge's "
+                f"cooler voltage to {cooler_v:.3f} V, which is not a "
+                f"beam energy")
     x_mhz = voltage_to_frequency_array(
         x_v, cooler_v=cooler_v, laser_cm1=laser_cm,
         mass_amu=mass_amu, harmonic=int(harmonic),
         ref_freq_hz=ref_freq_hz)
 
     name = merged_data.get("merged_name", "merged")
-    warnings = [{
+    cal_warnings = []
+    if x_cal is None:
+        cal_warnings.append({
+            "code": "VOLTAGE_MERGE_UNCALIBRATED",
+            "level": "warning",
+            "run": name,
+            "message": (
+                "This voltage merge carries no calibrated voltage for "
+                "its bins (made before 2026-10-08, or imported from "
+                "Pre-Analysis before then), so it is projected with the "
+                "RAW scanning voltage -- each run's voltage calibration "
+                "is missing (tens of MHz or more). Re-merge the runs, or "
+                "re-import the merge from Pre-Analysis.")})
+    elif float(merged_data.get("cal_spread_v", 0.0) or 0.0) > 0.1:
+        cal_warnings.append({
+            "code": "VOLTAGE_MERGE_CALIBRATION_SPREAD",
+            "level": "warning",
+            "run": name,
+            "message": (
+                f"The merged runs' voltage calibrations disagree by up to "
+                f"{float(merged_data['cal_spread_v']):.2f} V at the same "
+                f"DAC value: one bin holds counts from different beam "
+                f"energies. A frequency-domain merge avoids this.")})
+    warnings = cal_warnings + [{
         "code": "VOLTAGE_TO_FREQUENCY_PROJECTION",
         "level": "info",
         "run": name,
@@ -1361,6 +1492,34 @@ class MergeViewDialog(QDialog):
 DENIS_MERGED_SCHEMA = "denis_merged_v1"
 
 
+def _domain_on_record(merged_data):
+    """The domain a merge was computed in, when current code recorded
+    it (``merge_params["domain"]``), else None.
+
+    Merges made since the domain selector existed carry it; only older
+    ones have to be judged from their numbers."""
+    mp = merged_data.get("merge_params") or {}
+    dom = mp.get("domain") if isinstance(mp, dict) else None
+    return dom if dom in ("voltage", "frequency") else None
+
+
+def _looks_mislabelled(x_unit, x, domain_on_record):
+    """The legacy bin_mode/domain bug stamped voltage-axis data "MHz".
+
+    A merge whose domain is on record is judged by that alone: a
+    frequency merge in MHz is right however narrow it is -- the old
+    magnitude test refused a valid -100...100 MHz merge (review
+    2026-10-08). Only an unrecorded merge falls back to the test that
+    a real frequency axis spans more than +-1000 MHz."""
+    if x_unit != "MHz" or len(x) == 0:
+        return False
+    if domain_on_record == "frequency":
+        return False
+    if domain_on_record == "voltage":
+        return True
+    return float(np.max(np.abs(x))) < 1000.0
+
+
 def export_merged_asdf(merged_data, output_path):
     """Write a merged spectrum as a DENIS-labelled ASDF.
 
@@ -1413,17 +1572,14 @@ def export_merged_asdf(merged_data, output_path):
     # code instead of carrying stale state to disk.
     x_arr = np.asarray(merged_data["x"], dtype=float)
     declared_unit = merged_data.get("x_unit", "MHz")
-    if declared_unit == "MHz" and len(x_arr) > 0:
-        x_span = float(np.max(np.abs(x_arr)))
-        if x_span < 1000.0:
-            raise ValueError(
-                "Refusing to export merged ASDF: merged_data["
-                "'x_unit'] is 'MHz' but |x| stays under 1000 -- "
-                "this looks like the legacy bin_mode/domain "
-                "mismatch bug (voltage-axis data labelled as "
-                "frequency). Re-merge with current code, then "
-                "Export. If this is a real low-detuning frequency "
-                "merge, set the unit explicitly downstream.")
+    if _looks_mislabelled(declared_unit, x_arr,
+                          _domain_on_record(merged_data)):
+        raise ValueError(
+            "Refusing to export merged ASDF: merged_data["
+            "'x_unit'] is 'MHz' but this looks like the legacy "
+            "bin_mode/domain mismatch bug (voltage-axis data "
+            "labelled as frequency). Re-merge with current code, "
+            "which records the merge's domain, then Export.")
 
     tree = {
         "denis_schema":     DENIS_MERGED_SCHEMA,
@@ -1436,6 +1592,9 @@ def export_merged_asdf(merged_data, output_path):
         "yerr":             np.asarray(merged_data["yerr"], dtype=float),
         "x_unit":           declared_unit,
         "bin_step":         float(merged_data.get("bin_step_mhz", 0)),
+        **({"x_cal": np.asarray(merged_data["x_cal"], dtype=float),
+            "cal_spread_v": float(merged_data.get("cal_spread_v", 0.0))}
+           if merged_data.get("x_cal") is not None else {}),
         "merge_metadata":   {
             "cooler_v": merge_metadata.get("cooler_v"),
             "laser_sp": merge_metadata.get("laser_sp"),
@@ -1505,6 +1664,9 @@ def load_merged_asdf(path):
                                             dtype=float),
                 "x_unit":         af.tree.get("x_unit", "MHz"),
                 "bin_step_mhz":   float(af.tree.get("bin_step", 0)),
+                **({"x_cal": np.array(af.tree["x_cal"], dtype=float),
+                    "cal_spread_v": float(af.tree.get("cal_spread_v", 0))}
+                   if af.tree.get("x_cal") is not None else {}),
                 "merge_metadata": {
                     "cooler_v": mm.get("cooler_v"),
                     "laser_sp": mm.get("laser_sp"),
@@ -1536,8 +1698,8 @@ def load_merged_asdf(path):
     # by the pre-fix bin_mode/domain mismatch bug. Raise so the
     # caller surfaces a clear "re-merge required" message instead of
     # rendering wrong physics.
-    if (out.get("x_unit") == "MHz" and len(out["x"]) > 0
-            and float(np.max(np.abs(out["x"]))) < 1000.0):
+    if _looks_mislabelled(out.get("x_unit"), out["x"],
+                          _domain_on_record(out)):
         raise ValueError(
             f"DENIS merged ASDF at {path} has x_unit='MHz' but "
             f"|x| < 1000, which is the legacy bin_mode/domain "

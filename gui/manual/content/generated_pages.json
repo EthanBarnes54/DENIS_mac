@@ -10,7 +10,7 @@
   },
   {
    "type": "p",
-   "text": "The window title starts as <code>DENIS v1.1.0</code>. After a <b>Save</b>, <b>Save As...</b>, or <b>Load All...</b> it gains the file name, e.g. <code>DENIS v1.1.0 - my_run.yaml</code>, so you can always see which configuration is in play. The icon is the bundled <code>denis.ico</code>, falling back to a generic atom glyph if that file is missing."
+   "text": "The window title starts as <code>DENIS v1.1.1</code>. After a <b>Save</b>, <b>Save As...</b>, or <b>Load All...</b> it gains the file name, e.g. <code>DENIS v1.1.1 - my_run.yaml</code>, so you can always see which configuration is in play. The icon is the bundled <code>denis.ico</code>, falling back to a generic atom glyph if that file is missing."
   },
   {
    "type": "h2",
@@ -239,7 +239,7 @@
   {
    "type": "screenshot",
    "file": "config_missing_files_dialog.png",
-   "caption": "The Missing Files dialog listing unfound data files with Locate Files... / Skip Missing / Cancel buttons."
+   "caption": "The Missing Files dialog: search a folder, locate by hand, then load."
   },
   {
    "type": "related",
@@ -562,7 +562,7 @@
   {
    "type": "ul",
    "items": [
-    "The DENIS logo and version, <code>DENIS v1.1.0</code>.",
+    "The DENIS logo and version, <code>DENIS v1.1.1</code>.",
     "The name expansion: <b>D</b>oppler <b>E</b>stimation and <b>N</b>umerical <b>I</b>nference for <b>S</b>pectroscopy.",
     "A one-line scope summary: estimation, pre-analysis, fitting, and results.",
     "Hyperlinked credits: <b>satlas2</b> (fitting and spectrum estimation) and <b>cls_tools</b> (IGISOL-style ASDF file reading).",
@@ -2641,7 +2641,7 @@
   },
   {
    "type": "p",
-   "text": "Accepting the dialog produces a synthetic <i>MergedFileEntry</i> in the file list. Right-click it for <b>View…</b>, <b>Edit…</b> and <b>Export ASDF…</b> — the same trio the Analysis Source block exposes, so you can write a DENIS-merged ASDF and reload it as a single run. The merged x/y arrays are stored inline in the [[pa-save-load|saved YAML]]."
+   "text": "Accepting the dialog produces a synthetic <i>MergedFileEntry</i> in the file list. Right-click it for <b>View…</b>, <b>Edit…</b> and <b>Export ASDF…</b> — the same trio the Analysis Source block exposes, so you can write a DENIS-merged ASDF and reload it as a single run. The merged x/y arrays are stored inline in the [[pa-save-load|saved YAML]]. Pulled into an Analysis Source block (<b>Import from Pre-Analysis</b>), the entry arrives exactly as View&hellip; sees it: a frequency merge's axis is already the detuning from the transition (only a merge saved before 2026-05-14, with the absolute lab frequency, is converted), and a voltage merge keeps its calibrated voltage per bin and the spread between its runs' calibrations. The Pre-Analysis plot of a voltage merge uses the same conversion as the fit: <i>Calibrated voltage</i> is the calibrated axis, and beam energy, wavenumber and frequency use the merge's own Doppler metadata."
   },
   {
    "type": "note",
@@ -2744,7 +2744,7 @@
   },
   {
    "type": "p",
-   "text": "Right-click a run → <b>Calibration…</b> for the full diagnostic: the calibration curve with the uncorrected and in-force polynomials overlaid, residuals against both, and the headline <i>cost in MHz</i>. You can exclude points (click them, drop the first N settling points, or an n·σ residual cut — prefer the iterative form), tick <b>Force zero intercept (p0 = 0)</b> for a chain with no DC offset, borrow another run's calibration, or type coefficients directly. <b>Calibration overview…</b> triages every loaded run at once, worst first."
+   "text": "Right-click a run → <b>Calibration…</b> for the full diagnostic: the calibration curve with the uncorrected and in-force polynomials overlaid, residuals against both, and the headline <i>cost in MHz</i>. You can exclude points (click them, drop the first N settling points, or an n·σ residual cut — prefer the iterative form), tick <b>Force zero intercept (p0 = 0)</b> for a chain with no DC offset, borrow another run's calibration, or type coefficients directly. <b>Calibration overview…</b> triages every loaded run at once, worst first. In the diagnostic, points are coloured by the order they were taken (the colour bar on the right runs from first to last). Hover a point to read out its set and readback voltages and its distance from both lines, in volts and in MHz at that run's beam energy. Pick a row of the point table to ring its point in every panel. A left-out point is a red cross. The residual panels are scaled to the points the line was fitted to, so a dropped settling glitch sits on the panel's edge as a triangle instead of squashing the rest, and their right-hand axis gives the same distance in MHz. Once you change something, the middle panel also draws your line as seen from the file's own line. The sun/moon button in the plot's header switches the plots to a black canvas, and the choice is remembered. Until you set it, the dialog follows the Pre-Analysis dark-plot switch."
   },
   {
    "type": "note",
@@ -2855,7 +2855,7 @@
    "type": "ul",
    "items": [
     "<code>scan_missing_paths</code> collects the unique missing paths, Pre-Analysis first then Analysis projects in order.",
-    "Located files are remapped in place; skipped files are pruned from the in-memory config before it loads.",
+    "Files can be found by searching a folder (recursively or not) or picked one by one, and one pick resolves every file that moved with it. Files still missing are left out of that load; the session file keeps them.",
     "Synthetic <code>merged://</code> paths are ignored — they are not on disk."
    ]
   },
@@ -3118,7 +3118,7 @@
     [
      "Bin definition",
      "Per scan step, Auto, Fixed bin count, Fixed bin width",
-     "<b>Per scan step</b> is the default: one bin per native voltage step, immune to uniform-grid aliasing. Auto (clstools' uniform grid) can alias against the step spacing — the binning dialog flags it"
+     "<b>Per scan step</b> is the default: one bin per native voltage step, immune to uniform-grid aliasing. A measured step whose photons all fall outside the ToF / PMT gates stays in the spectrum as a zero-count bin (it was dropped before 2026-10-08, which made sparse backgrounds look too high); a step with no event at all in the file is never added. Auto (clstools' uniform grid) can alias against the step spacing — the binning dialog flags it"
     ],
     [
      "Bin count",
@@ -3151,6 +3151,9 @@
    "items": [
     "<b>Cal. order</b> — polynomial order (1–3, default 1 linear) for the LCR-voltage calibration applied at load.",
     "<b>Cooler corr.</b> — <code>pbp</code> (point-by-point, tracks drift) or <code>mean</code> (run-averaged) cooler-voltage subtraction.",
+    "<b>Cooler offset [V]</b> — the calibration constant from the Cooler Calibration tab, added to <i>each event's own</i> cooler readback, so <code>pbp</code> / <code>mean</code> above still apply and the cooler's drift within a run is still corrected. With the Override on, it is added to the override voltage instead, and the sum must stay a beam energy (above 0 V) -- the fit stops with an error rather than falling back to the readback. 0 = the files as recorded. Fits, merges, the Preview and the binning diagnostics all apply it the same way. (Before 2026-10-08 a non-zero offset replaced the per-event readback with one constant voltage, the header value plus the offset. On a Ge test set that moved single-run centroids by ~5 MHz typically and by 10-27 MHz (10-12 sigma) on some runs.)",
+    "The <b>Cooler Calibration</b> tab scans that offset by refitting its projects. It walks each project outward from the offset its blocks were fitted at, every fit seeded from its neighbours' answers. A fit pinned at a parameter bound, without an error bar, whose optimiser did not converge, or more than 5&sigma; off its run's line is left out of the calibration, drawn as &times; in the plot and listed in the Log. Its <b>Common offset</b> is the one offset applied to every run, i.e. the one the quoted values are fitted at. There are four ways to choose it: the <i>intersection</i> of the two isotope lines, the <i>middle</i> of the two zero crossings, their <i>weighted mean</i> (with its &chi;&sup2; for one degree of freedom and the error scaled by it), or a <i>manual</i> value. All three computed candidates are listed side by side. Whichever is chosen, the systematic range is the two zero crossings. Tick <b>Widen the range by each zero crossing's 1&sigma;</b> to move each end outward by its own crossing's error, as the Ge analysis did. <b>Apply offset to projects&hellip;</b> writes the chosen offset into the Source blocks.",
+    "The <b>Systematics</b> tab turns that range into a systematic. By default it runs <i>Common offset + the two zero crossings</i>: every run of every ticked project is fitted three times, and the whole chain (reference fit, GP, corrections, samples, isotope shifts) is redone at each offset. The fits at the common offset give the quoted values. How far the results at the two zero crossings move from them is the cooler-offset systematic. By default that is the larger of the two deviations, quoted as &plusmn;, and both signed edge deviations are listed. <b>From calibration</b> takes all three offsets from the Cooler Calibration tab. <i>Even grid over a range</i> is the older scan in equal steps. The <b>Budget</b> tab takes the systematics the scan does not measure (the scan-voltage calibration, a mass, ...). Each has a value in MHz and applies where its project, run/isotope and parameter match ('all' matches everything). <b>Add systematics</b> adds them to the cooler term in quadrature or linearly, and <b>with stat</b> does the same for the total. <b>Scale the run average's error by &radic;&chi;&sup2;/&nu;</b> inflates the weighted mean's statistical error when the runs scatter more than their own errors allow. The Summary, the report and <code>systematics_summary.csv</code> list the value, stat, the cooler term, the other systematics, the total systematic and the total.",
     "<b>Ref. shift [MHz]</b> — additive offset to the reference frequency defining x = 0 (stored in Hz at the backend)."
    ]
   },
@@ -3391,7 +3394,7 @@
   },
   {
    "type": "note",
-   "text": "The Auto-Fitter is a multi-start parallel <i>leastsq</i> sweep — many perturbed copies of your current parameters fitted in parallel and ranked by &chi;<sup>2</sup>. See [[an-autofitter]]."
+   "text": "The Auto-Fitter is a multi-start parallel sweep — many perturbed copies of your current parameters fitted in parallel with the Fitter block's own method and statistics, and ranked by the objective that fit minimises (&chi;<sup>2</sup>, or &minus;ln L under a likelihood). See [[an-autofitter]]."
   },
   {
    "type": "related",
@@ -3600,11 +3603,11 @@
   {
    "type": "ol",
    "items": [
-    "<b>Parameter Sharing</b> — ticked bare names go to <code>shareModelParams</code> (Mode = Model) or <code>shareParams</code> (Mode = All).",
+    "<b>Parameter Sharing</b> — each ticked bare name becomes an explicit tie: every other source's copy is set equal to the first source's (Mode = Model: per same-named model; Mode = All: every model carrying that parameter; <code>Bkg_p0</code> targets each model's background). The tie is visible in the parameter table's Expression column, and a centroid tied to another source counts <i>once</i> in the isotope-shift averages — counting each copy would shrink the error by √N. (satlas2's own share calls split a multi-letter name into single letters and shared nothing.)",
     "<b>Model-block expressions</b> — lowered from bare names to a full name for every source.",
     "<b>Advanced Constraints</b> — full-name fitter expressions applied last, so they win for any shared target (last-write-wins).",
     "<b>Gaussian priors</b> — applied to their full-name targets.",
-    "Optionally a <b>Common Grid</b> re-bins all sources onto one shared x grid."
+    "Optionally a <b>Common Grid</b> re-bins all sources onto one shared x grid. Each source keeps only the grid bins it actually measured: a gap in its scan stays a gap, never a run of invented zero counts."
    ]
   },
   {
@@ -3629,7 +3632,7 @@
  "an-autofitter": [
   {
    "type": "p",
-   "text": "The Auto-Fitter is a fast way to find good starting parameters when your initial guesses are poor. Click <b>Find Parameters</b> on the [[an-fitter|Fitter block]] to open it; it generates many slightly-perturbed copies of your current parameters and runs a quick fit on each in parallel, then ranks them by &chi;<sup>2</sup>."
+   "text": "The Auto-Fitter is a fast way to find good starting parameters when your initial guesses are poor. Click <b>Find Parameters</b> on the [[an-fitter|Fitter block]] to open it; it generates many slightly-perturbed copies of your current parameters and runs a quick fit on each in parallel, then ranks them by the objective the fit minimises: &chi;<sup>2</sup> for a chi-square fit, &minus;ln L for a Poisson or Gaussian likelihood. (Until 2026-10-08 likelihood fits were ranked by lmfit's chisqr, the sum of the SQUARED likelihood terms, which could put a worse fit first.)"
   },
   {
    "type": "note",
@@ -3698,7 +3701,7 @@
   },
   {
    "type": "p",
-   "text": "As starts complete, the <b>Results (ranked by &chi;<sup>2</sup>)</b> table updates live with the top 10, showing <b>Rank</b>, <b>&chi;<sup>2</sup></b>, <b>&chi;<sup>2</sup>_red</b>, and a compact <b>Parameters</b> summary. The plot follows the current best automatically; click any row to pin that result and inspect it (double-click a row for the full parameter list). The <b>Show</b> checkboxes toggle <b>Data</b>, <b>Total fit</b>, and <b>Model components</b>. Expand <b>Show Core Activity</b> for a per-core progress bar that turns green as each core finishes its assigned starts."
+   "text": "As starts complete, the <b>Results</b> table updates live with the top 10, showing <b>Rank</b>, the ranking objective (<b>&chi;<sup>2</sup></b>, or <b>&minus;ln L</b> under a likelihood), <b>&chi;<sup>2</sup>_red</b> from the residuals (the same number the fit report gives), and a compact <b>Parameters</b> summary. The plot follows the current best automatically; click any row to pin that result and inspect it (double-click a row for the full parameter list). The <b>Show</b> checkboxes toggle <b>Data</b>, <b>Total fit</b>, and <b>Model components</b>. Expand <b>Show Core Activity</b> for a per-core progress bar that turns green as each core finishes its assigned starts."
   },
   {
    "type": "screenshot",
@@ -3824,7 +3827,7 @@
  "an-isotope-shifts": [
   {
    "type": "p",
-   "text": "The <b>Isotope Shifts</b> sub-tab is permanent and always sits last in the Analysis tab strip (it appears once any project exists). It pulls fitted centroids from your [[an-projects|sample projects]], combines runs, applies systematic and correction uncertainties, and produces a shift table and comparison plot. The left panel is split into a <b>Setup</b> tab and a <b>Reference Correction (GP)</b> tab; the right panel holds <b>Plot</b>, <b>Table</b>, and <b>Log</b>."
+   "text": "The <b>Isotope Shifts</b> sub-tab is permanent and always sits last in the Analysis tab strip (it appears once any project exists). It pulls fitted centroids from your [[an-projects|sample projects]], combines runs, applies systematic and correction uncertainties, and produces a shift table and comparison plot. The left panel is split into a <b>Setup</b> tab and a <b>Reference Correction (GP)</b> tab; the right panel holds <b>Plot</b>, <b>Table</b>, and <b>Log</b>. Runs whose centroid is one tied parameter (a simultaneous fit sharing it) count as <i>one</i> measurement: that value and error once, minus the count-weighted mean of the runs' own GP corrections, whose uncertainty is propagated over every run's acquisition window."
   },
   {
    "type": "h2",
@@ -3865,7 +3868,7 @@
   },
   {
    "type": "p",
-   "text": "The <b>Systematic Error</b> group offers two modes:"
+   "text": "The <b>Systematic Error</b> group offers two modes: Both modes describe run-to-run jitter. The systematic from the cooler-voltage <i>calibration offset</i> itself comes from the <b>Systematics</b> tab (see [[an-source-block]]); the two are different numbers and both belong in a budget."
   },
   {
    "type": "ul",
@@ -3993,11 +3996,11 @@
   },
   {
    "type": "p",
-   "text": "Tick the sample projects under <b>Apply to sample projects</b> and click <b>Compute per-file corrections</b>. The table fills one row per run of those projects &mdash; including runs that have not been fitted, since a correction only needs the run&rsquo;s start timestamp: <b>Project</b>, <b>Run</b>, <b>t (h)</b> (hours since the first run), <b>Mode</b>, <b>&mu; (MHz)</b>, <b>&sigma; (MHz)</b>, and <b>|&mu;|/&sigma;</b>. The <b>Mode</b> combo per row is <b>Auto</b> (use &mu;_GP), <b>Manual</b> (type your own &mu; and &sigma;, e.g. a published value), or <b>Off</b> (skip that run). Rows are tinted amber above 2&sigma; and red above 3&sigma; of |&mu;|/&sigma;; Off rows are greyed."
+   "text": "Tick the sample projects under <b>Apply to sample projects</b> and click <b>Compute per-file corrections</b>. The table fills one row per run of those projects &mdash; including runs that have not been fitted, since a correction only needs the run&rsquo;s start timestamp: <b>Project</b>, <b>Run</b>, <b>t (h)</b> (hours since the first run), <b>Mode</b>, <b>&mu; (MHz)</b>, <b>&sigma; (MHz)</b>, and <b>|&mu;|/&sigma;</b>. The <b>Mode</b> combo per row is <b>Auto</b> (use &mu;_GP), <b>Manual</b> (type your own &mu; and &sigma;, e.g. a published value), or <b>Off</b> (skip that run). Rows are tinted amber above 2&sigma; and red above 3&sigma; of |&mu;|/&sigma;; Off rows are greyed. Each correction is the GP's mean over that run's acquisition window, computed exactly (Gauss&ndash;Legendre quadrature, since 2026-10-09); its uncertainty is taken over the same window."
   },
   {
    "type": "p",
-   "text": "The <b>Apply correction at fit time</b> checkbox (default on) is a global gate: when off, the merge and fit pipelines ignore every per-file correction regardless of mode. The propagated correction uncertainty feeds the &sigma;_corr columns of the shift table."
+   "text": "The <b>Apply correction at fit time</b> checkbox (default on) is a global gate for <i>future</i> fits: when off, the merge and fit pipelines ignore every per-file correction regardless of mode. It does not touch fits already made: a centroid corrected at fit time keeps its correction's uncertainty in the &sigma;_corr columns of the shift table whatever the box says, because which runs were corrected is read from what each fit recorded. With no GP loaded, those Auto rows use the &sigma; their fits recorded, taken as fully correlated within the isotope (the conservative bound)."
   },
   {
    "type": "p",
@@ -4041,12 +4044,13 @@
    "items": [
     "<b>Separate</b> mode fits each checked file independently across worker processes (up to your [[performance-settings|core limit]]), with a blended progress bar; a per-run timeout of 10 minutes (600 s) guards against a hung run.",
     "<b>Simultaneous</b> mode runs one satlas2 Fitter over all files in a single worker.",
-    "Progress is mirrored to the global <code>fit_progress</code> signal so the [[status-bar|status bar]] reflects the active fit. On completion the status reports how many runs converged and, when applicable, to how many the [[an-reference-gp|GP correction]] was applied."
+    "Progress is mirrored to the global <code>fit_progress</code> signal so the [[status-bar|status bar]] reflects the active fit. On completion the status reports how many runs converged and, when applicable, to how many the [[an-reference-gp|GP correction]] was applied.",
+    "A run whose spectrum has no counts at all (every photon gated away by the ToF / PMT gates) is refused with “no counts survive the ToF / PMT gates” rather than fitted to zeros. Its measured scan steps are kept as empty bins either way."
    ]
   },
   {
    "type": "p",
-   "text": "<b>■ Stop</b> cancels immediately and re-enables the UI; cancellation is cooperative — the fit aborts at the next optimizer iteration boundary — with a hard terminate kept only as a ~2 s backstop for a wedged simultaneous fit."
+   "text": "<b>■ Stop</b> cancels the fit. Separate fits stop at once: their worker processes are ended. A simultaneous fit stops at the next optimizer iteration (or between runs while loading); a simultaneous emcee fit, which has no such hook, is ended after 5 s. <b>Run Fit</b> comes back only once the fit has really stopped, and a cancelled fit's partial results are neither saved as an iteration nor sent to Results. Closing the window or the project while a fit runs asks first and stops it."
   },
   {
    "type": "h2",
@@ -6052,28 +6056,36 @@
   },
   {
    "type": "p",
-   "text": "DENIS first scans the parsed YAML for every file path under <code>preanalysis</code> file lists and Analysis Source blocks, applies path conversion, and checks each for existence. Synthetic <code>merged://</code> paths are skipped. If anything is missing, a <b>Missing Files</b> dialog lists the offenders (truncated to the first 8) and offers three choices:"
+   "text": "DENIS first scans the parsed YAML for every file path under <code>preanalysis</code> file lists and Analysis Source blocks, applies path conversion, and checks each for existence. Synthetic <code>merged://</code> paths are skipped. If anything is missing, the <b>Missing Files</b> dialog lists every missing file with its status (<i>Found</i>, <i>Missing</i>, or <i>n candidates</i>) and where it was found."
   },
   {
    "type": "table",
    "headers": [
-    "Choice",
-    "Effect"
+    "Way to find files",
+    "What it does"
    ],
    "rows": [
     [
-     "<b>Locate Files...</b>",
-     "Opens a per-file picker for each missing entry, seeded from the previously located folder, then the original path's folder, then the YAML's folder. ASDF/VASDF paths get same-type filters. Cancelling a picker stops the loop; the rest stay missing and are pruned."
+     "Automatic",
+     "On opening, the session file's own folder and all its subfolders are searched. A session moved together with its <code>Data</code> folder is found here without a click."
     ],
     [
-     "<b>Skip Missing</b>",
-     "Prunes the broken references from the in-memory dict and loads everything else."
+     "<b>Search Folder...</b>",
+     "Searches a folder you choose, with <b>Include subfolders</b> ticked (recursive, the default) or only that folder. When several files share a name, the one whose path ends the same way as the old one (<code>Data/13/run_7885.asdf</code>) wins; a true tie is shown as <i>n candidates</i> for you to pick with Locate. <b>Stop</b> on the progress window ends a long search."
     ],
     [
-     "<b>Cancel</b>",
-     "Aborts the whole load."
+     "<b>Locate...</b>",
+     "Asks for the selected files one by one (all still-missing files when none is selected). Every file you pick is read as a folder move -- old folder to new folder -- and every other missing file that exists at the moved place is filled in at once, so one pick usually resolves a whole session. Picking a file with a different name asks first. Cancelling a picker returns to the dialog with everything found so far kept."
+    ],
+    [
+     "<b>Forget</b>",
+     "Marks the selected files missing again (e.g. after a wrong pick)."
     ]
    ]
+  },
+  {
+   "type": "p",
+   "text": "<b>Load</b> (labelled <i>Load without N missing file(s)</i> while some are unresolved) loads with the files found; the rest are left out of <i>this load only</i>. <b>Cancel Load</b> aborts the load."
   },
   {
    "type": "h2",
@@ -6081,12 +6093,16 @@
   },
   {
    "type": "p",
-   "text": "When at least one path is successfully located, DENIS rewrites the updated paths back into the YAML on disk so the next load does not re-prompt (a status message confirms how many were updated). A Skip-only load leaves the file on disk unchanged, so you can retry the locate flow later &mdash; for example after remounting a network share."
+   "text": "When at least one file was found, DENIS writes the new paths back into the YAML so the next load does not ask again. Only the paths change: entries still missing stay in the file, and the first time DENIS rewrites a session it keeps the original as <code>&lt;name&gt;.yaml.bak</code>. The new paths also replace the old ones wherever else the session names those runs -- merged entries' source lists, the GP reference correction's saved per-run corrections, scan filters and calibrations -- so nothing keeps pointing at the old folder. A load where nothing was found leaves the file unchanged."
+  },
+  {
+   "type": "warning",
+   "text": "Files left out of a load are not in the open session. Saving it afterwards writes the session without them -- find them first (or reload once the drive is back) before you save."
   },
   {
    "type": "screenshot",
    "file": "settings_missing_files_dialog.png",
-   "caption": "The Missing Files dialog listing unresolved file paths with the Locate Files..., Skip Missing and Cancel buttons."
+   "caption": "The Missing Files dialog: files found in the session's folder, one name with two equally good candidates, and the rest still missing."
   },
   {
    "type": "related",
@@ -6447,7 +6463,7 @@
  "physics-voltage-projection": [
   {
    "type": "p",
-   "text": "When a voltage-merged histogram is fitted in frequency mode, DENIS re-projects the already-binned DAC-voltage bin centres onto a rest-frame MHz axis with <code>voltage_to_frequency_array</code> (<code>cls_estimations/doppler.py</code>). The counts are untouched &mdash; only the x-axis interpretation flips."
+   "text": "When a voltage-merged histogram is fitted in frequency mode, DENIS re-projects the already-binned DAC-voltage bin centres onto a rest-frame MHz axis with <code>voltage_to_frequency_array</code> (<code>cls_estimations/doppler.py</code>). The counts are untouched &mdash; only the x-axis interpretation flips. A merge made since 2026-10-08 also records each bin's <i>calibrated</i> voltage (the mean of the runs' own scan-voltage calibrations at that DAC value), and the projection uses it. An older merge has only the raw DAC axis; it is still projected, with a <code>VOLTAGE_MERGE_UNCALIBRATED</code> warning. When the runs' calibrations disagree by more than 0.1 V somewhere on the axis, <code>VOLTAGE_MERGE_CALIBRATION_SPREAD</code> says so."
   },
   {
    "type": "h2",
@@ -6931,7 +6947,7 @@
   },
   {
    "type": "p",
-   "text": "When two isotopes share one corrector, their corrected centroids are correlated. <code>cov(t1, t2)</code> gives the posterior cross-covariance, which the shift formula in [[physics-isotope-shift]] subtracts:"
+   "text": "When two isotopes share one corrector, their corrected centroids are correlated. The posterior cross-covariance, which the shift formula in [[physics-isotope-shift]] subtracts, is taken between the corrections actually applied: the GP <i>averaged over each run's acquisition window</i> (<code>cov_spans</code>, on the same nodes as <code>predict_interval</code>), not the GP at each run's start (<code>cov(t1, t2)</code>, used before 2026-10-08; the two differ most for a run that starts right at a precise reference point):"
   },
   {
    "type": "equation",
@@ -7197,7 +7213,7 @@
   },
   {
    "type": "code",
-   "code": "============================================================\nDENIS v1.1.0\n============================================================\nPython:     3.x.y\nPlatform:   Windows 11 (AMD64)\nOS:         <platform string>\nApp dir:    <path to app>\nLog file:   <path>\\logs\\denis_...log\nPySide6     <version>\nmatplotlib  <version>\nnumpy       <version>\nsatlas2     <version>\nclstools    <version>\n------------------------------------------------------------",
+   "code": "============================================================\nDENIS v1.1.1\n============================================================\nPython:     3.x.y\nPlatform:   Windows 11 (AMD64)\nOS:         <platform string>\nApp dir:    <path to app>\nLog file:   <path>\\logs\\denis_...log\nPySide6     <version>\nmatplotlib  <version>\nnumpy       <version>\nsatlas2     <version>\nclstools    <version>\n------------------------------------------------------------",
    "caption": "Startup banner; any dependency that fails to import prints NOT FOUND instead of a version.",
    "lang": "text"
   },
@@ -7269,7 +7285,7 @@
   },
   {
    "type": "p",
-   "text": "DENIS v1.1.0 is developed by Arda Kayaalp. For questions, bug reports, or citation guidance, email <code>arda.kayaalp@kuleuven.be</code>."
+   "text": "DENIS v1.1.1 is developed by Arda Kayaalp. For questions, bug reports, or citation guidance, email <code>arda.kayaalp@kuleuven.be</code>."
   },
   {
    "type": "h2",

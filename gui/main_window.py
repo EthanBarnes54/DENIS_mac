@@ -17,7 +17,7 @@ gui.results_tab, and lazily gui.split_editor, gui.scan_filter,
 gui.missing_files, gui.manual.viewer, cls_estimations.plotting.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import sys
 import os
@@ -47,7 +47,7 @@ from gui.shared_widgets import (
     WorkerThread, SchmidtCalculatorDialog, ShellConfigDialog,
     _load_settings, _save_settings, _DEFAULT_PLOT_SETTINGS,
     _DEFAULT_PLOT_TYPE_SETTINGS, apply_plot_settings, StatusBarManager,
-    lucide_icon, _AppShortcutFilter, _TooltipWrapFilter, maybe_convert_path,
+    lucide_icon, _AppShortcutFilter, _TooltipWrapFilter,
 )
 from gui.estimate_tab import EstimateTab
 from gui.preanalysis_container import PreAnalysisContainer
@@ -557,6 +557,8 @@ class MainWindow(QMainWindow):
             # "loading a yaml crashes DENIS" report (2026-09-24).
             if at._is_special_tab(widget):
                 continue  # permanent tabs: unhook, never delete
+            if getattr(widget, "is_fitting", lambda: False)():
+                widget.stop_fit()      # safety net; the load asked first
             if widget in at._projects:
                 at._projects.remove(widget)
             widget.deleteLater()
@@ -575,9 +577,9 @@ class MainWindow(QMainWindow):
             at._add_project(name, config=pd)
         _report("", len(project_defs), len(project_defs))
         # Restore Isotope Shifts tab state
-        is_data = data.get("isotope_shifts")
-        if is_data:
-            is_tab.from_dict(is_data)
+        # Always restored -- an absent study clears the previous one
+        # (and its GP) instead of leaving it behind.
+        is_tab.from_dict(data.get("isotope_shifts") or {})
         cal_data = data.get("cooler_calibration")
         if cal_data:
             at._sync_cooler_tab()
@@ -593,6 +595,9 @@ class MainWindow(QMainWindow):
             names = getattr(p, "_session_iterations", None) or []
             if names:
                 restored[p.project_name] = list(names)
+        # The previous session's entries go first: restore_iterations
+        # only adds, so they used to stay in the tree (review 2026-10-08).
+        self.results_tab.clear_session()
         if restored:
             missing = self.results_tab.restore_iterations(restored)
             if missing:
@@ -771,6 +776,33 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Prompt to save before closing — but only when something
         actually changed since the last save/load."""
+        # A running fit kept the process alive, invisibly, until it
+        # finished -- minutes for an emcee batch -- and its results were
+        # then thrown away (review 2026-10-08). Ask, and stop it.
+        try:
+            running = self.analysis_tab.running_fits()
+        except Exception:
+            running = []
+        if running:
+            reply = QMessageBox.question(
+                self, "Close DENIS",
+                "A fit is still running ("
+                + ", ".join(running[:4])
+                + (", ..." if len(running) > 4 else "")
+                + ").\n\nStop it and close?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            if not self.analysis_tab.stop_all_fits():
+                QMessageBox.warning(
+                    self, "Close DENIS",
+                    "A fit did not stop, so DENIS stays open. Try again "
+                    "once it has finished.")
+                event.ignore()
+                return
         try:
             dirty = self._is_dirty()
         except Exception:
@@ -986,6 +1018,11 @@ class MainWindow(QMainWindow):
                                  "Invalid config file format.")
             return
 
+        # Loading the Analysis tab replaces its projects: a running fit
+        # has to stop first (review 2, 2026-10-08).
+        if tab_name == "analysis" and not self._stop_fits_for_load():
+            return
+
         if not self._resolve_missing_files(raw, path):
             return
 
@@ -1070,111 +1107,64 @@ class MainWindow(QMainWindow):
 
         Mutates ``raw`` in place: located paths are rewritten and
         unresolved entries are pruned. If any path was located, the
-        YAML on disk is rewritten so the next load doesn't re-prompt.
+        YAML on disk is rewritten so the next load doesn't re-prompt --
+        with the located paths only: entries still missing are kept in
+        the file, never pruned from it.
 
         Returns ``True`` if the load should proceed, ``False`` if the
         user cancelled the missing-file dialog (whole load aborts).
         """
+        import copy
         from gui.missing_files import (
             scan_missing_paths, remap_paths_inplace,
             prune_missing_paths_inplace,
         )
+        from gui.missing_files_dialog import MissingFilesDialog
 
         missing = scan_missing_paths(raw)
         if not missing:
             return True
 
-        # Summary dialog with the list of missing files. Keep the
-        # preview short so a 50-file mismatch doesn't blow out the
-        # dialog height.
-        preview = "\n".join(f"  • {p}" for p in missing[:8])
-        if len(missing) > 8:
-            preview += f"\n  ...and {len(missing) - 8} more"
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle("Missing Files")
-        msg.setText(
-            f"{len(missing)} file(s) referenced in this configuration "
-            f"could not be found on disk.")
-        msg.setInformativeText(
-            f"{preview}\n\nLocate them one by one, skip the missing "
-            f"entries (everything else loads as usual), or cancel "
-            f"the load.")
-        locate_btn = msg.addButton(
-            "Locate Files...", QMessageBox.ButtonRole.AcceptRole)
-        # Skip is the implicit "anything other than Locate or Cancel"
-        # branch -- we only need to install the button, not its handle.
-        msg.addButton("Skip Missing",
-                      QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
-        msg.setDefaultButton(locate_btn)
-        msg.exec()
-        clicked = msg.clickedButton()
-
-        # Closing the dialog via the window "X" returns clickedButton()==None,
-        # which previously fell through to the "Skip Missing" prune-everything
-        # branch -- silently stripping every missing reference. Treat the
-        # ambiguous close as Cancel (abort the load) instead (code review
-        # 2026-06-02, missing-files-dialog-close-x-prunes-everything).
-        if clicked is cancel_btn or clicked is None:
+        dlg = MissingFilesDialog(missing, yaml_path, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return False
-
-        remap = {}
-        if clicked is locate_btn:
-            # The next dialog should land somewhere helpful: prefer
-            # the parent dir of the just-located file (sibling files
-            # often live together), otherwise the parent of the
-            # original missing path, otherwise the YAML's directory.
-            yaml_dir = os.path.dirname(os.path.abspath(yaml_path))
-            last_dir = yaml_dir
-            for orig in missing:
-                start_dir = (last_dir or
-                             os.path.dirname(maybe_convert_path(orig))
-                             or yaml_dir)
-                ext = os.path.splitext(orig)[1].lower()
-                if ext in (".asdf", ".vasdf"):
-                    flt = (f"Same type (*{ext});;"
-                           f"ASDF/VASDF (*.asdf *.vasdf);;All files (*)")
-                else:
-                    flt = "All files (*)"
-                new_path, _ = QFileDialog.getOpenFileName(
-                    self, f"Locate: {os.path.basename(orig)}",
-                    start_dir, flt)
-                if not new_path:
-                    # Cancelling a per-file dialog stops the loop;
-                    # everything not yet located stays missing and is
-                    # pruned below so the load continues with whatever
-                    # was already resolved.
-                    break
-                remap[orig] = new_path
-                last_dir = os.path.dirname(new_path)
-
-        n_replaced = remap_paths_inplace(raw, remap)
-        # Prune entries whose paths the user didn't locate. Whether
-        # they came via "Skip Missing" or by stopping the locate loop
-        # early, the in-memory dict shouldn't carry broken file
-        # references into the tab restorers.
+        remap = dlg.remap()
         unresolved = {p for p in missing if p not in remap}
+
+        # What goes back to disk is the file as it was plus the located
+        # paths -- NOT the pruned dict the tabs are about to load. Until
+        # 2026-10-05 the pruned dict was written: locating one file and
+        # stopping wiped every other missing file from the session file
+        # for good (T01.yaml lost all its run lists that way).
+        on_disk = copy.deepcopy(raw) if remap else None
+        n_replaced = remap_paths_inplace(raw, remap)
         prune_missing_paths_inplace(raw, unresolved)
 
-        # Auto-save the YAML only when we actually rewrote a path.
-        # Skipped entries stay on disk so the user can reattempt the
-        # locate flow next time (e.g. after remounting a network share).
-        if n_replaced > 0:
+        if on_disk is not None and n_replaced > 0:
+            remap_paths_inplace(on_disk, remap)
+            backup = yaml_path + ".bak"
             try:
-                self._write_yaml(yaml_path, raw)
+                # One backup of the file as it was before DENIS first
+                # rewrote it; a later rewrite must not replace it.
+                if not os.path.exists(backup):
+                    import shutil
+                    shutil.copy2(yaml_path, backup)
+                self._write_yaml(yaml_path, on_disk)
             except Exception as e:
                 QMessageBox.warning(
                     self, "Could not update YAML",
-                    f"Located {n_replaced} file(s) for this load, but "
+                    f"Located {len(remap)} file(s) for this load, but "
                     f"writing the updated paths back to\n{yaml_path}\n"
                     f"failed:\n{e}\n\nThe load itself will still "
                     f"proceed with the new paths.")
             else:
+                left = (f" {len(unresolved)} still missing (kept in the "
+                        f"file, left out of this load)."
+                        if unresolved else "")
                 self.status.show(
-                    f"Located {n_replaced} of {len(missing)} missing "
+                    f"Located {len(remap)} of {len(missing)} missing "
                     f"file(s); paths updated in "
-                    f"{os.path.basename(yaml_path)}.")
+                    f"{os.path.basename(yaml_path)}.{left}")
         elif unresolved:
             self.status.show(
                 f"Skipped {len(unresolved)} missing file(s); "
@@ -1194,6 +1184,16 @@ class MainWindow(QMainWindow):
         if not isinstance(raw, dict):
             QMessageBox.critical(self, "Error",
                                  "Invalid config file format.")
+            return
+        # Nothing DENIS can load: say so BEFORE touching anything. The
+        # calibration and scan-filter registries used to be replaced by
+        # the file's (empty) ones first -- review 2, 2026-10-08.
+        if not self._is_session_dict(raw):
+            self._warn_nothing_loaded()
+            return
+        # The load replaces the Analysis projects; a running fit must
+        # stop first, or its worker runs on against deleted widgets.
+        if not self._stop_fits_for_load():
             return
 
         if not self._resolve_missing_files(raw, path):
@@ -1240,6 +1240,39 @@ class MainWindow(QMainWindow):
         if not loaded_tabs:
             self._warn_nothing_loaded()
 
+    def _is_session_dict(self, raw):
+        """True when ``raw`` has a section a full load restores."""
+        return bool(isinstance(raw, dict) and (
+            any(k in raw for k in ("estimate", "preanalysis", "analysis",
+                                   "nist_asd"))
+            or self._looks_like_estimate(raw)))
+
+    def _stop_fits_for_load(self):
+        """Ask to stop running fits before a load replaces the projects.
+        False: keep the session as it is."""
+        try:
+            running = self.analysis_tab.running_fits()
+        except Exception:
+            running = []
+        if not running:
+            return True
+        reply = QMessageBox.question(
+            self, "Load",
+            "A fit is still running ("
+            + ", ".join(running[:4]) + (", ..." if len(running) > 4 else "")
+            + "). Loading replaces the projects.\n\nStop it and load?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+        if not self.analysis_tab.stop_all_fits():
+            QMessageBox.warning(
+                self, "Load",
+                "A fit did not stop, so nothing was loaded. Try again "
+                "once it has finished.")
+            return False
+        return True
+
     def _warn_nothing_loaded(self):
         """Said after the progress window is down, not underneath it."""
         QMessageBox.information(
@@ -1253,6 +1286,10 @@ class MainWindow(QMainWindow):
         Returns the tab names it recognized, so the caller can say so
         once the window is gone.
         """
+        # A file with nothing to restore must not empty the registries
+        # on its way to saying so (review 2, 2026-10-08).
+        if not self._is_session_dict(raw):
+            return []
         # Restore the global scan-filter registry BEFORE the tabs
         # rebuild themselves -- file entries created during tab restore
         # may want to read their initial filter state from the registry.
@@ -1293,14 +1330,7 @@ class MainWindow(QMainWindow):
             self._restore_analysis(raw["analysis"])
             loaded_tabs.append("Analysis")
 
-        # NIST ASD browser state: apply live when the window exists,
-        # else park it for the first open.
-        if "nist_asd" in raw:
-            if self._nist_browser is not None:
-                self._nist_browser.from_dict(raw["nist_asd"])
-            else:
-                self._pending_nist_state = raw["nist_asd"]
-            loaded_tabs.append("NIST ASD")
+        self._restore_nist(raw, loaded_tabs)
 
         # Splitter / column positions, after every tab has been
         # rebuilt (the widgets must exist before they can be sized).
@@ -1729,6 +1759,24 @@ class MainWindow(QMainWindow):
         self._asdf_viewer.raise_()
         self._asdf_viewer.activateWindow()
         return self._asdf_viewer
+
+    def _restore_nist(self, raw, loaded_tabs):
+        """NIST ASD browser state from a loaded file: applied live when
+        the window exists, else parked for its first open. A whole
+        session that never used the browser clears it: the previous
+        session's schemes are not its own, and the next save wrote them
+        into it (review 3, 2026-10-08)."""
+        if "nist_asd" in raw:
+            if self._nist_browser is not None:
+                self._nist_browser.from_dict(raw["nist_asd"])
+            else:
+                self._pending_nist_state = raw["nist_asd"]
+            loaded_tabs.append("NIST ASD")
+        elif all(k in raw for k in ("estimate", "preanalysis", "analysis")):
+            self._pending_nist_state = None
+            if self._nist_browser is not None:
+                self._nist_browser.set_results([])
+                self._nist_browser._parked_results = None
 
     def _open_nist_browser(self):
         """Show the (single) NIST ASD browser window; on first open,

@@ -623,6 +623,38 @@ def _filter_style(style, categories):
     return out
 
 
+def _item_alive(item):
+    """False for a QTreeWidgetItem whose C++ object is gone."""
+    try:
+        import shiboken6
+        return bool(shiboken6.isValid(item))
+    except Exception:
+        return True
+
+
+def _merge_style(existing, pasted):
+    """``existing`` with the keys of ``pasted`` written over it -- per
+    axis for the axis properties. A paste carries only the categories
+    the user ticked, so it must change those and nothing else; writing
+    the pasted subset as the whole style wiped the target's title,
+    limits, grid and texts (review 2, 2026-10-08)."""
+    import copy as _copy
+    out = _copy.deepcopy(existing) if isinstance(existing, dict) else {}
+    for key, value in (pasted or {}).items():
+        if key != "axes":
+            out[key] = _copy.deepcopy(value)
+            continue
+        old_axes = list(out.get("axes") or [])
+        new_axes = []
+        for i, ax in enumerate(value or []):
+            base = dict(old_axes[i]) if i < len(old_axes) else {}
+            base.update(_copy.deepcopy(ax))
+            new_axes.append(base)
+        new_axes.extend(old_axes[len(new_axes):])
+        out["axes"] = new_axes
+    return out
+
+
 def _style_categories_present(style):
     """Which categories actually carry data in ``style`` (so a paste
     dialog only offers what was copied)."""
@@ -1512,6 +1544,20 @@ class ResultsTab(QWidget):
         if not data or not isinstance(data, dict) or "type" not in data:
             return
 
+        # The plot editor is modeless and works on the shared figure.
+        # Close it -- which saves its edits -- while the figure still
+        # shows the plot it was opened on: switching first and closing
+        # later wrote the NEW plot's style into the OLD plot's sidecar
+        # (review 2026-10-08).
+        dlg = getattr(self, "_edit_dialog", None)
+        if dlg is not None and dlg.isVisible():
+            editing = (self._current_item_data or {}).get("path", "")
+            if editing != data.get("path", ""):
+                dlg._on_close()
+                # Its figure will show another plot from here on, so it
+                # must no longer be able to overwrite this one's image.
+                dlg._source_path = None
+
         self._current_item_data = data
         self._current_tree_item = item
         item_type = data["type"]
@@ -2348,6 +2394,14 @@ class ResultsTab(QWidget):
             def _on_closed(_result, sp_path=source_path):
                 try:
                     self._plot_canvas.draw()
+                    shown = (self._current_item_data or {}).get("path", "")
+                    if sp_path and shown != sp_path:
+                        # The figure now shows another plot; its style
+                        # must not be filed under this one.
+                        _log.warning(
+                            "Plot editor closed after switching away from "
+                            "%s; its style was not saved", sp_path)
+                        return
                     if sp_path and sp_path.lower().endswith('.npz'):
                         style = _extract_figure_style(self._plot_figure)
                         # Deletions made in the editor: merge with any
@@ -2629,17 +2683,16 @@ class ResultsTab(QWidget):
         applied = 0
         for npz in npz_paths:
             sp = _style_path(npz)
-            merged = dict(style)
-            # Preserve the TARGET's own deletions — pasted style changes
-            # the look, not which artists this plot removed.
+            # The target's own style stays; only the ticked properties
+            # change. Its deletions (removed_gids) are never in a paste.
+            existing = {}
             try:
                 if os.path.isfile(sp):
                     with open(sp, "r", encoding="utf-8") as f:
                         existing = json.load(f)
-                    if existing.get("removed_gids"):
-                        merged["removed_gids"] = existing["removed_gids"]
             except Exception:
-                pass
+                existing = {}
+            merged = _merge_style(existing, style)
             try:
                 with open(sp, "w", encoding="utf-8") as f:
                     json.dump(merged, f, indent=1)
@@ -2649,8 +2702,9 @@ class ResultsTab(QWidget):
                              exc_info=True)
         # Refresh the viewer if the currently shown plot was a target.
         cur = (self._current_item_data or {}).get("path", "")
-        if cur in npz_paths and self._current_tree_item is not None:
-            self._on_item_clicked(self._current_tree_item, 0)
+        item = self._current_tree_item
+        if cur in npz_paths and item is not None and _item_alive(item):
+            self._on_item_clicked(item, 0)
         QMessageBox.information(
             self, "Paste plot style",
             f"Applied the copied style to {applied} "
@@ -3088,6 +3142,41 @@ class ResultsTab(QWidget):
         )
         from gui.analysis.helpers import _show_scrollable_info
         _show_scrollable_info(self, "Results Tab \u2013 Information", text)
+
+    def clear_session(self):
+        """Forget every entry of the session loaded before -- and what
+        the viewer shows of it: the notes autosave otherwise kept writing
+        into the previous session's notes file, and the preview / Edit
+        Plot kept pointing at a deleted tree item (review 2,
+        2026-10-08)."""
+        self._reset_viewer_state()
+        self._results_data = {}
+        self._rebuild_tree()
+
+    def _reset_viewer_state(self):
+        """Save pending notes to THEIR file, close the plot editor, and
+        show nothing."""
+        try:
+            if self._notes_save_timer.isActive():
+                self._notes_save_timer.stop()
+            self._save_notes()
+        except Exception:
+            _log.warning("Could not save pending notes", exc_info=True)
+        dlg = getattr(self, "_edit_dialog", None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible():
+                    dlg._on_close()
+                dlg._source_path = None
+            except RuntimeError:
+                pass                       # already deleted
+        self._current_item_data = None
+        self._current_tree_item = None
+        self._notes_path = None
+        self._notes_dirty = False
+        self._title_label.setText("")
+        self._edit_plot_btn.setEnabled(False)
+        self._viewer_stack.setCurrentIndex(0)
 
     def restore_iterations(self, mapping):
         """Register saved-session iterations without a whole-dir scan.

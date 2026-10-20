@@ -9,7 +9,14 @@ exist on disk (renamed folder, moved Nextcloud share, switched OS),
 the loader prompts the user to either locate each missing file or
 skip them. This module provides the pure helpers that walk the YAML
 structure, scan for missing paths, remap them, and prune skipped
-entries; the dialog flow lives in ``main_window``.
+entries; the dialog lives in ``gui.missing_files_dialog`` and the
+load-time flow in ``main_window``.
+
+Finding files (2026-10-05): ``index_folder`` + ``match_in_index`` look
+the missing names up in a folder tree (recursively or not), breaking
+ties between same-named runs by how much of the old path's tail they
+share; ``derive_prefix`` + ``apply_prefix`` turn one hand-located file
+into a folder move that resolves every other file that moved with it.
 
 Path locations covered:
     preanalysis.files[].path
@@ -118,7 +125,185 @@ def remap_paths_inplace(yaml_dict, remap):
             holder[key] = remap[holder[key]]
             n += 1
     n += _remap_registry_keys_inplace(yaml_dict, remap)
+    n += _remap_other_strings_inplace(yaml_dict, remap)
     return n
+
+
+def _remap_other_strings_inplace(yaml_dict, remap):
+    """Rewrite every other string value or dict key that names a remapped
+    file. Returns slots replaced.
+
+    The file-entry slots and the registries above are not the only places
+    a session stores a run's path: merged entries keep ``source_files`` and
+    ``source_info`` paths, and the GP reference correction keys its saved
+    per-file corrections by path. Those are not needed to *load* a run,
+    so ``scan_missing_paths`` does not report them -- but left on the old
+    path after a move, the saved corrections silently stop matching the
+    relocated runs. A key or value equal to a remapped path (in any
+    spelling) is replaced; a canonical (lower-case) spelling stays
+    canonical.
+    """
+    from gui.calibration import canonical_path
+
+    if not remap:
+        return 0
+    canon = {canonical_path(old): new for old, new in remap.items()}
+    count = [0]
+
+    def _new(text):
+        if not isinstance(text, str) or len(text) > 1024 or not (
+                "/" in text or "\\" in text):
+            return None
+        if text in remap:
+            return remap[text]
+        c = canonical_path(text)
+        if c not in canon:
+            return None
+        return canonical_path(canon[c]) if text == c else canon[c]
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for key in list(node.keys()):
+                value = node[key]
+                new_key = _new(key)
+                if new_key is not None and new_key != key \
+                        and new_key not in node:
+                    del node[key]
+                    node[new_key] = value
+                    key = new_key
+                    count[0] += 1
+                new_val = _new(value)
+                if new_val is not None and new_val != value:
+                    node[key] = new_val
+                    count[0] += 1
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for i, value in enumerate(node):
+                new_val = _new(value)
+                if new_val is not None and new_val != value:
+                    node[i] = new_val
+                    count[0] += 1
+                else:
+                    _walk(value)
+
+    _walk(yaml_dict)
+    return count[0]
+
+
+# ── Finding moved files ──────────────────────────────────────────────
+
+#: Directories never worth descending into when searching for runs.
+_SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules",
+              "$recycle.bin", "system volume information"}
+
+
+def _parts(path):
+    """Path components, separator- and case-insensitive."""
+    return [p for p in path.replace("\\", "/").lower().split("/") if p]
+
+
+def suffix_score(original, candidate):
+    """How many trailing path components ``candidate`` shares with
+    ``original`` (the file name counts as one). Used to pick, among
+    several files with the same name, the one sitting in the same
+    relative place -- ``Data/13/run_7885.asdf`` over a stray copy."""
+    a, b = _parts(original), _parts(candidate)
+    n = 0
+    while n < min(len(a), len(b)) and a[-1 - n] == b[-1 - n]:
+        n += 1
+    return n
+
+
+def index_folder(root, names, recursive=True, max_dirs=20000,
+                 progress=None):
+    """Find files called any of ``names`` under ``root``.
+
+    Returns ``(index, complete)``: ``index`` maps a lower-case file name
+    to every full path found with that name, ``complete`` is False when
+    the walk stopped early -- after ``max_dirs`` directories, or because
+    ``progress(n_dirs)`` returned True (the user pressed Cancel).
+    Hidden and tool directories (``.git``, ``.venv``...) are skipped.
+    """
+    wanted = {os.path.basename(n).lower() for n in names}
+    index = {}
+    if not root or not os.path.isdir(root):
+        return index, True
+    n_dirs = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        n_dirs += 1
+        for f in filenames:
+            if f.lower() in wanted:
+                index.setdefault(f.lower(), []).append(
+                    os.path.join(dirpath, f))
+        if not recursive:
+            break
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not d.startswith(".") and d.lower() not in _SKIP_DIRS)
+        if n_dirs >= max_dirs:
+            return index, False
+        if progress is not None and n_dirs % 50 == 0 and progress(n_dirs):
+            return index, False
+    return index, True
+
+
+def match_in_index(missing, index):
+    """Look ``missing`` paths up in an ``index_folder`` result.
+
+    Returns ``(found, ambiguous)``: ``found`` maps an original path to
+    its unique match -- the only file of that name, or the one sharing
+    the longest tail with the original; ``ambiguous`` maps an original
+    path to its tied candidates, which the user has to choose between.
+    """
+    found, ambiguous = {}, {}
+    for orig in missing:
+        cands = index.get(os.path.basename(
+            orig.replace("\\", "/")).lower(), [])
+        if len(cands) == 1:
+            found[orig] = cands[0]
+        elif len(cands) > 1:
+            scored = sorted(((suffix_score(orig, c), c) for c in cands),
+                            reverse=True)
+            if scored[0][0] > scored[1][0]:
+                found[orig] = scored[0][1]
+            else:
+                ambiguous[orig] = [c for sc, c in scored
+                                   if sc == scored[0][0]]
+    return found, ambiguous
+
+
+def derive_prefix(original, located):
+    """The folder move implied by locating ``original`` at ``located``.
+
+    Returns ``(old_prefix, new_prefix)`` -- everything before the path
+    tail the two share -- or None when the file names differ (no move
+    can be inferred from a different file) or nothing but the name is
+    shared and the old folder is a filesystem root.
+    """
+    a = original.replace("\\", "/").split("/")
+    b = located.replace("\\", "/").split("/")
+    if a[-1].lower() != b[-1].lower():
+        return None
+    n = suffix_score(original, located)
+    old, new = "/".join(a[:len(a) - n]), "/".join(b[:len(b) - n])
+    if not old or not new:
+        return None
+    return old + "/", new + "/"
+
+
+def apply_prefix(missing, old_prefix, new_prefix, exists=os.path.isfile):
+    """Map every path in ``missing`` that lies under ``old_prefix`` to the
+    same place under ``new_prefix`` -- only where that file exists."""
+    out = {}
+    old_n = old_prefix.replace("\\", "/").lower()
+    for orig in missing:
+        norm = orig.replace("\\", "/")
+        if norm.lower().startswith(old_n):
+            cand = os.path.normpath(new_prefix + norm[len(old_prefix):])
+            if exists(cand):
+                out[orig] = cand
+    return out
 
 
 def _remap_registry_keys_inplace(yaml_dict, remap):

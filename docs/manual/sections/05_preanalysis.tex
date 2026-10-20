@@ -243,7 +243,16 @@ offset is dropped from the fit, not fitted and then blanked, so the
 gain is the true through-origin slope. You can instead borrow another
 run's calibration or type the coefficients in directly. The dialog shows
 the resulting polynomial, the residuals, and the centroid shift the
-choice costs in MHz. \app{Calibration overview\dots} triages every
+choice costs in MHz. Points are coloured by the order they were taken
+(a colour bar runs from first to last). Hovering a point reads out its
+set and readback voltages and its distance from both lines, in volts
+and in MHz at the run's beam energy, and picking a row of the point
+table rings its point. The residual panels are scaled to the points the
+line was fitted to: a dropped settling glitch sits on the panel's edge
+as a triangle instead of squashing the rest, and the right-hand axis
+gives the distance in MHz. The sun/moon button in the plot's header
+switches to a black canvas and is remembered; until it is set, it
+follows the Pre-Analysis dark-plot switch. \app{Calibration overview\dots} triages every
 loaded run at once, worst first. Overrides live in a process-wide
 registry shared by every tab and persist under the save file's
 top-level \code{calibrations:} key (acknowledgements under

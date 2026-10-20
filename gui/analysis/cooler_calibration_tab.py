@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from cls_estimations.cooler_calibration import (
-    LITERATURE_A, LITERATURE_SOURCE, ScanPoint, calibrate,
+    COMMON_INTERSECTION, COMMON_MANUAL, COMMON_METHODS, COMMON_MIDRANGE,
+    COMMON_WEIGHTED, DEFAULT_COMMON, LITERATURE_A, LITERATURE_SOURCE,
+    ScanPoint, calibrate, common_offset,
 )
 from gui.analysis.cooler_scan import CoolerScan
 
@@ -75,6 +77,9 @@ def draw_calibration(fig, data):
                     zorder=3,
                     label=f"{iso['label']}  ($A_{{lit}}$ = "
                           f"{iso['literature']:.4f} MHz)")
+        if iso.get("out_dv"):
+            ax.plot(iso["out_dv"], iso["out_dev"], "x", ms=6, color=c,
+                    zorder=3, label=f"{iso['label']}: left out")
         if grid.size and iso.get("slope") is not None:
             y = iso["intercept"] + iso["slope"] * grid
             ax.plot(grid, y, "-", color=c, lw=1.6, zorder=2)
@@ -89,10 +94,19 @@ def draw_calibration(fig, data):
                 color="#2e7d32", zorder=5,
                 label=f"intersection: $\\Delta V$ = {dv:.2f} "
                       f"$\\pm$ {sig:.2f} V")
+    common = data.get("common")
+    if common is not None and (dv is None or abs(common - dv) > 1e-9):
+        # The offset actually applied, when it is not the crossing.
+        ax.axvline(common, color="#6a1b9a", ls="-.", lw=1.4, zorder=4,
+                   label=f"common offset: {common:.2f} V"
+                         + (f" ({data['common_label']})"
+                            if data.get("common_label") else ""))
     lo, hi = data.get("scan_lo"), data.get("scan_hi")
     if lo is not None and hi is not None and lo != hi:
         ax.axvspan(lo, hi, color="#2e7d32", alpha=0.08, zorder=0,
-                   label=f"systematic range [{lo:.2f}, {hi:.2f}] V")
+                   label=f"systematic range [{lo:.2f}, {hi:.2f}] V"
+                         + (" (widened by 1$\\sigma$)"
+                            if data.get("widened") else ""))
     ax.set_xlabel("Cooler-voltage offset $\\Delta V$ (V)")
     ax.set_ylabel("$A - A_{lit}$ (MHz)")
     ax.grid(True, alpha=0.3)
@@ -221,13 +235,56 @@ class CoolerCalibrationTab(QGroupBox):
 
         res_box = QGroupBox("Calibration")
         rl = QVBoxLayout(res_box)
+        crow = QHBoxLayout()
+        crow.addWidget(QLabel("Common offset:"))
+        self._common = QComboBox()
+        for key, label in COMMON_METHODS.items():
+            self._common.addItem(label, key)
+        self._common.setCurrentIndex(
+            max(0, self._common.findData(DEFAULT_COMMON)))
+        self._common.setToolTip(_wrap(
+            "The one offset every run is analysed at -- the numbers you "
+            "quote. Intersection: where the two isotope lines cross "
+            "(the calibration report's choice). Middle: halfway "
+            "between the two zero crossings. Weighted mean: the two "
+            "zero crossings averaged by their errors; when they "
+            "disagree its chi-square says by how much. Manual: type "
+            "it in. Whichever you pick, the systematic range stays "
+            "the two zero crossings."))
+        self._common.currentIndexChanged.connect(self._on_common_changed)
+        crow.addWidget(self._common, 1)
+        rl.addLayout(crow)
+        mrow = QHBoxLayout()
+        mrow.addWidget(QLabel("Manual value:"))
+        self._manual = self._spin(-25.0, -5000.0, 5000.0)
+        self._manual.setDecimals(3)
+        self._manual.setSingleStep(0.5)
+        self._manual.setSuffix(" V")
+        self._manual.setEnabled(False)
+        self._manual.setToolTip("The offset to use when 'Manual value' "
+                                "is picked.")
+        self._manual.valueChanged.connect(self._on_common_changed)
+        mrow.addWidget(self._manual)
+        mrow.addStretch()
+        rl.addLayout(mrow)
+        self._widen = QCheckBox(
+            "Widen the range by each zero crossing's 1σ")
+        self._widen.setToolTip(_wrap(
+            "Move each end of the systematic range outward by its own "
+            "zero crossing's error -- the conservative envelope the Ge "
+            "analysis used (its -24.42 V is the middle of that "
+            "widened range). Off: the range is the two zero crossings "
+            "themselves."))
+        self._widen.toggled.connect(self._on_common_changed)
+        rl.addWidget(self._widen)
         self._result_label = QLabel("—")
         self._result_label.setWordWrap(True)
         self._result_label.setToolTip(_wrap(
-            "The offset where the two isotope lines cross, and the "
-            "range between their zero crossings. Repeat the analysis "
-            "across that range to get the cooler-voltage systematic "
-            "on every extracted parameter."))
+            "The offset every run is fitted at, and the range between "
+            "the two isotopes' zero crossings. The Systematics tab "
+            "fits every run at the common offset and at both ends of "
+            "the range; how far the results move is the cooler-voltage "
+            "systematic."))
         rl.addWidget(self._result_label)
         apply_row = QHBoxLayout()
         self._apply_btn = QPushButton("Apply offset to projects…")
@@ -533,26 +590,95 @@ class CoolerCalibrationTab(QGroupBox):
         self._populate_tables()
         self._render()
         res = self._result
+        n_out = len(res.excluded)
         if res.dv is not None:
             self._status.setText(
                 f"ΔV* = {res.dv:+.2f} ± {res.dv_sigma:.2f} V "
-                f"from {len(self._points)} fits")
-            rng = res.scan_range
-            txt = (f"<b>ΔV* = {res.dv:+.3f} ± {res.dv_sigma:.3f} V</b>"
-                   "<br>where the isotope lines cross")
-            if rng:
-                txt += (f"<br><br>Systematic scan range: "
-                        f"[{rng[0]:+.3f}, {rng[1]:+.3f}] V "
-                        f"(width {res.scan_width:.3f} V)")
-            self._result_label.setText(txt)
-            self._apply_btn.setEnabled(True)
+                f"from {len(self._points) - n_out} fits"
+                + (f" -- {n_out} left out, see Log" if n_out else ""))
         else:
             self._status.setText(res.note or "No crossing.")
-            self._result_label.setText(res.note or "—")
-            self._apply_btn.setEnabled(False)
+        self._show_common()
         self._send_btn.setEnabled(True)
+        if res.excluded:
+            self._log_lines.append(
+                f"{len(res.excluded)} fit(s) left out of the calibration:")
+            for p, why in sorted(res.excluded,
+                                 key=lambda t: (t[0].isotope, t[0].run,
+                                                t[0].dv)):
+                self._log_lines.append(
+                    f"   {p.isotope} run {p.run} at {p.dv:+.2f} V: "
+                    f"{p.value:.3f} MHz -- {why}")
         self._log_lines.append(self._summary_text())
         self._log.setPlainText("\n".join(self._log_lines))
+
+    # ── the common offset ────────────────────────────────────
+    def common_method(self):
+        return self._common.currentData() or DEFAULT_COMMON
+
+    def common(self, method=None):
+        """The :class:`CommonOffset` by the chosen (or given) method.
+
+        A manual value needs no calibration; every other method does,
+        and gives ``value=None`` without one.
+        """
+        return common_offset(self._result, method or self.common_method(),
+                             manual=self._manual.value(),
+                             widen=self._widen.isChecked())
+
+    def _on_common_changed(self, *_a):
+        self._manual.setEnabled(self.common_method() == COMMON_MANUAL)
+        self._show_common()
+        if self._result is not None:
+            self._render()
+
+    def _candidates_text(self):
+        """Every way of choosing the offset, side by side, so the choice
+        is made knowing what the others give."""
+        out = []
+        for key in (COMMON_INTERSECTION, COMMON_MIDRANGE, COMMON_WEIGHTED):
+            c = self.common(key)
+            if c.value is None:
+                out.append(f"{COMMON_METHODS[key]}: -- ({c.note})")
+                continue
+            txt = f"{COMMON_METHODS[key]}: {c.value:+.3f}"
+            if c.sigma is not None:
+                txt += f" ± {c.sigma:.3f}"
+            txt += " V"
+            if c.chi2 is not None:
+                txt += (f" (χ² = {c.chi2:.2f} for 1 dof; "
+                        f"± {c.sigma_scaled:.3f} V scaled)")
+            out.append(txt)
+        return out
+
+    def _show_common(self):
+        c = self.common()
+        self._manual.setEnabled(self.common_method() == COMMON_MANUAL)
+        if c.value is None:
+            self._result_label.setText(
+                self._result.note if (self._result is not None
+                                      and self._result.note)
+                else (c.note or "—"))
+            self._apply_btn.setEnabled(False)
+            return
+        lines = [f"<b>Common offset {c.value:+.3f}"
+                 + (f" ± {c.sigma:.3f}" if c.sigma is not None else "")
+                 + " V</b>"
+                 + (f" &nbsp;(χ² = {c.chi2:.2f}; ± {c.sigma_scaled:.3f} V "
+                    f"scaled)" if c.chi2 is not None else "")]
+        if c.lo is not None:
+            lines.append(
+                f"Systematic range [{c.lo:+.3f}, {c.hi:+.3f}] V, "
+                f"half-width {c.half_range:.3f} V"
+                + (" (widened by 1σ)" if self._widen.isChecked() else ""))
+        if c.note:
+            lines.append(f"<span style='color:#fb8c00'>⚠ {c.note}</span>")
+        if self._result is not None:
+            lines.append("<span style='color:#9a9aa0'>"
+                         + "<br>".join(self._candidates_text())
+                         + "</span>")
+        self._result_label.setText("<br>".join(lines))
+        self._apply_btn.setEnabled(True)
 
     def _summary_text(self):
         res = self._result
@@ -575,6 +701,22 @@ class CoolerCalibrationTab(QGroupBox):
         if res.dv is not None:
             out.append(f"Intersection: {res.dv:+.3f} ± "
                        f"{res.dv_sigma:.3f} V")
+        c = self.common()
+        out.append("")
+        out.extend(self._candidates_text())
+        if c.value is not None:
+            out.append(
+                f"Common offset ({COMMON_METHODS.get(c.method, c.method)}): "
+                f"{c.value:+.3f}"
+                + (f" ± {c.sigma:.3f}" if c.sigma is not None else "")
+                + " V")
+        if c.lo is not None:
+            out.append(f"Systematic range: [{c.lo:+.3f}, {c.hi:+.3f}] V"
+                       + (" (zero crossings widened by their 1 sigma)"
+                          if self._widen.isChecked() else
+                          " (the two zero crossings)"))
+        if c.note:
+            out.append(f"Note: {c.note}")
         return "\n".join(out)
 
     # ── tables + plot ────────────────────────────────────────
@@ -614,25 +756,42 @@ class CoolerCalibrationTab(QGroupBox):
         lo, hi = (min(dvs), max(dvs)) if dvs else (-1.0, 1.0)
         grid = np.linspace(lo, hi, 128)
         isos = []
+        out_ids = {id(p) for p, _why in res.excluded}
         for iso in res.isotopes:
-            pts = [p for p in self._points if p.isotope == iso.isotope]
+            mine = [p for p in self._points if p.isotope == iso.isotope]
+            pts = [p for p in mine if id(p) not in out_ids]
+            bad = [p for p in mine if id(p) in out_ids]
             isos.append({
                 "label": iso.isotope,
                 "literature": iso.literature,
                 "dv": [p.dv for p in pts],
                 "dev": [p.value - iso.literature for p in pts],
                 "sigma": [p.sigma for p in pts],
+                # Left out of the line: drawn hollow, never fitted.
+                "out_dv": [p.dv for p in bad],
+                "out_dev": [p.value - iso.literature for p in bad],
                 "intercept": iso.line.intercept,
                 "slope": iso.line.slope,
                 "band": list(np.asarray(iso.line.sigma_at(grid))),
             })
+        c = self.common()
         d = {"isotopes": isos, "grid": list(grid),
-             "scan_lo": res.scan_lo, "scan_hi": res.scan_hi,
+             "scan_lo": c.lo if c.lo is not None else res.scan_lo,
+             "scan_hi": c.hi if c.hi is not None else res.scan_hi,
+             "widened": bool(self._widen.isChecked()),
              "title": "Cooler-voltage calibration"}
         if res.dv is not None:
             d["dv"] = res.dv
             d["dv_sigma"] = res.dv_sigma
             d["dv_y"] = float(res.isotopes[0].line.value(res.dv))
+        if c.value is not None:
+            d["common"] = c.value
+            d["common_label"] = {
+                COMMON_INTERSECTION: "intersection",
+                COMMON_MIDRANGE: "middle of the zero crossings",
+                COMMON_WEIGHTED: "weighted mean of the zero crossings",
+                COMMON_MANUAL: "manual",
+            }.get(c.method, c.method)
         return d
 
     def _render(self):
@@ -653,9 +812,10 @@ class CoolerCalibrationTab(QGroupBox):
                 if not getattr(p, "is_calibration", False)]
 
     def _apply_dialog(self):
-        res = self._result
-        if res is None or res.dv is None:
+        common = self.common()
+        if common.value is None:
             return
+        offset = float(common.value)
         targets = self._apply_targets()
         if not targets:
             QMessageBox.information(
@@ -668,7 +828,9 @@ class CoolerCalibrationTab(QGroupBox):
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel(
             f"Set the Source-block cooler offset to "
-            f"<b>{res.dv:+.3f} V</b> in:"))
+            f"<b>{offset:+.3f} V</b> "
+            f"({COMMON_METHODS.get(common.method, common.method).lower()})"
+            f" in:"))
         lst = QListWidget()
         lst.setSelectionMode(
             QAbstractItemView.SelectionMode.NoSelection)
@@ -695,11 +857,11 @@ class CoolerCalibrationTab(QGroupBox):
         wanted = {lst.item(i).data(Qt.ItemDataRole.UserRole)
                   for i in range(lst.count())
                   if lst.item(i).checkState() == Qt.CheckState.Checked}
-        done = self.apply_offset(res.dv, [p for p in targets
+        done = self.apply_offset(offset, [p for p in targets
                                           if p.project_name in wanted])
         QMessageBox.information(
             self, "Cooler Calibration",
-            f"Cooler offset {res.dv:+.3f} V set in {done} project(s).\n\n"
+            f"Cooler offset {offset:+.3f} V set in {done} project(s).\n\n"
             f"Re-run their fits to use it.")
 
     @staticmethod
@@ -720,8 +882,7 @@ class CoolerCalibrationTab(QGroupBox):
                     n += 1
                     break
         if n:
-            sigma = (self._result.dv_sigma
-                     if self._result is not None else 0.0) or 0.0
+            sigma = self.common().sigma or 0.0
             self.calibration_applied.emit(float(offset), float(sigma))
         return n
 
@@ -755,12 +916,21 @@ class CoolerCalibrationTab(QGroupBox):
                   f"{self._dv_max.value():+.2f} V in "
                   f"{self._dv_steps.value()} steps", ""]
         if res.dv is not None:
-            report.append(f"Calibrated offset: {res.dv:+.4f} +/- "
-                          f"{res.dv_sigma:.4f} V")
-        if res.scan_range:
+            report.append(f"Intersection of the isotope lines: "
+                          f"{res.dv:+.4f} +/- {res.dv_sigma:.4f} V")
+        c = self.common()
+        if c.value is not None:
             report.append(
-                f"Systematic scan range: [{res.scan_lo:+.4f}, "
-                f"{res.scan_hi:+.4f}] V (width {res.scan_width:.4f} V)")
+                f"Common offset ({COMMON_METHODS.get(c.method, c.method)}):"
+                f" {c.value:+.4f}"
+                + (f" +/- {c.sigma:.4f}" if c.sigma is not None else "")
+                + " V")
+        if c.lo is not None:
+            report.append(
+                f"Systematic range: [{c.lo:+.4f}, {c.hi:+.4f}] V "
+                f"(width {c.hi - c.lo:.4f} V"
+                + (", zero crossings widened by their 1 sigma)"
+                   if self._widen.isChecked() else ")"))
         report += ["", self._summary_text()]
         with open(os.path.join(idir, "fit_report.txt"), "w",
                   encoding="utf-8") as f:
@@ -787,10 +957,13 @@ class CoolerCalibrationTab(QGroupBox):
                   encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["run", "isotope", "cooler_offset_v",
-                        "value_mhz", "sigma_mhz"])
+                        "value_mhz", "sigma_mhz", "left_out"])
+            why = {id(p): r for p, r in (self._result.excluded
+                                         if self._result else [])}
             for p in self._points:
                 w.writerow([p.run, p.isotope, f"{p.dv:.6f}",
-                            f"{p.value:.6f}", f"{p.sigma:.6f}"])
+                            f"{p.value:.6f}", f"{p.sigma:.6f}",
+                            why.get(id(p), "")])
 
         png = os.path.join(plots, "cooler_calibration.png")
         try:
@@ -843,12 +1016,16 @@ class CoolerCalibrationTab(QGroupBox):
             "dv_max": self._dv_max.value(),
             "dv_steps": self._dv_steps.value(),
             "parameter": self._param.currentText(),
+            "common_method": self.common_method(),
+            "manual_offset": self._manual.value(),
+            "widen": self._widen.isChecked(),
             "rows": rows,
             # The scan is the expensive part: keep its points so a
             # reopened session shows the calibration without refitting.
             "points": [{"run": p.run, "isotope": p.isotope,
                         "dv": p.dv, "value": p.value,
-                        "sigma": p.sigma} for p in self._points],
+                        "sigma": p.sigma, "flag": p.flag}
+                       for p in self._points],
         }
 
     def from_dict(self, d):
@@ -860,6 +1037,19 @@ class CoolerCalibrationTab(QGroupBox):
         idx = self._param.findText(str(d.get("parameter", "Al")))
         if idx >= 0:
             self._param.setCurrentIndex(idx)
+        # A session from before the choice existed used the crossing.
+        for w in (self._common, self._manual, self._widen):
+            w.blockSignals(True)
+        self._common.setCurrentIndex(max(0, self._common.findData(
+            str(d.get("common_method", DEFAULT_COMMON)))))
+        try:
+            self._manual.setValue(float(d.get("manual_offset", -25.0)))
+        except (TypeError, ValueError):
+            pass
+        self._widen.setChecked(bool(d.get("widen", False)))
+        for w in (self._common, self._manual, self._widen):
+            w.blockSignals(False)
+        self._manual.setEnabled(self.common_method() == COMMON_MANUAL)
         self.refresh_projects()
         wanted = {r.get("project"): r for r in (d.get("rows") or [])}
         for row in range(self._proj_table.rowCount()):
@@ -878,7 +1068,11 @@ class CoolerCalibrationTab(QGroupBox):
                       isotope=str(p.get("isotope", "")),
                       dv=float(p.get("dv", 0.0)),
                       value=float(p.get("value", 0.0)),
-                      sigma=float(p.get("sigma", 0.0)))
+                      # A missing error is no error, not a zero one.
+                      sigma=float(p.get("sigma", float("nan"))
+                                  if p.get("sigma") is not None
+                                  else float("nan")),
+                      flag=str(p.get("flag", "") or ""))
             for p in (d.get("points") or [])]
         if self._points:
             _pairs, lits = self._selected()

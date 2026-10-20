@@ -259,6 +259,9 @@ class RightClickTests(unittest.TestCase):
         v1 = MainWindow.open_asdf_viewer(w, [self.path])
         v2 = MainWindow.open_asdf_viewer(w, [self.path])
         self.addCleanup(v1.hide)
+        # Its loader thread must not outlive the window (a running
+        # QThread destroyed with its parent kills the process).
+        self.addCleanup(v1.stop_loading)
         self.assertIs(v1, v2)
         self.assertEqual(v1.file_list.count(), 1)
 

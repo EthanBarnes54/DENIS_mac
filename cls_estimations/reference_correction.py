@@ -290,6 +290,20 @@ def style_gp_axes(ax, *, legend=True, legend_kw=None):
     return ax
 
 
+#: Gauss-Legendre nodes per acquisition window (exact to ~1e-10 for the
+#: smooth posterior over a run; 32 equal-weight nodes erred ~1/n).
+WINDOW_NODES = 8
+
+
+def window_nodes(t1, t2, n=WINDOW_NODES):
+    """Gauss-Legendre nodes on [t1, t2] and their weights (summing to 1):
+    the mean of f over the window is ``weights @ f(nodes)``. The one
+    quadrature rule of predict_interval and cov_spans."""
+    x, w = np.polynomial.legendre.leggauss(max(1, int(n)))
+    mid, half = 0.5 * (t1 + t2), 0.5 * (t2 - t1)
+    return mid + half * x, w / 2.0
+
+
 class ReferenceCorrector:
     """Trains a Gaussian Process on reference-scan centroids and
     predicts the drift correction at arbitrary sample timestamps.
@@ -601,7 +615,7 @@ class ReferenceCorrector:
         """
         return self._mcmc_summary
 
-    def predict_interval(self, t1, t2, *, n: int = 32
+    def predict_interval(self, t1, t2, *, n: int = WINDOW_NODES
                          ) -> tuple[float, float]:
         """Mean of mu(t) over ``[t1, t2]``, and the sd of that mean.
 
@@ -611,14 +625,16 @@ class ReferenceCorrector:
 
             G_bar = 1/(t2-t1) * integral of mu(t) dt over [t1, t2]
 
-        Evaluated by uniform quadrature -- the posterior mean is
-        smooth on the scale of a single run, so a few dozen nodes are
-        far more accuracy than the drift model itself has.
+        Evaluated by Gauss-Legendre quadrature (window_nodes): the
+        posterior is smooth on the scale of a run, and 8 nodes are exact
+        to ~1e-10. Until 2026-10-09 it was 32 EQUALLY weighted linspace
+        nodes, which over-weight the window's ends (error ~1/n): up to
+        0.09 MHz on a T02 run (Arda chose the exact rule).
 
         The sd comes from the FULL posterior covariance across the
         window: G_bar is a linear functional of the GP, so
 
-            Var(G_bar) = 1/n^2 * sum_ij Cov(mu(t_i), mu(t_j))
+            Var(G_bar) = sum_ij w_i w_j Cov(mu(t_i), mu(t_j))
 
         Points minutes apart are almost perfectly correlated, so this
         lands close to sigma at the midpoint -- whereas a naive
@@ -633,11 +649,51 @@ class ReferenceCorrector:
         if not np.isfinite(t2) or t2 <= t1:
             mu, sd = self.predict(t1)
             return float(mu[0]), float(sd[0])
-        nodes = np.linspace(t1, t2, max(2, int(n)))
+        nodes, w = window_nodes(t1, t2, n)
         mu, _ = self.predict(nodes)
-        cov = self.cov(nodes, nodes)
-        var = float(np.mean(cov))
-        return float(np.mean(mu)), float(np.sqrt(max(var, 0.0)))
+        cov = np.asarray(self.cov(nodes, nodes), dtype=float)
+        var = float(w @ cov @ w)
+        return float(w @ np.asarray(mu, dtype=float)), float(
+            np.sqrt(max(var, 0.0)))
+
+    @staticmethod
+    def _span_nodes(spans, n):
+        """Quadrature nodes of each (start, stop) span -- the same ones
+        predict_interval uses -- and the row-weighting matrix that turns
+        values at the nodes into window means."""
+        spans = np.atleast_2d(np.asarray(spans, dtype=float))
+        nodes, weights, rows = [], [], []
+        for i, (t1, t2) in enumerate(spans):
+            if not np.isfinite(t2) or t2 <= t1:
+                pts, w = np.array([t1]), np.array([1.0])
+            else:
+                pts, w = window_nodes(t1, t2, n)
+            nodes.append(pts)
+            weights.append(w)
+            rows.append(np.full(len(pts), i))
+        nodes = np.concatenate(nodes) if nodes else np.array([])
+        weights = np.concatenate(weights) if weights else np.array([])
+        rows = np.concatenate(rows) if rows else np.array([], dtype=int)
+        avg = np.zeros((len(spans), len(nodes)))
+        avg[rows, np.arange(len(nodes))] = weights
+        return nodes, avg
+
+    def cov_spans(self, spans_a, spans_b, *,
+                  n: int = WINDOW_NODES) -> np.ndarray:
+        """Posterior covariance of WINDOW-AVERAGED corrections.
+
+        ``spans_*`` are (start, stop) pairs in hours. Entry (i, j) is
+        Cov(G_bar_a_i, G_bar_b_j) with G_bar the mean of mu(t) over the
+        span -- the correction predict_interval returns and the fit
+        subtracts. Its diagonal is predict_interval's variance exactly.
+        A span with stop <= start is the point at its start.
+        """
+        self._require_fit()
+        na, A = self._span_nodes(spans_a, n)
+        nb, B = self._span_nodes(spans_b, n)
+        if len(na) == 0 or len(nb) == 0:
+            return np.zeros((A.shape[0], B.shape[0]))
+        return A @ np.asarray(self.cov(na, nb), dtype=float) @ B.T
 
     def cov(self, t1, t2) -> np.ndarray:
         """Posterior cross-covariance ``Cov(μ(t1_i), μ(t2_j))``.

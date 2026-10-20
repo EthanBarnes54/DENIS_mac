@@ -28,7 +28,7 @@ Legend:  `[ ]` to capture · `[x]` done · `[gen]` generated, no screenshot need
   `fills: ui_main_window.png, main_window.png`
 - [ ] **menu_file.png** — File menu expanded (Save All / Load All / Save Tab / Load Tab /
   Settings / Exit) showing keyboard shortcuts. `fills: menu_file_expanded.png, settings_file_menu_saveload.png`
-- [ ] **missing_files_dialog.png** — the Missing Files dialog (Locate Files… / Skip Missing /
+- [x] **missing_files_dialog.png** — the Missing Files dialog (Search Folder… / Locate… / Load /
   Cancel). `fills: config_missing_files_dialog.png, settings_missing_files_dialog.png`
 - [ ] **undo_reveal.png** — an undo in progress: DENIS switched to the affected tab and
   flashed an amber highlight on the reverted spinbox. `fills: ui_undo_reveal.png`

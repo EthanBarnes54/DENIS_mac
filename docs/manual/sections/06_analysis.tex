@@ -59,7 +59,9 @@ frame) or \app{Raw Voltage} (lab frame, one bin per unique DAC
 value). In frequency mode, \app{Bin definition} selects how the axis
 is cut: \app{Per scan step} (the default --- one bin per native
 voltage step, Doppler-projected; structurally immune to
-uniform-grid aliasing), \app{Auto} (clstools' uniform grid at
+uniform-grid aliasing; a measured step whose photons all fall outside
+the ToF/PMT gates stays as a zero-count bin, as in \app{Raw Voltage}),
+\app{Auto} (clstools' uniform grid at
 roughly one bin per step --- can alias against the step spacing,
 producing doubled-count spikes), \app{Fixed bin count}, or
 \app{Fixed bin width [MHz]}. \app{Bin multiple} groups $N$ adjacent
@@ -148,8 +150,12 @@ names directly.
         \app{Common Grid} groups appear. Sharing is \emph{opt-in}:
         tick a bare parameter and choose \app{Model} (share across
         same-named models) or \app{All} (share across every source).
+        Each share is an explicit tie, visible in the Expression
+        column; a centroid tied to another source counts once in
+        the isotope-shift averages.
         A \app{Common Grid} option re-bins all sources onto one
-        shared x grid (width user-set or auto).
+        shared x grid (width user-set or auto); each source keeps
+        only the bins it measured.
 \end{description}
 
 \app{Method} selects the optimiser (\code{leastsq},
@@ -213,7 +219,12 @@ log-likelihood as a single number and reports ``1 data point'' with
 $\chi^2 = (\ln L)^2$.
 
 \app{Run Fit} executes; the progress bar blends per-run completion
-with in-run iteration progress. \app{Stop} cancels cooperatively;
+with in-run iteration progress. \app{Stop} cancels the fit:
+separate fits stop at once (their worker processes are ended), a
+simultaneous fit at its next optimiser iteration; \app{Run Fit}
+returns once the fit has stopped, and a cancelled fit's partial
+results are neither saved nor sent to Results. Closing the window or
+the project while a fit runs asks first and stops it.
 \app{Revert} restores the model parameters to their pre-fit
 snapshot. \app{Find Parameters} opens the Auto-Fitter
 (Section~\ref{sec:autofitter}).
@@ -274,7 +285,9 @@ starts by the statistic the real fit will use) ---
 \app{Starts} Gaussian perturbations of the current parameters (width
 set by \app{Spread}; the first start is always the unperturbed
 guess), each fitted in a worker process --- and ranks the results by
-$\chi^2$ in a live table with a fit preview. \app{Refine} re-seeds a
+the objective that fit minimises ($\chi^2$, or $-\ln L$ under a
+likelihood) in a live table with a fit preview; the reduced $\chi^2$
+shown beside it comes from the residuals, as in the fit report. \app{Refine} re-seeds a
 new round around the selected result with the spread halved;
 \app{Accept Selected} writes the chosen parameters back into the
 Model blocks as one undoable step. The Auto-Fitter only seeds

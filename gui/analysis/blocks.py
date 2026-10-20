@@ -1255,7 +1255,7 @@ class BinningDialog(QDialog):
         return wrap
 
     def _render_compare(self):
-        from gui.analysis.binning import rebin_to_common_grid
+        from gui.analysis.binning import common_grid_matrix
         if not self._plottable:
             return
         # All plottable runs must share bin_mode for the heatmap to make
@@ -1278,7 +1278,7 @@ class BinningDialog(QDialog):
         per_source = [(np.asarray(res["x"], dtype=float),
                        np.asarray(res["y"], dtype=float))
                       for _, res in items]
-        rebinned, centers, bw = rebin_to_common_grid(per_source)
+        Z, centers, bw, _occ = common_grid_matrix(per_source)
         if len(centers) == 0:
             self._cmp_title.setText(
                 "<i>No common-grid data to display.</i>")
@@ -1288,7 +1288,8 @@ class BinningDialog(QDialog):
             return
 
         labels = [lbl for lbl, _ in items]
-        Z = np.array([yr for _, yr in rebinned])  # shape (n_runs, n_bins)
+        # (n_runs, n_bins); NaN -- drawn blank -- where a run has no
+        # sample, so each run sits at its own place on the shared axis.
 
         n_runs, n_bins = Z.shape
         self._cmp_title.setText(
@@ -1867,15 +1868,18 @@ class SourceBlock(AnalysisBlock):
         # Populated by the Cooler Calibration tab, or typed here.
         self._cooler_offset = _make_double(
             0.0, -10000.0, 10000.0, 3, 0.1,
-            tooltip="Cooler-voltage offset [V], added to every file's "
-                    "own cooler voltage.\n\n"
+            tooltip="Cooler-voltage offset [V], added to every event's "
+                    "own cooler readback, so the per-event cooler "
+                    "correction stays on.\n\n"
                     "This is the calibration constant from the Cooler "
                     "Calibration tab: the logged cooler voltage is off "
                     "by a fixed amount, which shifts the beam energy "
                     "and so the whole frequency axis.\n\n"
                     "Unlike the Override below it keeps the "
-                    "differences between runs -- it only moves them "
-                    "all together. 0 = use the files as recorded.")
+                    "differences between runs and the cooler's drift "
+                    "within a run -- it only moves them all together. "
+                    "With the Override on, it is added to the override "
+                    "instead. 0 = use the files as recorded.")
         adv_form.addRow("Cooler offset [V]:", self._cooler_offset)
 
         # ── Cooler / Laser Override ──
@@ -3066,12 +3070,12 @@ class SourceBlock(AnalysisBlock):
         ``_add_merged_entry`` so View / Edit / Export menus and the fit
         pipeline (which keys off ``is_merged``) all work.
 
-        Frequency-domain Pre-Analysis merges store *absolute* lab-frame
-        MHz; Analysis convention is MHz *relative to the rest-frame
-        transition* (this is what ``compute_merged_spectrum`` produces
-        via ``Compute_WL(ref=ref_freq)``). Shift on import so a merged
-        entry round-tripped from Pre-Analysis fits the same model as one
-        produced inside the Source block.
+        A frequency merge's x is already MHz *relative to the rest-frame
+        transition* (``compute_merged_spectrum`` runs
+        ``Compute_WL(ref=ref_freq)``), the Analysis convention. Only a
+        legacy Pre-Analysis merge (before 2026-05-14) stored the absolute
+        lab frequency; ``merge.merged_detuning_mhz`` -- the same test the
+        PA plot uses -- converts those and leaves detunings alone.
         """
         from gui.preanalysis_tab import MergedFileEntry
         from cls_estimations.constants import C_LIGHT
@@ -3110,8 +3114,16 @@ class SourceBlock(AnalysisBlock):
 
     def _add_merged_from_preanalysis(self, mfe, transition_mhz):
         """Translate a Pre-Analysis ``MergedFileEntry`` to a Source-side
-        merged entry. ``transition_mhz`` is subtracted from x in
-        frequency-domain merges to convert absolute → ref-shifted MHz.
+        merged entry, starting from the entry's own ``to_merged_data()``
+        -- the dict PA's View... and Export use -- so x_cal, cal_spread_v,
+        the merge's domain and the sqrt(y+1) errors arrive intact.
+
+        This used to rebuild the dict by hand: it subtracted
+        ``transition_mhz`` from a frequency merge that was already a
+        detuning (~1.1e9 MHz off), dropped a voltage merge's calibrated
+        axis (tens of MHz on Ge data) and its calibration spread, and
+        used sqrt(y) errors (review 3, 2026-10-08). ``transition_mhz``
+        now only converts a legacy absolute-x merge.
 
         Phase 2: the PA-side ``source_info`` is now a list of dicts
         (see ``_normalize_source_info``) carrying per-source physics
@@ -3120,7 +3132,7 @@ class SourceBlock(AnalysisBlock):
         Phase 4's voltage-merge frequency-fit path can read them
         without re-importing from PA.
         """
-        import numpy as np
+        from gui.analysis.merge import merged_detuning_mhz
         name = str(getattr(mfe, "run_number", "merged"))
         # Idempotent: skip if a merged entry with the same name is
         # already present.
@@ -3129,36 +3141,25 @@ class SourceBlock(AnalysisBlock):
             if e.get("is_merged") and md.get("merged_name") == name:
                 return
 
-        x = np.asarray(mfe.merged_x, dtype=float)
-        y = np.asarray(mfe.merged_y, dtype=float)
-        # Pre-Analysis merge doesn't store yerr; synthesize the Poisson
-        # default sqrt(y), substituting 1.0 for empty (zero-count) bins.
-        yerr = np.where(y > 0, np.sqrt(y), 1.0)
-
+        merged_data = mfe.to_merged_data()
+        merged_data["merged_name"] = name
         domain = getattr(mfe, "merge_domain", "voltage")
         if domain == "frequency":
-            x_unit = "MHz"
-            x = x - transition_mhz
-        else:
-            x_unit = "V"
+            merged_data["x"] = merged_detuning_mhz(merged_data["x"],
+                                                   transition_mhz)
 
         # source_info is post-normalization (list of dicts). Accessing
         # ["run_number"] / ["filepath"] is safe regardless of whether
         # the PA YAML was Phase-1 (2-list) or Phase-2 (dict) shape.
         source_info = list(getattr(mfe, "source_info", []) or [])
-        source_runs = [s.get("run_number") for s in source_info]
-        source_files = [s.get("filepath") for s in source_info]
 
-        # Prefer the rich in-memory per_run that PA captured at merge
-        # time (TOF arrays, timestamps, dwell times, n_events) when
-        # available; fall back to reconstructing skeletal per_run
-        # from source_info for entries that were round-tripped via
-        # YAML (which doesn't persist per_run).
-        mfe_per_run = getattr(mfe, "per_run", None) or None
-        if mfe_per_run:
-            per_run = [dict(rd) for rd in mfe_per_run]
-        else:
-            per_run = [
+        # to_merged_data carries the rich in-memory per_run that PA
+        # captured at merge time (TOF arrays, timestamps, dwell times,
+        # n_events) when available; reconstruct a skeletal one from
+        # source_info for entries round-tripped via YAML (which doesn't
+        # persist per_run).
+        if not merged_data.get("per_run"):
+            merged_data["per_run"] = [
                 {
                     "run_num":   s.get("run_number"),
                     "path":      s.get("filepath"),
@@ -3169,31 +3170,8 @@ class SourceBlock(AnalysisBlock):
                 }
                 for s in source_info
             ]
-
-        # merge_metadata is what Phase 4 reads to Doppler-shift a
-        # voltage-merged spectrum at fit time. None means "fall back
-        # to mean-of-sources" -- the fit path handles that.
-        merge_metadata = {
-            "cooler_v": getattr(mfe, "merge_cooler_v", None),
-            "laser_sp": getattr(mfe, "merge_laser_sp", None),
-            "mass_amu": getattr(mfe, "merge_mass_amu", None),
-            "harmonic": getattr(mfe, "merge_harmonic", None),
-        }
-
-        merged_data = {
-            "merged_name": name,
-            "x": x,
-            "y": y,
-            "yerr": yerr,
-            "x_unit": x_unit,
-            "source_runs": source_runs,
-            "source_files": source_files,
-            "per_run": per_run,
-            "bin_step_mhz": 0,
-            "merge_metadata": merge_metadata,
-            "metadata": {"imported_from": "preanalysis",
-                         "merge_domain": domain},
-        }
+        merged_data["metadata"] = {"imported_from": "preanalysis",
+                                   "merge_domain": domain}
         self._add_merged_entry(merged_data)
 
     # ── Navigation helpers ──
@@ -3289,9 +3267,17 @@ class SourceBlock(AnalysisBlock):
                           if self._ovr_enable.isChecked() else 0)
             cooler_override = (src_cooler if src_cooler > 0
                                else float(split_md.get("cooler_v", 0) or 0))
-            if cooler_override > 0:
-                data.VCoolDiv = 0
-                data.VCoolOffset = cooler_override
+            # Cooler offset with pipeline.prepare_run_data's own plan: on
+            # top of the override, else on top of each event's own
+            # readback. The preview used to ignore it altogether.
+            from gui.analysis.pipeline import (
+                apply_cooler, resolve_cooler, stepsize_frame)
+            cooler_plan = resolve_cooler(
+                cooler_override, self._cooler_offset.value(),
+                float(getattr(data, "Vcool_init", 0) or 0)
+                * float(getattr(data, "VCoolDiv", 10000) or 10000),
+                what=os.path.basename(str(data_path)))
+            apply_cooler(data, cooler_plan)
             src_laser = (self._laser_spin.value()
                          if self._ovr_enable.isChecked() else 0)
             laser_override = (src_laser if src_laser > 0
@@ -3338,17 +3324,13 @@ class SourceBlock(AnalysisBlock):
                 # Frequency_stepsize in Compute_WL (uses Vcool_init *
                 # VCoolDiv for step size). Temporarily set Vcool_init
                 # and VCoolDiv so the product gives the override value.
-                if cooler_override > 0:
-                    data.Vcool_init = cooler_override
-                    data.VCoolDiv = 1
-                data.Compute_WL(
-                    Mass=self._mass_spin.value(),
-                    ref=ref_hz,
-                    harmonic=self._harmonic_spin.value(),
-                )
-                # Restore VCoolDiv=0 so it doesn't affect other code
-                if cooler_override > 0:
-                    data.VCoolDiv = 0
+                # A per-event offset: step size only, as in pipeline.
+                with stepsize_frame(data, cooler_plan):
+                    data.Compute_WL(
+                        Mass=self._mass_spin.value(),
+                        ref=ref_hz,
+                        harmonic=self._harmonic_spin.value(),
+                    )
                 # Compose with ref_hz and convert MHz->Hz: the spinbox is in
                 # MHz and clstools.Shift_Ref takes Hz and *assigns* Reference
                 # (overwrite, not add), so a bare MHz value would both wipe the
@@ -3998,6 +3980,13 @@ class SourceBlock(AnalysisBlock):
                     "merge_metadata": merge_meta,
                     "per_run": per_run_out,
                 })
+                if md.get("x_cal") is not None:
+                    # A voltage merge's calibrated voltage per bin: what
+                    # its projection into frequency reads.
+                    merged_list[-1]["x_cal"] = [
+                        float(v) for v in md["x_cal"]]
+                    merged_list[-1]["cal_spread_v"] = _to_py(
+                        md.get("cal_spread_v", 0.0))
         d["merged_entries"] = merged_list
         return d
 
@@ -4124,6 +4113,8 @@ class SourceBlock(AnalysisBlock):
             md["x"] = np.array(md["x"])
             md["y"] = np.array(md["y"])
             md["yerr"] = np.array(md["yerr"])
+            if md.get("x_cal") is not None:
+                md["x_cal"] = np.array(md["x_cal"], dtype=float)
             self._add_merged_entry(md)
         # Defensive re-evaluation: bin_mode is restored earlier in
         # load_state, before any merged entry is added, so the per-add
@@ -5582,11 +5573,13 @@ class FitterBlock(AnalysisBlock):
         mcmc_form.addRow("Thin:", self._thin)
         self._convergence = QCheckBox("Auto-convergence")
         self._convergence.setToolTip(
-            "Stop early if the chain has converged.\n"
-            "Checks autocorrelation time every N iterations.")
+            "Stop early once the chain has converged: checked every\n"
+            "ceil(1000 / walkers) steps, using the two settings below.")
         mcmc_form.addRow(self._convergence)
-        self._conv_iter = _make_int(50, 1, 1000,
-                                    tooltip="Check convergence every N iterations")
+        self._conv_iter = _make_int(
+            50, 1, 1000,
+            tooltip="Converged only when the chain is longer than this\n"
+                    "many autocorrelation times (N \u00d7 \u03c4).")
         mcmc_form.addRow("Conv. iter:", self._conv_iter)
         self._conv_tau = _make_double(0.05, 0.001, 1.0, 3, 0.01,
                                       tooltip="Convergence threshold: stop when\n"

@@ -342,11 +342,23 @@ class AnalysisTab(QWidget):
         widget = self._project_tabs.widget(index)
         if self._is_special_tab(widget):
             return  # Isotope Shifts / GP are permanent
+        fitting = bool(getattr(widget, "is_fitting", lambda: False)())
         reply = QMessageBox.question(
             self, "Close Project",
-            f"Close project '{self._project_tabs.tabText(index)}'?",
+            f"Close project '{self._project_tabs.tabText(index)}'?"
+            + ("\n\nIts fit is still running and will be stopped."
+               if fitting else ""),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
+            return
+        if fitting and not widget.stop_fit():
+            # Deleting it now would leave its worker running against
+            # deleted widgets (a slot error every few ms until the fit
+            # ends) and out of sight of the window's close guard.
+            QMessageBox.warning(
+                self, "Close Project",
+                "The fit did not stop, so the project stays open. Try "
+                "again once it has finished.")
             return
         self._project_tabs.removeTab(index)
         if widget in self._projects:
@@ -361,6 +373,20 @@ class AnalysisTab(QWidget):
                     self._project_tabs.removeTab(idx)
             self._is_tab_visible = False
         self.projects_changed.emit()
+
+    def running_fits(self):
+        """Names of the projects whose fit is still running."""
+        return [p.project_name for p in self._projects
+                if getattr(p, "is_fitting", lambda: False)()]
+
+    def stop_all_fits(self):
+        """Cancel every running fit and wait for them to stop. True when
+        none is left running."""
+        ok = True
+        for p in self._projects:
+            if getattr(p, "is_fitting", lambda: False)():
+                ok = bool(p.stop_fit()) and ok
+        return ok
 
     def save_config(self):
         """Save all project configurations."""
@@ -422,9 +448,9 @@ class AnalysisTab(QWidget):
         finally:
             self.setUpdatesEnabled(True)
             self.update()
-        is_data = cfg.get("isotope_shifts")
-        if is_data:
-            self._is_tab.from_dict(is_data)
+        # Always restored -- an absent study clears the previous one
+        # (and its GP) instead of leaving it behind.
+        self._is_tab.from_dict(cfg.get("isotope_shifts") or {})
         cal_data = cfg.get("cooler_calibration")
         if cal_data:
             self._sync_cooler_tab()

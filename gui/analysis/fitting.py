@@ -26,7 +26,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from PySide6.QtCore import QThread, Signal
 
 from gui.analysis.naming import (
-    NON_FIT_PARAMS, background_coefficients, bkg_param_key,
+    NON_FIT_PARAMS, BKG_PREFIX, background_coefficients, bkg_param_key,
     is_fit_param_name, safe_model_name,
     source_name_for_path, source_name_for_merged,
     source_name_for_descriptor, full_param_name,
@@ -344,6 +344,79 @@ def _llh_error_note(fitter, fitter_config, method):
             f"divide them by sqrt(2), or use emcee.")
 
 
+def share_ties(sources, shared_params=(), shared_all_params=()):
+    """``{full name: head full name}`` for the Fitter block's sharing.
+
+    satlas2's own ``shareParams`` / ``shareModelParams`` do
+    ``list.extend(name)``: a single name is split into its letters, so
+    "centroid" was never shared and a two-run "shared" fit returned two
+    independent centroids (review 2, 2026-10-08). These are the same
+    rules, written out as expressions:
+
+    * Model mode (``shared_params``): one value per (parameter, model)
+      -- every source's copy is tied to the first source's;
+    * All mode (``shared_all_params``): one value per parameter across
+      every model and source -- tied to its first occurrence.
+
+    The sharing table names a background coefficient "Bkg_p0"; satlas2
+    calls it "p0" on the model's "<name>_bkg" Polynomial. Such a name
+    only matches background models, so it can never tie a standalone
+    Polynomial's own "p0". Explicit expressions set afterwards still
+    take precedence (setExpr is last-write-wins).
+    """
+    def _keys(names):
+        out = set()
+        for n in names or ():
+            n = str(n)
+            if n.startswith(BKG_PREFIX):
+                out.add((bkg_param_key(n), True))
+            else:
+                out.add((n, False))
+        return out
+
+    model_keys = _keys(shared_params)
+    all_keys = _keys(shared_all_params)
+    ties, head_all, head_model = {}, {}, {}
+
+    def _match(keys, pkey, is_bkg):
+        return (pkey, is_bkg) in keys or (not is_bkg and (pkey, False)
+                                           in keys)
+
+    for src in sources:
+        for mname, model in src.models:
+            is_bkg = str(mname).endswith("_bkg")
+            for pkey in model.params:
+                full = f"{src.name}___{mname}___{pkey}"
+                if _match(all_keys, pkey, is_bkg):
+                    k = (pkey, is_bkg)
+                    if k in head_all:
+                        ties[full] = head_all[k]
+                    else:
+                        head_all[k] = full
+                elif _match(model_keys, pkey, is_bkg):
+                    k = (pkey, mname)
+                    if k in head_model:
+                        ties[full] = head_model[k]
+                    else:
+                        head_model[k] = full
+    return ties
+
+
+def require_counts(y, name):
+    """Refuse a spectrum without a single count.
+
+    Gates that reject every photon (a ToF window outside the bunch, a
+    PMT channel that was not recorded) leave only zero bins; least
+    squares then "converges" on them with an amplitude of 1e-12 and no
+    error bars, reported as a success (review 2, 2026-10-08).
+    """
+    arr = np.asarray(y, dtype=float)
+    if arr.size == 0 or not np.any(arr > 0):
+        raise ValueError(
+            f"{name}: no counts survive the ToF / PMT gates -- check the "
+            f"gate settings for this run.")
+
+
 def _resolve_fit_yerr(yerr, y, use_callable_yerr):
     """Resolve the per-bin uncertainty array passed to ``satlas2.Source``.
 
@@ -611,6 +684,104 @@ def _merged_run_metadata(merged_data):
     return out
 
 
+def _terminate_pool(pool):
+    """Stop a ProcessPoolExecutor now: cancel what is queued and kill the
+    worker processes. ``shutdown(wait=False)`` alone left the running
+    fits (and one queued fit) going, unsupervised, after a Cancel."""
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    for p in procs:
+        try:
+            p.join(timeout=2.0)
+        except Exception:
+            pass
+
+
+def emcee_fit_kwargs(fitter_config):
+    """The sampler settings both fit paths hand satlas2's emcee fit.
+
+    One place for both, because they drifted: Conv. iter / Conv. tau
+    were collected by the Fitter block and never forwarded, and the
+    simultaneous fit dropped Auto-convergence as well (review
+    2026-10-08). satlas2 stops when the chain is longer than
+    ``convergence_iter`` x the autocorrelation time AND that time changed
+    by less than ``convergence_tau`` (relative) since the last check.
+    """
+    fc = fitter_config or {}
+    return {
+        "nwalkers": int(fc.get("nwalkers", 50)),
+        "steps": int(fc.get("steps", 1000)),
+        "convergence": bool(fc.get("convergence", False)),
+        "convergence_iter": int(fc.get("convergence_iter", 50)),
+        "convergence_tau": float(fc.get("convergence_tau", 0.05)),
+    }
+
+
+def _index_of(key):
+    """Trailing integer of a parameter key ("p10" -> 10, "value2" -> 2)."""
+    digits = ""
+    for ch in reversed(str(key)):
+        if not ch.isdigit():
+            break
+        digits = ch + digits
+    return int(digits) if digits else -1
+
+
+def _apply_vary_and_limits(param, cfg):
+    """Copy Vary, Min and Max from a Model-block parameter onto a satlas2
+    parameter. The standalone Polynomial and Piecewise Constant models
+    copied Vary only, so their limits never reached the fit (review
+    2026-10-08); every other model already applied all three. "No
+    limit" (None, or the +-1e12 sentinel already turned into +-inf)
+    leaves satlas2's own default in place."""
+    param.vary = cfg.get("vary", True)
+    lo, hi = cfg.get("min"), cfg.get("max")
+    if lo is not None and np.isfinite(lo):
+        param.min = float(lo)
+    if hi is not None and np.isfinite(hi):
+        param.max = float(hi)
+
+
+def _patch_satlas2_single_prior():
+    """Make satlas2's Poisson likelihood include a single Gaussian prior.
+
+    satlas2 0.1.10 ``Fitter.poissonLlh`` appends the prior terms only
+    ``if len(priors) > 1``: one prior is silently dropped (a prior of
+    1 +- 0.01 left the fitted value at the data's 10.19), while the
+    Gaussian-LLH and chi-square objectives include it. In separate mode
+    each run keeps only its own priors, so one prior per run was dropped
+    for every run (review 2026-10-08). Idempotent.
+    """
+    import numpy as _np
+    import satlas2.core as _core
+
+    if getattr(_core.Fitter.poissonLlh, "_single_prior_patched", False):
+        return
+
+    def poissonLlh(self):
+        model_calcs = self.f()
+        returnvalue = self.temp_y * _np.log(model_calcs) - model_calcs
+        returnvalue[model_calcs <= 0] = -_np.inf
+        priors = self.gaussianPriorResid()
+        if len(priors) > 0:
+            priors = -0.5 * priors * priors
+            returnvalue = _np.append(returnvalue, priors)
+        return returnvalue
+
+    poissonLlh._single_prior_patched = True
+    _core.Fitter.poissonLlh = poissonLlh
+    # llhmethods holds bound methods built in __init__; existing Fitter
+    # objects are not used across this call, new ones pick it up.
+
+
 def _patch_satlas2_emcee_numpy2():
     """Make satlas2's emcee path work under numpy 2.
 
@@ -623,9 +794,12 @@ def _patch_satlas2_emcee_numpy2():
 
     Replace that conversion with a shape-safe one. Idempotent; called
     after each ``import satlas2`` so subprocess workers pick it up too.
+    Also applies ``_patch_satlas2_single_prior`` (same call sites).
     """
     import numpy as _np
     import satlas2.overwrite as _ov
+
+    _patch_satlas2_single_prior()
 
     if getattr(_ov.SATLASSampler.compute_log_prob,
                "_numpy2_patched", False):
@@ -841,17 +1015,17 @@ def _build_models_on_source(source, model_configs, sat_module):
             model_names_map[mc_safe_name] = ed
 
         elif mt == "Piecewise Constant":
-            values = []
-            bounds = []
-            for k in sorted(params.keys()):
-                if k.startswith("value"):
-                    values.append(params[k]["value"])
-                elif k.startswith("bound"):
-                    bounds.append(params[k]["value"])
+            # Numeric order: "value10" sorts before "value2" as text,
+            # which permuted the values of an 11+-piece model.
+            value_keys = sorted((k for k in params if k.startswith("value")),
+                                key=_index_of)
+            bound_keys = sorted((k for k in params if k.startswith("bound")),
+                                key=_index_of)
+            values = [params[k]["value"] for k in value_keys]
+            bounds = [params[k]["value"] for k in bound_keys]
             pc = sat_module.PiecewiseConstant(values, bounds, name=mc_safe_name)
-            for i, k in enumerate(sorted(
-                    k2 for k2 in params if k2.startswith("value"))):
-                pc.params[f"value{i}"].vary = params[k].get("vary", True)
+            for i, k in enumerate(value_keys):
+                _apply_vary_and_limits(pc.params[f"value{i}"], params[k])
             source.addModel(pc)
 
         elif mt == "Polynomial":
@@ -859,12 +1033,12 @@ def _build_models_on_source(source, model_configs, sat_module):
             # satlas2 Polynomial([c0, c1, ...]) reverses: p(N-1)=c0, ...
             # So pass coefficients in REVERSE sorted order so that
             # poly.params["pN"] gets config["pN"]'s value.
-            sorted_keys = sorted(params.keys())  # [p0, p1, ...]
+            sorted_keys = sorted(params.keys(), key=_index_of)  # p0, p1..
             coeffs = [params[k]["value"] for k in reversed(sorted_keys)]
             poly = sat_module.Polynomial(coeffs, name=mc_safe_name)
             for k in sorted_keys:
                 if k in poly.params:
-                    poly.params[k].vary = params[k].get("vary", True)
+                    _apply_vary_and_limits(poly.params[k], params[k])
             source.addModel(poly)
 
     return model_names_map
@@ -921,6 +1095,13 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
         sys.stdout = open(os.devnull, "w")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
+    # "Started": the parent times a run from this moment, not from when
+    # the pool merely queued it (review 2, 2026-10-08).
+    if progress_queue is not None:
+        try:
+            progress_queue.put_nowait((run_file_path, 0.0))
+        except Exception:
+            pass
 
     import satlas2 as sat
     _patch_satlas2_emcee_numpy2()
@@ -991,9 +1172,12 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
                             "certainly built with different physics "
                             "parameters (energy levels, harmonic, or the "
                             "cooler/laser override) than this Source "
-                            "block now uses. Re-create the merge "
+                            "block now uses -- or it is a frequency merge "
+                            "imported from Pre-Analysis before "
+                            "2026-10-08, which subtracted the transition "
+                            "twice (~1e9 MHz). Re-create the merge "
                             "(right-click the merged entry -> Edit...) "
-                            "before trusting this fit."),
+                            "or re-import it before trusting this fit."),
                     })
             source_name = source_name_for_merged(merged_data)
             run_num = source_name[len("Run_"):]
@@ -1125,6 +1309,7 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
 
         # yerr_mode "None" -> yerr is None; satlas2 divides by yerr, so
         # substitute unit weights (documented plain-least-squares case).
+        require_counts(y, source_name)
         yerr = _resolve_fit_yerr(yerr, y, use_callable_yerr)
         fitter = sat.Fitter()
         source = sat.Source(x, y, yerr=yerr, xerr=xerr,
@@ -1176,9 +1361,7 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
             fit_kwargs["llh_method"] = fitter_config["llh_method"]
             fit_kwargs["scale_covar"] = False
         if fitter_config["method"] == "emcee":
-            fit_kwargs["nwalkers"] = fitter_config.get("nwalkers", 50)
-            fit_kwargs["steps"] = fitter_config.get("steps", 1000)
-            fit_kwargs["convergence"] = fitter_config.get("convergence", False)
+            fit_kwargs.update(emcee_fit_kwargs(fitter_config))
             # emcee requires a filename for the HDF5 chain backend
             import tempfile
             chain_file = os.path.join(
@@ -1230,6 +1413,14 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
             fit_kwargs["iter_cb"] = _iter_cb
 
         fitter.fit(**fit_kwargs)
+        # lmfit's own verdict. "success" below only means "no exception";
+        # an optimiser that gave up (e.g. "Fit aborted: number of function
+        # evaluations > 20000") or a Hessian that failed still returned
+        # success=True. Exported so a caller can tell (the cooler
+        # calibration rejects such points; review 3, 2026-10-08).
+        _converged = bool(getattr(fitter.result, "success", True))
+        _errorbars = bool(getattr(fitter.result, "errorbars", True))
+        _fit_message = str(getattr(fitter.result, "message", "") or "")
         _err_note = _llh_error_note(fitter, fitter_config, _method)
         if _err_note:
             print(f"[Fit] {_err_note}", flush=True)
@@ -1526,6 +1717,9 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
 
         return {
             "success": True,
+            "converged": _converged,
+            "errorbars": _errorbars,
+            "fit_message": _fit_message,
             "run_number": run_num,
             "run_file": run_file_path,
             "source_name": source_name,
@@ -1576,6 +1770,9 @@ class FitWorkerThread(QThread):
     """Orchestrates fitting: parallel for separate, single for simultaneous."""
     progress = Signal(int, int, str)   # (completed, total, current_run)
     fit_done = Signal(dict)            # single run result
+    #: Per-run time limit (s) for non-emcee separate fits, counted from
+    #: the moment the run starts. Class attribute so tests can shorten it.
+    RUN_TIMEOUT_S = 600
     all_done = Signal(list)            # all results
     error = Signal(str)                # fatal error
 
@@ -1626,14 +1823,20 @@ class FitWorkerThread(QThread):
 
     def cancel(self):
         self._cancelled = True
-        # For simultaneous mode: forcefully terminate the thread if
-        # it's stuck in a blocking fitter.fit() call.
-        # We give it 2 seconds to finish gracefully, then terminate.
-        if not self.fitter_config.get("separate", True):
+        # Separate fits stop by killing their worker processes (see
+        # _run_separate). A simultaneous fit runs in THIS thread: the
+        # loading and the least-squares iterations check the flag, but
+        # satlas2's emcee sampler has no hook, so a simultaneous emcee
+        # fit can only be stopped by terminating the thread. Only then,
+        # and only after a grace period -- terminate() on a thread that
+        # was about to stop by itself fired 2 s after every Cancel
+        # (review 2026-10-08).
+        if (not self.fitter_config.get("separate", True)
+                and self.fitter_config.get("method") == "emcee"):
             import threading
             def _force_terminate():
                 import time
-                time.sleep(2)
+                time.sleep(5)
                 if self.isRunning():
                     self.terminate()
                     self.wait(3000)
@@ -1659,8 +1862,9 @@ class FitWorkerThread(QThread):
         results = []
         total = len(self.run_files)
 
-        # Per-run timeout: generous default (10 min) to avoid infinite hangs
-        timeout_per_run = 600
+        # Per-run timeout: generous (10 min) -- a guard against a hang,
+        # timed from when the run reports in (see the poller).
+        timeout_per_run = self.RUN_TIMEOUT_S
 
         # Cross-process progress queue. Workers push (filepath, fraction)
         # tuples; the poller below maintains `inner_progress[fp]` and
@@ -1668,6 +1872,8 @@ class FitWorkerThread(QThread):
         manager = Manager()
         progress_queue = manager.Queue()
         inner_progress = {fp: 0.0 for fp in self.run_files}
+        # When each run reported in (its first progress message).
+        first_seen = {}
         progress_lock = threading.Lock()
         stop_poll = threading.Event()
         last_status = ["Starting..."]
@@ -1690,6 +1896,7 @@ class FitWorkerThread(QThread):
                     msg = None
                 if msg is not None:
                     fp, frac = msg
+                    first_seen.setdefault(fp, _t.monotonic())
                     with progress_lock:
                         # Monotonic: a worker may push 0.5 just before
                         # we've seen its "done" 1.0; never go backwards.
@@ -1705,83 +1912,132 @@ class FitWorkerThread(QThread):
         poll_thread = threading.Thread(target=_poller, daemon=True)
         poll_thread.start()
 
+        def _submit(pool, filepath):
+            merged = self.merged_data_map.get(filepath)
+            split = self.split_descriptors_map.get(filepath)
+            override = self.file_overrides_map.get(filepath)
+            corr = self.centroid_corrections_map.get(filepath)
+            # Scan filter is keyed by ASDF path. For a virtual split, the
+            # data path is the parent ASDF, so use that key; merged
+            # spectra carry no ASDF and are skipped (the filter has
+            # nowhere to apply).
+            if split is not None:
+                sf_key = split.get("parent_path")
+            elif merged is not None:
+                sf_key = None
+            else:
+                sf_key = filepath
+            sf = (self.scan_filters_map.get(sf_key) if sf_key else None)
+            mcfg = self.model_configs_map.get(filepath, self.model_configs)
+            return pool.submit(
+                _fit_single_run, filepath,
+                self.source_config, mcfg,
+                self.fitter_config, self.output_config,
+                merged_data=merged,
+                split_descriptor=split,
+                binning_override=override,
+                centroid_correction=corr,
+                scan_filter=sf,
+                calibrations=self.calibrations_map,
+                progress_queue=progress_queue)
+
+        pool = None
         try:
-            with ProcessPoolExecutor(max_workers=self.n_cores) as pool:
-                futures = {}
-                for filepath in self.run_files:
-                    if self._cancelled:
-                        break
-                    merged = self.merged_data_map.get(filepath)
-                    split = self.split_descriptors_map.get(filepath)
-                    override = self.file_overrides_map.get(filepath)
-                    corr = self.centroid_corrections_map.get(filepath)
-                    # Scan filter is keyed by ASDF path. For a virtual
-                    # split, the data path is the parent ASDF, so use
-                    # that key; merged spectra carry no ASDF and are
-                    # skipped (the filter has nowhere to apply).
-                    if split is not None:
-                        sf_key = split.get("parent_path")
-                    elif merged is not None:
-                        sf_key = None
-                    else:
-                        sf_key = filepath
-                    sf = (self.scan_filters_map.get(sf_key)
-                          if sf_key else None)
-                    mcfg = self.model_configs_map.get(
-                        filepath, self.model_configs)
-                    future = pool.submit(
-                        _fit_single_run, filepath,
-                        self.source_config, mcfg,
-                        self.fitter_config, self.output_config,
-                        merged_data=merged,
-                        split_descriptor=split,
-                        binning_override=override,
-                        centroid_correction=corr,
-                        scan_filter=sf,
-                        calibrations=self.calibrations_map,
-                        progress_queue=progress_queue)
-                    futures[future] = filepath
+            pool = ProcessPoolExecutor(max_workers=self.n_cores)
+            futures = {}
+            for filepath in self.run_files:
+                if self._cancelled:
+                    break
+                futures[_submit(pool, filepath)] = filepath
 
-                last_status[0] = f"Fitting {total} run(s)..."
+            last_status[0] = f"Fitting {total} run(s)..."
 
-                completed = 0
-                for future in as_completed(futures):
-                    if self._cancelled:
-                        pool.shutdown(wait=False, cancel_futures=True)
-                        break
-                    fname = os.path.basename(futures[future])
+            # Polled, not as_completed(): as_completed yields only
+            # FINISHED futures, so a Cancel was noticed when the next fit
+            # happened to end, and a timeout could never fire (review
+            # 2026-10-08). emcee has no time limit: a long chain is not
+            # a hang.
+            import time as _time
+            from concurrent.futures import (
+                wait as _wait, FIRST_COMPLETED as _FIRST)
+            run_timeout = (None if self.fitter_config.get(
+                "method") == "emcee" else timeout_per_run)
+            pending = set(futures)
+            kill_pool = False
+            completed = 0
+
+            def _finish(filepath, result):
+                nonlocal completed
+                results.append(result)
+                # Whatever happened, this run is "done" -- pin its inner
+                # progress to 1.0 so the bar reflects it even if the
+                # worker bailed before sending the final 1.0.
+                with progress_lock:
+                    inner_progress[filepath] = 1.0
+                completed += 1
+                last_status[0] = (f"{os.path.basename(filepath)}"
+                                  f"  ({completed}/{total})")
+                _emit_combined()
+
+            while pending:
+                done, pending = _wait(pending, timeout=0.25,
+                                      return_when=_FIRST)
+                if self._cancelled:
+                    kill_pool = True
+                    break
+                for future in done:
                     try:
-                        result = future.result(timeout=timeout_per_run)
-                        results.append(result)
+                        result = future.result()
                         self.fit_done.emit(result)
-                    except TimeoutError:
-                        print(f"[FitWorker] Timeout for {fname}")
-                        results.append({
-                            "success": False,
-                            "run_file": futures[future],
-                            "run_number": "?",
-                            "error": f"Fit timed out after "
-                                     f"{timeout_per_run}s",
-                        })
                     except Exception as e:
                         import traceback
                         print(f"[FitWorker] Future error for "
                               f"{futures[future]}: {e}")
                         traceback.print_exc()
-                        results.append({
+                        result = {
                             "success": False,
                             "run_file": futures[future],
                             "run_number": "?",
                             "error": str(e),
-                        })
-                    # Whatever happened, this run is "done" — pin its
-                    # inner progress to 1.0 so the bar reflects it even
-                    # if the worker bailed before sending the final 1.0.
+                        }
+                    _finish(futures[future], result)
+                if run_timeout is None or not pending:
+                    continue
+                now = _time.monotonic()
+                hung = [f for f in pending
+                        if futures[f] in first_seen
+                        and now - first_seen[futures[f]] > run_timeout]
+                if not hung:
+                    continue
+                # A hung run keeps its pool slot for good, and the runs
+                # queued behind it would never start: report it, replace
+                # the pool NOW, and start the unfinished runs again.
+                for f in hung:
+                    pending.discard(f)
+                    print(f"[FitWorker] Timeout for "
+                          f"{os.path.basename(futures[f])}")
+                    _finish(futures[f], {
+                        "success": False,
+                        "run_file": futures[f],
+                        "run_number": "?",
+                        "error": f"Fit timed out after {run_timeout}s",
+                    })
+                again = [futures[f] for f in pending]
+                _terminate_pool(pool)
+                pool = ProcessPoolExecutor(max_workers=self.n_cores)
+                pending = set()
+                for filepath in again:
+                    first_seen.pop(filepath, None)
                     with progress_lock:
-                        inner_progress[futures[future]] = 1.0
-                    completed += 1
-                    last_status[0] = f"{fname}  ({completed}/{total})"
-                    _emit_combined()
+                        inner_progress[filepath] = 0.0
+                    nf = _submit(pool, filepath)
+                    futures[nf] = filepath
+                    pending.add(nf)
+            if kill_pool:
+                _terminate_pool(pool)
+            else:
+                pool.shutdown(wait=True)
+            pool = None
 
         except Exception as e:
             import traceback
@@ -1790,6 +2046,9 @@ class FitWorkerThread(QThread):
             self.error.emit(str(e))
             return
         finally:
+            if pool is not None:
+                # An exception left it running: do not leak its workers.
+                _terminate_pool(pool)
             # Always stop the poller and shut the Manager helper process down
             # deterministically (it was previously left to GC, leaking an idle
             # helper process per fit run -- code review 2026-06-02,
@@ -1839,6 +2098,8 @@ class FitWorkerThread(QThread):
             # can re-bin everything in a second pass.
             descriptors = []   # one per checked file, in order
             for filepath in self.run_files:
+                if self._cancelled:
+                    return      # nothing fitted yet: nothing to report
                 merged = self.merged_data_map.get(filepath)
                 if merged is not None:
                     # Phase 4: voltage-merged spectrum fitted in
@@ -2002,9 +2263,16 @@ class FitWorkerThread(QThread):
                 else:
                     bw_req = float(self.fitter_config.get(
                         "common_grid_width", 0.0)) or None
+                    _grid_stats = {}
                     rebinned, centers, bw_used = rebin_to_common_grid(
                         [(d["x"], d["y"]) for d in descriptors],
-                        bin_width=bw_req)
+                        bin_width=bw_req, stats=_grid_stats)
+                    if _grid_stats.get("merged_samples"):
+                        print(f"[FitWorker] Common grid: "
+                              f"{_grid_stats['merged_samples']} bin(s) "
+                              f"hold two or more samples of one run "
+                              f"(grid finer than or aliasing against the "
+                              f"step spacing).", flush=True)
                     print(f"[FitWorker] Common grid: {len(centers)} bins "
                           f"@ {bw_used:.4f}", flush=True)
                     only_mode = next(iter(modes))
@@ -2017,16 +2285,14 @@ class FitWorkerThread(QThread):
                         # Poisson interval correction here — it's a per-bin
                         # statistical refinement that loses meaning once we
                         # have summed counts from multiple samplings.
-                        ymode = d["yerr_mode"]
-                        if ymode == "Poisson sqrt(y)":
-                            yerr_new = np.sqrt(cy)
-                            yerr_new[yerr_new == 0] = 1.0
-                        elif ymode == "Model-based":
-                            # callable; satlas2 will keep evaluating
-                            # sqrt(model) per iteration. No change needed.
-                            yerr_new = np.sqrt
-                        else:   # default: Poisson sqrt(y+1)
-                            yerr_new = np.sqrt(cy + 1)
+                        # binning._make_yerr, the one map from mode to
+                        # errors: "None" stays None (unit weights below),
+                        # Model-based stays the callable. A hand-written
+                        # copy sent "None" to sqrt(y+1) -- a constant fit
+                        # moved 7.75 -> 3.14 with the grid on (review 3).
+                        from gui.analysis.binning import _make_yerr
+                        yerr_new, _ = _make_yerr(
+                            np.asarray(cy, dtype=float), d["yerr_mode"])
                         d["x"] = cx
                         d["y"] = cy
                         d["yerr"] = yerr_new
@@ -2045,6 +2311,7 @@ class FitWorkerThread(QThread):
             for d in descriptors:
                 # yerr_mode "None" -> yerr is None; unit weights so the plain
                 # least-squares case does not crash inside satlas2.
+                require_counts(d["y"], d["name"])
                 d["yerr"] = _resolve_fit_yerr(d["yerr"], d["y"], False)
                 source = sat.Source(d["x"], d["y"], yerr=d["yerr"],
                                     xerr=d["xerr"], name=d["name"])
@@ -2062,11 +2329,15 @@ class FitWorkerThread(QThread):
                     "binning_info": d["binning_info"],
                 }
 
-            # Apply parameter sharing
-            for param_name in self.fitter_config.get("shared_params", []):
-                fitter.shareModelParams(param_name)
-            for param_name in self.fitter_config.get("shared_all_params", []):
-                fitter.shareParams(param_name)
+            # Apply parameter sharing -- as explicit ties (see
+            # share_ties: satlas2's own share calls split the name into
+            # letters and shared nothing).
+            for _full, _head in share_ties(
+                    [sd["source"] for sd in source_objects.values()],
+                    self.fitter_config.get("shared_params", []),
+                    self.fitter_config.get("shared_all_params",
+                                           [])).items():
+                fitter.setExpr(_full, _head)
 
             # Apply model-level expressions across all sources. Each
             # expression is lowered from the model-local namespace
@@ -2118,8 +2389,7 @@ class FitWorkerThread(QThread):
                 fit_kwargs["llh_method"] = self.fitter_config["llh_method"]
                 fit_kwargs["scale_covar"] = False
             if self.fitter_config["method"] == "emcee":
-                fit_kwargs["nwalkers"] = self.fitter_config.get("nwalkers", 50)
-                fit_kwargs["steps"] = self.fitter_config.get("steps", 1000)
+                fit_kwargs.update(emcee_fit_kwargs(self.fitter_config))
                 # emcee requires a filename for the HDF5 chain backend
                 import tempfile
                 chain_file = os.path.join(
@@ -2175,6 +2445,10 @@ class FitWorkerThread(QThread):
             fit_kwargs["iter_cb"] = _iter_cb_sim
 
             fitter.fit(**fit_kwargs)
+            # lmfit's own verdict (see _fit_single_run).
+            _converged = bool(getattr(fitter.result, "success", True))
+            _errorbars = bool(getattr(fitter.result, "errorbars", True))
+            _fit_message = str(getattr(fitter.result, "message", "") or "")
             if self._cancelled:
                 # Aborted via iter_cb above; don't emit a partial/aborted fit.
                 return
@@ -2213,6 +2487,15 @@ class FitWorkerThread(QThread):
                     + f"thin = {int(self.fitter_config.get('thin', 1))}.\n"
                     + "    Integrated autocorrelation time (steps):\n"
                     + _acor_lines)
+            if (self.fitter_config.get("method") == "emcee"
+                    and (self.output_config or {}).get(
+                        "confidence_bands")):
+                # Bands are built per run in separate mode only; say
+                # so instead of silently leaving them out (review
+                # 2026-10-08).
+                report += ("\n\n[Note] Confidence bands are only "
+                           "computed for separate fits; this "
+                           "simultaneous fit has none.")
             params_df = fitter.createResultDataframe()
             metadata_df = fitter.createMetadataDataframe()
 
@@ -2392,13 +2675,28 @@ class FitWorkerThread(QThread):
                     except Exception:
                         pass
 
+                # This run's own rows only. satlas2 returns one table for
+                # every source; handing each run all of it made every
+                # reader that takes the first "centroid" row -- isotope
+                # shifts, trackers, weighted averages, parameters.csv --
+                # give every run the FIRST source's centroid (review
+                # 2026-10-08). Shared parameters appear under every
+                # source, so each run still carries them.
+                own_rows = params_df
+                if "Source" in params_df.columns:
+                    _mine = params_df["Source"].astype(str) == str(sname)
+                    if _mine.any():
+                        own_rows = params_df[_mine]
                 entry = {
                     "success": True,
+                    "converged": _converged,
+                    "errorbars": _errorbars,
+                    "fit_message": _fit_message,
                     "run_number": sdata["run_num"],
                     "run_file": sdata["filepath"],
                     "source_name": sname,
                     "report": report,
-                    "params_df": params_df.to_dict("list"),
+                    "params_df": own_rows.to_dict("list"),
                     "metadata_df": metadata_df.to_dict("list"),
                     "x": x.tolist(),
                     "y": y.tolist(),

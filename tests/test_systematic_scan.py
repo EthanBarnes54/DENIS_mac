@@ -572,7 +572,9 @@ class ChainTests(unittest.TestCase):
         gp.gp_fit_done.connect(lambda: order.append("gp"))
         self._run([_target(ref, "reference"), _target(sample)],
                   [-30.0], gp=gp)
-        self.assertEqual(order, ["ref", "gp", "sample"])
+        # The reference is fitted again after this offset's corrections
+        # (review 2: its values were corrected by the previous GP).
+        self.assertEqual(order, ["ref", "gp", "ref", "sample"])
 
     def test_a_gp_that_will_not_refit_fails_the_step_not_the_scan(self):
         ref, sample, gp = self._setup(start=False)

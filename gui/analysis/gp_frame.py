@@ -224,6 +224,8 @@ def effective_run_metadata(result, frame):
         rm.setdefault("ts_start", ts0)
         if not rm.get("ts_start"):
             rm["ts_start"] = ts0
+        if not rm.get("ts_stop"):
+            rm["ts_stop"] = ts1
     return rm
 
 

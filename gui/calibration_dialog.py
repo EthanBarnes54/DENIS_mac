@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
     QRadioButton, QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from gui.calibration import (
@@ -62,6 +62,7 @@ from gui.calibration import (
     suspect_outliers,
 )
 from gui.dialog_style import make_plot_card, style_dialog
+from gui.shared_widgets import _load_settings, _save_settings, lucide_icon
 
 # Rejection rules, in the order the combo shows them.
 _RULES: List[Tuple[str, str]] = [
@@ -74,6 +75,56 @@ _RULES: List[Tuple[str, str]] = [
 
 def _fmt_mhz(v: float) -> str:
     return f"{v:+.1f} MHz" if abs(v) >= 0.05 else "negligible"
+
+
+#: Plot colours for the light and the dark canvas. Dark is the
+#: Pre-Analysis dark canvas (black axes, white ink) so the two read as
+#: one app; the order colour map starts higher there, because viridis'
+#: first colours are near-black and vanish on black (Arda, 2026-10-09).
+_PLOT_THEMES = {
+    False: dict(fig="white", ax="white", fg="#202020", dim="#616161",
+                grid="#c8c8c8", zero="#888888", file="#8a8a8a",
+                yours="#1e88e5", band_file="#9e9e9e", band_file_a=0.15,
+                band_yours="#1e88e5", band_yours_a=0.12,
+                excluded="#e53935", ring="#ff6f00", cmap_lo=0.0),
+    True: dict(fig="#0d0d0d", ax="black", fg="#f0f0f0", dim="#a8a8a8",
+               grid="#3a3a3a", zero="#9a9a9a", file="#b8b8b8",
+               yours="#4fc3f7", band_file="#bdbdbd", band_file_a=0.14,
+               band_yours="#4fc3f7", band_yours_a=0.14,
+               excluded="#ff5252", ring="#ffd54f", cmap_lo=0.22),
+}
+
+#: Settings key of the dialog's dark-plot switch. Unset, it follows the
+#: Pre-Analysis switch.
+DARK_SETTING = "calibration_dark_plots"
+
+#: How close (in screen pixels) the pointer must be to a point for a
+#: hover read-out or a click to reach it.
+_HIT_PX = 8.0
+
+
+def _coef_label(name: str, coeffs) -> str:
+    if len(coeffs) > 1:
+        return f"{name}: p0={coeffs[0]:+.3f} V, p1={coeffs[1]:.5f}"
+    return name
+
+
+def _residual_limit(values, sigma: float, extra=()) -> float:
+    """Half-height of a residual panel: the points that count, with room.
+
+    Only the points the line was fitted to set the scale. A dropped
+    settling glitch sits ~30x further out, and letting it set the scale
+    flattens everything else onto the zero line -- it is drawn clipped
+    at the edge instead.
+    """
+    vals = np.abs(np.asarray(values, dtype=float))
+    vals = vals[np.isfinite(vals)]
+    top = float(vals.max()) if vals.size else 0.0
+    for e in extra:
+        if np.isfinite(e):
+            top = max(top, float(e))
+    top = max(top, 2.2 * sigma if np.isfinite(sigma) else 0.0, 1e-6)
+    return 1.18 * top
 
 
 class CalibrationDialog(QDialog):
@@ -120,6 +171,16 @@ class CalibrationDialog(QDialog):
         self._excluded: set[int] = set()
         self._result = None
         self._building = True
+        self._error = ""
+        # Plot state: the point the table has selected (ringed in every
+        # panel), what each panel drew where (for hover and click), and
+        # the secondary MHz axes to take down before a redraw.
+        self._highlight: Optional[int] = None
+        self._hit: Dict[object, Tuple[np.ndarray, np.ndarray,
+                                      np.ndarray]] = {}
+        self._sec_axes: list = []
+        self._tip_idx: Optional[int] = None
+        self._dark = self._dark_default()
 
         # The untouched calibration -- what the file gives you with no override
         # at all. Everything the dialog says is measured against this, and it
@@ -133,6 +194,9 @@ class CalibrationDialog(QDialog):
                     DEFAULT_VACC_DIV)
             except CalibrationError:
                 pass
+        # MHz per volt of calibrated-voltage error at this run's beam
+        # energy, for the residual panels' second axis and the hover.
+        self._mhz_per_v = self._sensitivity()
 
         self._build_ui(run_label)
         self._load_saved_spec()
@@ -180,15 +244,13 @@ class CalibrationDialog(QDialog):
         # (2026-09-21).
         self._fig = Figure(figsize=(7.0, 7.4), layout="constrained")
         self._canvas = FigureCanvasQTAgg(self._fig)
-        self._canvas.setToolTip(
-            "Top: the measured calibration points and the polynomial through\n"
-            "them. Middle and bottom: how far each point sits from that line.\n\n"
-            "Points are coloured by the order they were taken, dark → light,\n"
-            "so a supply that was still settling at the start of the sweep\n"
-            "shows up as dark points off the line.\n\n"
-            "Click any point to include or exclude it from the fit.")
+        # No tooltip on the canvas itself: a paragraph of help popping
+        # up over the data wherever the pointer rests hid the points it
+        # explained. Hovering a POINT reads that point out instead, and
+        # the help moved to the card title.
         self._ax_fit, self._ax_res0, self._ax_res1 = self._fig.subplots(
             3, 1, sharex=True, height_ratios=[2.2, 1.0, 1.0])
+        self._axes = (self._ax_fit, self._ax_res0, self._ax_res1)
         _engine = self._fig.get_layout_engine()
         if _engine is not None:
             # rect + zero pads, or the engine adds its own band on top
@@ -199,12 +261,56 @@ class CalibrationDialog(QDialog):
             # dialog. The panels share an x-axis, so they sit flush.
             _engine.set(w_pad=0.0, h_pad=0.0, hspace=0.02, wspace=0.0,
                         rect=(0, 0, 1, 1))
-        self._canvas.mpl_connect("pick_event", self._on_pick)
-        body.addWidget(
-            make_plot_card("Calibration fit", self._canvas,
-                           NavToolbar(self._canvas, self), parent=self,
-                           subtitle="click a point to exclude it"),
-            3)
+        # One colour bar for the acquisition order, shared by the three
+        # panels: "dark points are early" was only ever explained in a
+        # tooltip, and the legend's marker showed one arbitrary colour.
+        self._cbar = None
+        if self._n > 1:
+            from matplotlib.cm import ScalarMappable
+            from matplotlib.colors import Normalize
+            self._order_sm = ScalarMappable(
+                norm=Normalize(0, self._n - 1), cmap=self._order_cmap())
+            self._cbar = self._fig.colorbar(
+                self._order_sm, ax=list(self._axes), location="right",
+                fraction=0.025, pad=0.01, aspect=60)
+            self._cbar.set_ticks([0, self._n - 1])
+            self._cbar.set_ticklabels(["first", "last"])
+            self._cbar.set_label("order taken", fontsize=8, labelpad=-2)
+            self._cbar.ax.tick_params(labelsize=7, length=2)
+        self._canvas.mpl_connect("button_press_event", self._on_click)
+        self._canvas.mpl_connect("motion_notify_event", self._on_motion)
+        self._canvas.mpl_connect("figure_leave_event",
+                                 lambda _e: self._hide_tip())
+
+        self._toolbar = NavToolbar(self._canvas, self)
+        self._dark_btn = QToolButton()
+        self._dark_btn.setIcon(lucide_icon("sun-moon"))
+        self._dark_btn.setCheckable(True)
+        self._dark_btn.setAutoRaise(True)
+        self._dark_btn.setFixedSize(24, 22)
+        self._dark_btn.setChecked(self._dark)
+        self._dark_btn.toggled.connect(self._on_dark_toggled)
+        self._update_dark_tip()
+        card = make_plot_card(
+            "Calibration fit", self._canvas, self._toolbar, parent=self,
+            subtitle="click a point to leave it out · hover for its numbers",
+            extras=(self._dark_btn,))
+        title = card.findChild(QLabel, "plotCardTitle")
+        if title is not None:
+            title.setToolTip(
+                "Top: the measured calibration points and the polynomial\n"
+                "through them.\n"
+                "Middle: how far each point sits from the file's own line;\n"
+                "your line is drawn there too once you change something.\n"
+                "Bottom: how far each point sits from your line.\n\n"
+                "Points are coloured by the order they were taken (the bar\n"
+                "on the right), so a supply that was still settling at the\n"
+                "start of the sweep shows up as early points off the line.\n"
+                "A left-out point is a red cross; one beyond the panel's\n"
+                "scale sits on its edge as a triangle.\n\n"
+                "Click a point to leave it out of the fit or put it back.\n"
+                "Pick a row in the table to ring its point.")
+        body.addWidget(card, 3)
 
         # ---- right: controls ----
         right = QVBoxLayout()
@@ -380,9 +486,13 @@ class CalibrationDialog(QDialog):
         self._impact = QLabel()
         self._impact.setWordWrap(True)
         self._impact.setTextFormat(Qt.TextFormat.RichText)
+        # Scoped to this label by name. A bare property list applies to
+        # the label AND everything styled through it -- its tooltip
+        # included, which came out dark (Arda, 2026-10-09).
+        self._impact.setObjectName("calImpactBox")
         self._impact.setStyleSheet(
-            "padding:7px; border:1px solid #4a4a4f; border-radius:3px;"
-            "background-color:#2a2a2e;")
+            "QLabel#calImpactBox { padding:7px; border:1px solid #4a4a4f;"
+            " border-radius:3px; background-color:#2a2a2e; }")
         self._impact.setToolTip(
             "The only number that decides anything.\n\n"
             "Volts of residual mean nothing on their own. This is what your\n"
@@ -425,6 +535,12 @@ class CalibrationDialog(QDialog):
             self._table.setItem(
                 i, 2, QTableWidgetItem(f"{self._set_v[i]:.2f}"))
             self._table.setItem(i, 3, QTableWidgetItem(""))
+        self._table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.currentCellChanged.connect(
+            lambda row, _c, _pr, _pc: self._set_highlight(row))
         right.addWidget(self._table, 1)
 
         # ---- buttons ----
@@ -575,11 +691,172 @@ class CalibrationDialog(QDialog):
             self._excluded.add(idx)
         self._recompute()
 
-    def _on_pick(self, event):
-        ind = getattr(event, "ind", None)
-        if ind is None or not len(ind):
+    def _point_at(self, event) -> Optional[int]:
+        """The point under the pointer, or None.
+
+        Looked up from where each panel actually drew its points (a
+        clipped one sits on the panel's edge), nearest first. This
+        replaced matplotlib pick events, whose indices count within
+        each scatter: the top and bottom panels draw the used points
+        and the left-out ones as separate scatters, so clicking there
+        toggled whichever point had that index in the FULL table.
+        """
+        ax = getattr(event, "inaxes", None)
+        hit = self._hit.get(ax)
+        if hit is None or event.x is None or event.y is None:
+            return None
+        idx, xd, yd = hit
+        if not len(idx):
+            return None
+        disp = ax.transData.transform(np.column_stack([xd, yd]))
+        d = np.hypot(disp[:, 0] - event.x, disp[:, 1] - event.y)
+        j = int(np.argmin(d))
+        return int(idx[j]) if d[j] <= _HIT_PX * self._px_scale() else None
+
+    def _px_scale(self) -> float:
+        try:
+            return float(self._canvas.devicePixelRatioF()) or 1.0
+        except Exception:                                 # noqa: BLE001
+            return 1.0
+
+    def _on_click(self, event):
+        # A click that zooms or pans is not a vote on a point.
+        if getattr(self._toolbar, "mode", ""):
             return
-        self._toggle_point(int(ind[0]))
+        if getattr(event, "button", None) != 1:
+            return
+        idx = self._point_at(event)
+        if idx is None:
+            return
+        self._toggle_point(idx)
+        self._table.selectRow(idx)
+        item = self._table.item(idx, 1)
+        if item is not None:
+            self._table.scrollToItem(
+                item, QAbstractItemView.ScrollHint.PositionAtCenter)
+
+    def _on_motion(self, event):
+        idx = self._point_at(event)
+        if idx is None:
+            self._hide_tip()
+            return
+        if idx == self._tip_idx:
+            return
+        self._tip_idx = idx
+        from PySide6.QtGui import QCursor
+        QToolTip.showText(QCursor.pos(), self._point_text(idx),
+                          self._canvas)
+
+    def _hide_tip(self):
+        if self._tip_idx is not None:
+            self._tip_idx = None
+            QToolTip.hideText()
+
+    def _point_text(self, i: int) -> str:
+        """What the hover says about one calibration point."""
+        fit = self._result.fit if self._result is not None else None
+        if fit is not None and i < len(fit.read_v):
+            sv, rv = float(fit.set_v[i]), float(fit.read_v[i])
+        else:
+            sv, rv = float(self._set_v[i]), float("nan")
+        lines = [f"Point #{i}  (taken {i + 1} of {self._n})",
+                 f"set {sv:.3f} V  ->  readback {rv:.4f} V"]
+        k = self._mhz_per_v
+
+        def _r(v):
+            s = f"{v:+.4f} V"
+            return s + (f"  (~{abs(v) * k:.2f} MHz)" if k else "")
+
+        if self._base_fit is not None and i < len(self._base_fit.residuals_v):
+            lines.append("from the file's line: "
+                         + _r(float(self._base_fit.residuals_v[i])))
+        if fit is not None and i < len(fit.residuals_v):
+            lines.append("from your line: " + _r(float(fit.residuals_v[i])))
+        used = (self._result is not None
+                and i not in set(self._result.excluded))
+        lines.append("used in your fit" if used
+                     else "LEFT OUT of your fit")
+        if self._rb_fit.isChecked():
+            lines.append("click to " + ("leave it out" if used
+                                        else "put it back"))
+        return "\n".join(lines)
+
+    def _set_highlight(self, row: int):
+        new = row if 0 <= row < self._n else None
+        if new == self._highlight:
+            return
+        self._highlight = new
+        if not self._building:
+            self._draw()
+
+    # ── dark / light canvas ──────────────────────────────────
+
+    @staticmethod
+    def _dark_default() -> bool:
+        try:
+            s = _load_settings()
+        except Exception:                                 # noqa: BLE001
+            return False
+        if DARK_SETTING in s:
+            return bool(s.get(DARK_SETTING))
+        return bool(s.get("pa_dark_plots", False))
+
+    def _update_dark_tip(self):
+        self._dark_btn.setToolTip(
+            "Dark plot: ON -- click to go back to the white canvas"
+            if self._dark else
+            "Dark plot: OFF -- click for a black canvas")
+
+    def _on_dark_toggled(self, on: bool):
+        self._dark = bool(on)
+        self._update_dark_tip()
+        try:
+            s = _load_settings()
+            s[DARK_SETTING] = self._dark
+            _save_settings(s)
+        except Exception:                                 # noqa: BLE001
+            pass
+        if self._cbar is not None:
+            self._order_sm.set_cmap(self._order_cmap())
+            self._cbar.update_normal(self._order_sm)
+        self._draw()
+
+    def _theme(self) -> dict:
+        return _PLOT_THEMES[bool(self._dark)]
+
+    def _order_cmap(self):
+        """viridis, starting higher on the dark canvas."""
+        import matplotlib
+        from matplotlib.colors import ListedColormap
+        lo = _PLOT_THEMES[bool(getattr(self, "_dark", False))]["cmap_lo"]
+        base = matplotlib.colormaps["viridis"]
+        if lo <= 0:
+            return base
+        return ListedColormap(base(np.linspace(lo, 1.0, 256)),
+                              name="viridis_on_black")
+
+    def _sensitivity(self) -> Optional[float]:
+        """|MHz| that one volt of calibrated-voltage error is worth,
+        mid-scan, or None without the physics or a calibration."""
+        p = self._physics
+        base = self._base_fit
+        if base is None or not self._n or not all(
+                p.get(k) for k in ("mass_amu", "laser_cm", "cooler_v",
+                                   "harmonic")):
+            return None
+        try:
+            shifted = list(base.coeffs_v)
+            shifted[0] = float(shifted[0]) + 1.0
+            _dv, dnu = shift_mhz_over_scan(
+                shifted, base.coeffs_v, float(self._set_v.min()),
+                float(self._set_v.max()), cooler_v=float(p["cooler_v"]),
+                laser_cm=float(p["laser_cm"]),
+                mass_amu=float(p["mass_amu"]),
+                harmonic=int(p["harmonic"]), samples=3)
+            k = abs(float(dnu[1]))
+        except Exception:                                 # noqa: BLE001
+            return None
+        return k if np.isfinite(k) and k > 0 else None
 
     def _on_check_toggled(self, idx: int):
         if self._building:
@@ -642,120 +919,209 @@ class CalibrationDialog(QDialog):
                 item.setText("—")
 
     def _draw(self):
-        for ax in (self._ax_fit, self._ax_res0, self._ax_res1):
+        th = self._theme()
+        # clear() also drops an axis's secondary (MHz) axes.
+        self._sec_axes = []
+        for ax in self._axes:
             ax.clear()
+        self._hit = {}
 
         if self._result is None or self._result.fit is None:
             self._ax_fit.text(0.5, 0.5, self._error or "no calibration table",
-                              ha="center", va="center", color="#c33",
+                              ha="center", va="center", color=th["excluded"],
                               transform=self._ax_fit.transAxes, wrap=True)
+            self._style_axes(th)
             self._canvas.draw_idle()
             return
 
         fit = self._result.fit
-        used = fit.used_mask
-        x, y, r = fit.set_v, fit.read_v, fit.residuals_v
+        res = self._result
         base = self._base_fit
-        # Colour by acquisition order so a start-of-sweep failure -- the whole
-        # reason this dialog exists -- is visible at a glance.
-        order_c = np.arange(self._n)
+        used = np.asarray(fit.used_mask, dtype=bool)
+        x, y, r = fit.set_v, fit.read_v, fit.residuals_v
+        idx_all = np.arange(self._n)
+        cmap = self._order_cmap()
+        from matplotlib.colors import Normalize
+        norm = Normalize(0, max(self._n - 1, 1))
         xs = np.linspace(float(x.min()), float(x.max()), 200)
+        unchanged = (base is not None
+                     and not res.excluded
+                     and np.allclose(res.coeffs_v, base.coeffs_v,
+                                     rtol=1e-12, atol=0.0))
+        fs_title = 8
 
         # ── 1. the calibration curves, before and after ──
-        self._ax_fit.scatter(x[used], y[used], c=order_c[used],
-                             cmap="viridis", s=38, zorder=3, picker=6,
-                             label="used")
+        ax = self._ax_fit
+        ax.scatter(x[used], y[used], c=idx_all[used], cmap=cmap, norm=norm,
+                   s=30, linewidths=0, zorder=3, label="calibration points")
         if (~used).any():
-            self._ax_fit.scatter(x[~used], y[~used], marker="x", s=70,
-                                 c="#e53935", zorder=4, picker=6,
-                                 label="excluded")
+            ax.scatter(x[~used], y[~used], marker="x", s=60,
+                       c=th["excluded"], zorder=4, label="left out")
+        self._hit[ax] = (idx_all, np.asarray(x, float), np.asarray(y, float))
         # The two curves are genuinely close on an absolute scale -- a 1.3 V
         # disagreement across a 400 V sweep is a third of a percent, which is
         # invisible here and worth 50 MHz downstream. So label them with their
         # coefficients: that keeps them distinguishable when they overlap, and
         # the residual panels below are the magnified view.
         if base is not None:
-            self._ax_fit.plot(
-                xs, base.predict_v(xs), "--", color="#9e9e9e", lw=1.3,
-                zorder=2,
-                label=(f"file's own: p0={base.coeffs_v[0]:+.3f} V, "
-                       f"p1={base.coeffs_v[1]:.5f}"
-                       if len(base.coeffs_v) > 1 else "file's own"))
-        res = self._result
-        self._ax_fit.plot(
-            xs, res.predict_v(xs), "-", color="#1e88e5", lw=1.6, zorder=3,
-            label=(f"yours: p0={res.coeffs_v[0]:+.3f} V, "
-                   f"p1={res.coeffs_v[1]:.5f}"
-                   if len(res.coeffs_v) > 1 else "yours"))
-        self._ax_fit.set_ylabel("Readback [V]", fontsize=9)
-        self._ax_fit.tick_params(labelsize=8, labelbottom=False)
-        self._ax_fit.legend(fontsize=8, loc="best")
-        self._ax_fit.grid(alpha=0.25)
+            ax.plot(xs, base.predict_v(xs), "--", color=th["file"], lw=1.3,
+                    zorder=2, label=_coef_label("file's own", base.coeffs_v))
+        ax.plot(xs, res.predict_v(xs), "-", color=th["yours"], lw=1.6,
+                zorder=3, label=_coef_label("yours", res.coeffs_v))
+        ax.set_ylabel("Readback [V]", fontsize=9)
+        ax.tick_params(labelsize=8, labelbottom=False)
+        leg = ax.legend(fontsize=8, loc="upper left")
+        # The scatter's legend marker takes the colour map's FIRST colour,
+        # which read as "the early points" -- show a middle one.
+        try:
+            mid = cmap(0.5)
+            h = leg.legend_handles[0]
+            h.set_array(None)      # else the colour map wins at draw
+            h.set_facecolor(mid)
+            h.set_edgecolor(mid)
+        except Exception:                                 # noqa: BLE001
+            pass
 
         # ── 2. how far each point sits from the FILE's own calibration ──
-        self._ax_res0.axhline(0, color="#888", lw=0.9, zorder=1)
+        ax = self._ax_res0
+        ax.axhline(0, color=th["zero"], lw=0.9, zorder=1)
         if base is not None:
-            rb = base.residuals_v
-            sb = base.sigma_v
+            rb = np.asarray(base.residuals_v, dtype=float)
+            sb = float(base.sigma_v)
             if sb > 0:
-                self._ax_res0.axhspan(-2 * sb, 2 * sb, color="#9e9e9e",
-                                      alpha=0.15, zorder=0)
-            self._ax_res0.scatter(x, rb, c=order_c, cmap="viridis", s=30,
-                                  zorder=3, picker=6)
-            self._ax_res0.set_ylabel("Distance from\nfile's own line [V]",
-                                     fontsize=8)
-            self._ax_res0.text(
-                0.985, 0.93, f"typical scatter σ = {sb:.4f} V", ha="right",
-                va="top", fontsize=8, color="#616161",
-                bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
-                          edgecolor="#cccccc", alpha=0.85),
-                transform=self._ax_res0.transAxes)
+                ax.axhspan(-2 * sb, 2 * sb, color=th["band_file"],
+                           alpha=th["band_file_a"], lw=0, zorder=0)
+            # Your line, seen from the file's: where your calibration
+            # moves the voltage, point by point along the sweep.
+            diff = None
+            if not unchanged:
+                diff = res.predict_v(xs) - base.predict_v(xs)
+                ax.plot(xs, diff, "-", color=th["yours"], lw=1.4, zorder=2,
+                        label="your line")
+            lim = _residual_limit(
+                rb[used], sb,
+                extra=() if diff is None else (float(np.abs(diff).max()),))
+            self._scatter_residuals(ax, x, rb, used, cmap, norm, lim, th)
+            ax.set_title(f"σ = {sb:.4f} V", loc="right", fontsize=fs_title,
+                         color=th["dim"])
+            if diff is not None:
+                ax.legend(fontsize=7, loc="lower right")
         else:
-            self._ax_res0.text(0.5, 0.5, "no baseline fit", ha="center",
-                               va="center", fontsize=8, color="#888",
-                               transform=self._ax_res0.transAxes)
-        self._ax_res0.tick_params(labelsize=8, labelbottom=False)
-        self._ax_res0.grid(alpha=0.25)
+            ax.text(0.5, 0.5, "no baseline fit", ha="center", va="center",
+                    fontsize=8, color=th["dim"], transform=ax.transAxes)
+        ax.set_title("from the file's own line", loc="left",
+                     fontsize=fs_title, color=th["dim"])
+        ax.set_ylabel("Residual [V]", fontsize=8)
+        ax.tick_params(labelsize=8, labelbottom=False)
 
         # ── 3. how far each point sits from YOUR calibration ──
-        # Same points, measured against the line you are about to apply. With
-        # no override the two panels are identical, which is confusing to look
-        # at unless it is said out loud -- so say it.
-        self._ax_res1.axhline(0, color="#888", lw=0.9, zorder=1)
-        s = fit.sigma_v
+        ax = self._ax_res1
+        ax.axhline(0, color=th["zero"], lw=0.9, zorder=1)
+        s = float(fit.sigma_v)
         if s > 0:
-            self._ax_res1.axhspan(-2 * s, 2 * s, color="#1e88e5", alpha=0.12,
-                                  zorder=0)
-        self._ax_res1.scatter(x[used], r[used], c=order_c[used],
-                              cmap="viridis", s=30, zorder=3, picker=6)
-        if (~used).any():
-            self._ax_res1.scatter(x[~used], r[~used], marker="x", s=64,
-                                  c="#e53935", zorder=4, picker=6)
-        self._ax_res1.text(
-            0.985, 0.93, f"typical scatter σ = {s:.4f} V", ha="right",
-            va="top", fontsize=8, color="#1565c0",
-            bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
-                      edgecolor="#cccccc", alpha=0.85),
-            transform=self._ax_res1.transAxes)
+            ax.axhspan(-2 * s, 2 * s, color=th["band_yours"],
+                       alpha=th["band_yours_a"], lw=0, zorder=0)
+        r = np.asarray(r, dtype=float)
+        lim = _residual_limit(r[used], s)
+        self._scatter_residuals(ax, x, r, used, cmap, norm, lim, th)
+        # With no change the two panels are identical, which is confusing
+        # to look at unless it is said out loud -- so say it.
+        ax.set_title(f"σ = {s:.4f} V"
+                     + ("  ·  same as above: nothing changed yet"
+                        if unchanged else ""),
+                     loc="right", fontsize=fs_title, color=th["dim"])
+        ax.set_title("from your line", loc="left", fontsize=fs_title,
+                     color=th["yours"])
+        ax.set_xlabel("Voltage the scanner was set to [V]", fontsize=9)
+        ax.set_ylabel("Residual [V]", fontsize=8)
+        ax.tick_params(labelsize=8)
 
-        unchanged = (base is not None
-                     and not res.excluded
-                     and np.allclose(res.coeffs_v, base.coeffs_v,
-                                     rtol=1e-12, atol=0.0))
-        if unchanged:
-            self._ax_res1.text(
-                0.5, 0.06,
-                "same as above — you haven't changed anything yet",
-                ha="center", va="bottom", fontsize=8, color="#8a8a90",
-                style="italic", transform=self._ax_res1.transAxes)
+        # ── MHz on the right of the residual panels ──
+        k = self._mhz_per_v
+        if k:
+            for ax in (self._ax_res0, self._ax_res1):
+                sec = ax.secondary_yaxis(
+                    "right", functions=(lambda v, k=k: v * k,
+                                        lambda m, k=k: m / k))
+                sec.set_ylabel("≈ MHz", fontsize=7)
+                sec.tick_params(labelsize=7)
+                self._sec_axes.append(sec)
 
-        self._ax_res1.set_xlabel("Voltage the scanner was set to [V]",
-                                 fontsize=9)
-        self._ax_res1.set_ylabel("Distance from\nyour line [V]", fontsize=8)
-        self._ax_res1.tick_params(labelsize=8)
-        self._ax_res1.grid(alpha=0.25)
+        # ── the point the table has selected, ringed everywhere ──
+        h = self._highlight
+        if h is not None and h < self._n:
+            for ax in self._axes:
+                hit = self._hit.get(ax)
+                if hit is None:
+                    continue
+                where = np.flatnonzero(hit[0] == h)
+                if not len(where):
+                    continue
+                j = int(where[0])
+                ax.scatter([hit[1][j]], [hit[2][j]], s=150,
+                           facecolors="none", edgecolors=th["ring"],
+                           linewidths=1.8, zorder=7)
 
+        self._style_axes(th)
         self._canvas.draw_idle()
+
+    def _scatter_residuals(self, ax, x, r, used, cmap, norm, lim, th):
+        """One residual panel's points, scaled to the used ones.
+
+        A point beyond the panel's scale is drawn on its edge as a
+        triangle pointing the way it went, so it stays visible and
+        clickable without squashing the rest.
+        """
+        idx_all = np.arange(len(r))
+        inside = np.abs(r) <= lim
+        y_drawn = np.where(inside, r, np.sign(r) * lim * 0.92)
+        u = used & inside
+        ax.scatter(x[u], r[u], c=idx_all[u], cmap=cmap, norm=norm, s=26,
+                   linewidths=0, zorder=3)
+        e = ~used & inside
+        if e.any():
+            ax.scatter(x[e], r[e], marker="x", s=54, c=th["excluded"],
+                       zorder=4)
+        for sign, marker in ((1, "^"), (-1, "v")):
+            o = ~inside & (np.sign(r) == sign)
+            if not o.any():
+                continue
+            colours = [th["excluded"] if not used[i] else cmap(norm(i))
+                       for i in idx_all[o]]
+            ax.scatter(x[o], y_drawn[o], marker=marker, s=46, c=colours,
+                       linewidths=0, zorder=4)
+        ax.set_ylim(-lim, lim)
+        self._hit[ax] = (idx_all, np.asarray(x, float), y_drawn)
+
+    def _style_axes(self, th):
+        """Paint the figure for the current canvas (light or dark)."""
+        self._fig.set_facecolor(th["fig"])
+        axes = list(self._axes) + list(self._sec_axes)
+        if self._cbar is not None:
+            axes.append(self._cbar.ax)
+        for ax in axes:
+            ax.set_facecolor(th["ax"])
+            for spine in ax.spines.values():
+                spine.set_color(th["fg"])
+            ax.tick_params(colors=th["fg"], which="both")
+            ax.xaxis.label.set_color(th["fg"])
+            ax.yaxis.label.set_color(th["fg"])
+        for ax in self._axes:
+            ax.grid(True, color=th["grid"], alpha=0.6 if self._dark else 0.5,
+                    lw=0.6)
+            leg = ax.get_legend()
+            if leg is not None:
+                frame = leg.get_frame()
+                frame.set_facecolor(th["ax"])
+                frame.set_edgecolor(th["dim"])
+                for t in leg.get_texts():
+                    t.set_color(th["fg"])
+        if self._cbar is not None:
+            self._cbar.outline.set_edgecolor(th["fg"])
+            # Re-set on every draw: update_normal() on a light/dark
+            # switch hands the bar back its numeric ticks (0 .. 140).
+            self._cbar.set_ticks([0, self._n - 1], labels=["first", "last"])
+            self._cbar.ax.yaxis.label.set_color(th["fg"])
 
     def _update_stats(self):
         if self._result is None:

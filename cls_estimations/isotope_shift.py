@@ -67,6 +67,101 @@ def extract_centroid(params_df_dict, model_name=None, source_name=None):
     return None, None
 
 
+def centroid_tie(params_df_dict, model_name=None, source_name=None):
+    """The expression that defines this run's centroid through ANOTHER
+    source's parameter, or None.
+
+    In a simultaneous fit a shared or expression-tied centroid is one
+    parameter; every tied run reports the same value and error. Averaged
+    as N measurements it shrank the error by sqrt(N) (review 2,
+    2026-10-08). The row is the one ``extract_centroid`` reads. A tie to
+    a parameter of the SAME source (Model_2 = Model_1) is not one: that
+    run still contributes one measurement.
+    """
+    params = params_df_dict.get("Parameter", [])
+    exprs = params_df_dict.get("Expression", [None] * len(params))
+    models = params_df_dict.get("Model", [None] * len(params))
+    sources = params_df_dict.get("Source", [None] * len(params))
+    for i, p in enumerate(params):
+        if p != "centroid":
+            continue
+        if model_name is not None and i < len(models):
+            if models[i] is not None and models[i] != model_name:
+                continue
+        if source_name is not None and i < len(sources):
+            if sources[i] is not None and sources[i] != source_name:
+                continue
+        expr = exprs[i] if i < len(exprs) else None
+        # NaN (a float) is "no expression" -- a plain truth test would
+        # call the head row tied too.
+        if not (isinstance(expr, str) and expr.strip()):
+            return None
+        own = sources[i] if i < len(sources) else None
+        import re as _re
+        refs = {tok.split("___")[0]
+                for tok in _re.findall(r"[A-Za-z0-9_]+___[A-Za-z0-9_]+",
+                                       expr)}
+        if own is None or any(r != own for r in refs):
+            return expr
+        return None
+    return None
+
+
+def _tie_target(result):
+    """The source whose centroid this result's centroid is tied to, or
+    None (see centroid_tie)."""
+    import re as _re
+    own = result.get("source_name")
+    expr = centroid_tie(result.get("params_df", {}) or {},
+                        source_name=own)
+    if expr is None:
+        return None
+    refs = sorted({tok.split("___")[0]
+                   for tok in _re.findall(r"[A-Za-z0-9_]+___[A-Za-z0-9_]+",
+                                          expr)} - {own})
+    return refs[0] if refs else None
+
+
+def tie_groups(results):
+    """``results`` as independent measurements: lists ``[head, *tied]``.
+
+    A run whose centroid is an expression of another source's
+    (centroid_tie) joins that source's group, following chains to the
+    root. The group is ONE fitted number -- but every member keeps its
+    own acquisition window, and so its own GP correction: callers
+    combine the members, they do not drop them (review 3, 2026-10-08;
+    keeping only the head lost the other runs' corrections and their
+    uncertainty). Runs tied to a source that is not in *results* (its
+    fit failed, say) still form one group, headed by the first of them.
+    """
+    by_source = {r.get("source_name"): r for r in results
+                 if r.get("source_name")}
+
+    def root(r, depth=0):
+        tgt = _tie_target(r)
+        if tgt is None:
+            return ("run", id(r)), r
+        if tgt in by_source and depth <= len(results):
+            return root(by_source[tgt], depth + 1)
+        return ("source", tgt), None
+
+    groups, order = {}, []
+    for r in results:
+        key, head = root(r)
+        if key not in groups:
+            groups[key] = [head] if head is not None else []
+            order.append(key)
+        if r is not head:
+            groups[key].append(r)
+    return [groups[k] for k in order]
+
+
+def independent_results(results):
+    """The head of each tie group (see tie_groups): one result per
+    independent fitted centroid."""
+    return [g[0] for g in tie_groups(results)]
+
+
 def weighted_average(values, uncertainties):
     """Inverse-variance weighted average.
 
@@ -254,7 +349,7 @@ def mixed_mode_propagated_sigma(corrector=None, *,
                 "mixed_mode_propagated_sigma: auto_t is non-empty "
                 "but no corrector was supplied; the GP posterior "
                 "covariance cannot be evaluated.")
-        K = np.asarray(corrector.cov(auto_t, auto_t), dtype=float)
+        K = _correction_cov(corrector, auto_t, auto_t)
         var += float(auto_w @ K @ auto_w) / (W * W)
     manual_sigmas = np.asarray(manual_sigmas, dtype=float)
     manual_w = np.asarray(manual_w, dtype=float)
@@ -263,6 +358,27 @@ def mixed_mode_propagated_sigma(corrector=None, *,
     if not np.isfinite(var) or var <= 0.0:
         return 0.0
     return float(np.sqrt(var))
+
+
+def _correction_cov(corrector, t_a, t_b):
+    """GP posterior covariance between corrections at ``t_a`` and ``t_b``.
+
+    Each argument holds either times (1-D; the GP at that instant) or
+    (start, stop) spans (shape (n, 2); the GP averaged over the run,
+    which is the correction a run actually gets). The isotope-shift tab
+    passes spans since 2026-10-08: propagating the GP at the run's start
+    gave 0.0014 MHz where the applied correction's sd was 4.53 MHz on a
+    run starting at a nearly noiseless reference point (review).
+    """
+    ta = np.asarray(t_a, dtype=float)
+    tb = np.asarray(t_b, dtype=float)
+    if ta.ndim == 2 or tb.ndim == 2:
+        if ta.ndim == 1:
+            ta = np.column_stack([ta, ta])
+        if tb.ndim == 1:
+            tb = np.column_stack([tb, tb])
+        return np.asarray(corrector.cov_spans(ta, tb), dtype=float)
+    return np.asarray(corrector.cov(ta, tb), dtype=float)
 
 
 def gp_cross_covariance(corrector, t_a, w_a, t_b, w_b, *,
@@ -312,7 +428,7 @@ def gp_cross_covariance(corrector, t_a, w_a, t_b, w_b, *,
           else Wb_sub)
     if Wa <= 0.0 or Wb <= 0.0:
         return 0.0
-    K = np.asarray(corrector.cov(ta, tb), dtype=float)
+    K = _correction_cov(corrector, ta, tb)
     cov = float(wa @ K @ wb) / (Wa * Wb)
     return cov if np.isfinite(cov) else 0.0
 

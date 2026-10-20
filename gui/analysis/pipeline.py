@@ -35,9 +35,86 @@ and clstools' CLSDataFrame at call time.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+import os
+from contextlib import contextmanager
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from gui.analysis.binning import effective_binning_config, intersect_v_gate
+
+
+class CoolerPlan(NamedTuple):
+    """How a run's cooler voltage is set (see resolve_cooler)."""
+    mode: str                 # "constant" (an override) or "readback"
+    constant: Optional[float]  # the voltage every event gets ("constant")
+    offset: float             # the cooler offset, V
+    effective: float          # the run's cooler voltage, V (for the record)
+
+
+def resolve_cooler(override_v, offset_v, header_v, what="the run"):
+    """The cooler plan for one run: shared by the fit
+    (prepare_run_data), the merge and the Source block's Preview.
+
+    An override (Source block or split metadata, > 0) gives every event
+    one constant voltage, the offset added to it. Without one, each
+    event keeps its own cooler readback and the offset rides on top
+    (clstools: V = Vrfq * VCoolDiv + VCoolOffset - DV_cal). Whether an
+    override is in force is decided BEFORE the offset is added: an
+    override + offset <= 0 used to fall through to the readback branch
+    silently (5000 V - 6000 V ran at 24000 V; review 3, 2026-10-08).
+    Raises ValueError when the voltage would not be a beam energy.
+    """
+    override_v = float(override_v or 0.0)
+    offset_v = float(offset_v or 0.0)
+    if override_v > 0:
+        const = override_v + offset_v
+        if not const > 0:
+            raise ValueError(
+                f"cooler override {override_v:.3f} V with offset "
+                f"{offset_v:+.3f} V gives {const:.3f} V for {what}, "
+                f"which is not a beam energy")
+        return CoolerPlan("constant", const, offset_v, const)
+    effective = float(header_v or 0.0) + offset_v
+    if offset_v and not effective > 0:
+        raise ValueError(
+            f"cooler offset {offset_v:+.3f} V takes the cooler voltage of "
+            f"{what} to {effective:.3f} V, which is not a beam energy")
+    return CoolerPlan("readback", None, offset_v, effective)
+
+
+def apply_cooler(data, plan):
+    """Put *plan* on a loaded CLSDataFrame, before Compute_Voltages."""
+    if plan.mode == "constant":
+        data.VCoolDiv = 0
+        data.VCoolOffset = plan.constant
+    elif plan.offset:
+        data.VCoolOffset = float(
+            getattr(data, "VCoolOffset", 0) or 0) + plan.offset
+
+
+@contextmanager
+def stepsize_frame(data, plan):
+    """Around Compute_WL: its Frequency_stepsize reads Vcool_init *
+    VCoolDiv only, so give it the plan's beam energy. An override leaves
+    Vcool_init at the constant (and VCoolDiv back at 0) as before; a
+    per-event offset shifts Vcool_init for the call and puts it back."""
+    if plan.mode == "constant":
+        data.Vcool_init = plan.constant
+        data.VCoolDiv = 1
+        try:
+            yield
+        finally:
+            data.VCoolDiv = 0
+        return
+    v0 = getattr(data, "Vcool_init", None)
+    div = getattr(data, "VCoolDiv", 0)
+    if plan.offset and v0 is not None and div:
+        data.Vcool_init = v0 + plan.offset / div
+        try:
+            yield
+        finally:
+            data.Vcool_init = v0
+        return
+    yield
 
 
 def prepare_run_data(
@@ -113,28 +190,23 @@ def prepare_run_data(
                   if source_config.get("override_enabled") else 0)
     cooler_override = src_cooler if src_cooler > 0 else float(
         split_md.get("cooler_v", 0) or 0)
-    # A cooler OFFSET is added on top of whatever value would
-    # otherwise be used -- the override if one is set, else the run's
-    # own recorded voltage. Unlike the override it preserves the
-    # differences between runs, which is what the Yb calibration
-    # measures. Zero offset leaves every byte of the old path alone.
+    # A cooler OFFSET is added on top of whatever cooler voltage would
+    # otherwise be used: the override if one is set, else EACH EVENT'S own
+    # cooler readback (clstools: V = Vrfq * VCoolDiv + VCoolOffset -
+    # DV_cal). Unlike the override it preserves the differences between
+    # runs and the cooler's drift within a run. Until 2026-10-08 the
+    # offset was applied as a constant "header cooler + offset" for every
+    # event, which switched the per-event correction off: a run whose
+    # header and readback differ by 0.75 V moved ~13 MHz (Arda). Zero
+    # offset leaves every byte of the old path alone.
     cooler_offset = float(source_config.get("cooler_offset_v", 0.0) or 0.0)
-    if cooler_offset:
-        base = (cooler_override if cooler_override > 0
-                else float(run_metadata["cooler_v"]))
-        cooler_override = base + cooler_offset
-        if cooler_override <= 0:
-            raise ValueError(
-                f"cooler offset {cooler_offset:+.3f} V takes the cooler "
-                f"voltage to {cooler_override:.3f} V, which is not a "
-                f"beam energy")
+    cooler_plan = resolve_cooler(cooler_override, cooler_offset,
+                                 run_metadata["cooler_v"],
+                                 what=os.path.basename(str(run_file_path)))
     run_metadata["cooler_offset_v"] = cooler_offset
-    run_metadata["cooler_v_effective"] = (
-        cooler_override if cooler_override > 0
-        else float(run_metadata["cooler_v"]))
-    if cooler_override > 0:
-        data.VCoolDiv = 0
-        data.VCoolOffset = cooler_override
+    run_metadata["cooler_mode"] = cooler_plan.mode
+    run_metadata["cooler_v_effective"] = cooler_plan.effective
+    apply_cooler(data, cooler_plan)
     data.Compute_Voltages(
         cooler_correction=source_config.get("cooler_correction", "pbp"))
 
@@ -170,16 +242,14 @@ def prepare_run_data(
     if bin_mode != "Raw Voltage":
         # Fix Vcool_init so Compute_WL derives Frequency_stepsize correctly
         # when a cooler override is active, then restore VCoolDiv.
-        if cooler_override > 0:
-            data.Vcool_init = cooler_override
-            data.VCoolDiv = 1
-        data.Compute_WL(
-            Mass=source_config["mass"],
-            ref=source_config["ref_freq"],
-            harmonic=source_config["harmonic"],
-        )
-        if cooler_override > 0:
-            data.VCoolDiv = 0
+        # A per-event offset needs the same for the step size only:
+        # Compute_WL reads Vcool_init * VCoolDiv and ignores VCoolOffset.
+        with stepsize_frame(data, cooler_plan):
+            data.Compute_WL(
+                Mass=source_config["mass"],
+                ref=source_config["ref_freq"],
+                harmonic=source_config["harmonic"],
+            )
         if apply_ref_shift:
             ref_shift = source_config.get("ref_shift", 0.0)
             if ref_shift != 0.0:

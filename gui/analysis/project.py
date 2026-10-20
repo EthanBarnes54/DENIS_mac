@@ -268,6 +268,10 @@ def cooler_offset_tag(results):
 class AnalysisProject(QWidget):
     """A single analysis project containing a horizontal block pipeline."""
     results_ready = Signal(str, list, dict)  # project_name, results, config
+    # A cancelled fit sends no results_ready (its partial results are
+    # dropped), so whoever waits for one -- the cooler / systematic scans
+    # -- hears this instead, once the worker has stopped.
+    fit_cancelled = Signal(str)              # project_name
     fit_progress = Signal(int, int, str)     # current, total, status
 
     def __init__(self, name="Project", is_reference=False, parent=None,
@@ -299,6 +303,10 @@ class AnalysisProject(QWidget):
         # the file can repopulate the Results tab with exactly these
         # iterations instead of rescanning the whole output directory.
         self._session_iterations = []
+        # Iterations a scan wrote (its fits run with _config_overrides
+        # set): shown in Results like any other, never read back as the
+        # project's own result.
+        self._scan_iterations = set()
         settings = _load_settings()
         default_cores = max(1, os.cpu_count() - 2) if os.cpu_count() else 1
         self._n_cores = settings.get("max_cores", default_cores)
@@ -632,15 +640,20 @@ class AnalysisProject(QWidget):
                 QMessageBox.critical(self, "Auto-Fitter",
                                      f"Failed to load {run_file}:\n{e}")
                 return
-            name = os.path.splitext(os.path.basename(run_file))[0]
+            # The SAME source names the real fit uses: Gaussian priors
+            # and Fitter-block expressions name their parameters by
+            # them, and with the old file-name labels ("run_8116" vs
+            # "Run_8116") every start failed with a KeyError as soon as
+            # one prior was set (review 2026-10-08).
             if entry.get("is_merged"):
-                name = entry.get("merged_data", {}).get(
-                    "merged_name", name)
+                name = source_name_for_merged(
+                    entry.get("merged_data", {}) or {})
             elif split_desc is not None:
-                # Use the split's source_id so the AutoFitter dialog
-                # labels the spectra distinctly when both halves are
-                # loaded simultaneously.
-                name = split_desc["source_id"]
+                name = source_name_for_descriptor({
+                    "kind": "virtual_split",
+                    "source_id": split_desc["source_id"]})
+            else:
+                name = source_name_for_path(run_file)
             sources_data.append(
                 {"name": name, "x": x, "y": y, "yerr": yerr})
 
@@ -730,7 +743,16 @@ class AnalysisProject(QWidget):
             calibrations=_get_cal_registry().to_dict())
         bin_mode = eff_cfg.get("bin_mode", "Frequency")
 
-        res = compute_binned(data, eff_cfg)
+        # Scan exclusions, exactly as the fit applies them (keyed by the
+        # ASDF the events come from: a split's parent).
+        from gui.scan_filter import get_registry as _get_sf_registry
+        from gui.scan_filter import filter_data_for_binning
+        data_path = (split_descriptor["parent_path"]
+                     if split_descriptor is not None else run_file)
+        with filter_data_for_binning(
+                data, _get_sf_registry().get(data_path),
+                asdf_path=data_path):
+            res = compute_binned(data, eff_cfg)
         # Apply the GP centroid correction post-binning so the
         # auto-fitter's centroid initial guess matches the frame
         # the real fit will produce: subtract correction_mhz from the
@@ -748,9 +770,13 @@ class AnalysisProject(QWidget):
             if _corr_mhz != 0.0:
                 res["x"] = res["x"] - _corr_mhz
         x, y = res["x"], res["y"]
-        yerr = res["yerr"]
-        if res["use_callable_yerr"]:
-            yerr = np.sqrt(y + 1)
+        # The errors the fit uses: Model-based stays the callable
+        # sqrt(model) (it used to become sqrt(y+1), moving the optimum),
+        # "None" becomes unit weights (it stayed None and every start
+        # failed) -- review 2, 2026-10-08.
+        from gui.analysis.fitting import _resolve_fit_yerr, require_counts
+        require_counts(y, os.path.basename(str(run_file)))
+        yerr = _resolve_fit_yerr(res["yerr"], y, res["use_callable_yerr"])
         return x, y, yerr
 
     def _apply_autofit_result(self, result, model_blocks):
@@ -1004,36 +1030,70 @@ class AnalysisProject(QWidget):
             model_configs_map=self._config_overrides.get(
                 "model_configs_map", {}),
         )
-        self._fit_worker.progress.connect(
+        worker = self._fit_worker
+        worker.progress.connect(
             lambda c, t, s: fitter_block.set_progress(c, t, s))
-        self._fit_worker.progress.connect(self.fit_progress.emit)
-        self._fit_worker.fit_done.connect(self._on_single_fit_done)
-        self._fit_worker.all_done.connect(
-            lambda results: self._on_all_fits_done(
-                results, fitter_block, output_config))
-        self._fit_worker.error.connect(
+        worker.progress.connect(self.fit_progress.emit)
+        worker.fit_done.connect(self._on_single_fit_done)
+        worker.all_done.connect(
+            lambda results, w=worker: self._on_all_fits_done(
+                results, fitter_block, output_config, worker=w))
+        worker.error.connect(
             lambda msg: self._on_fit_error(msg, fitter_block))
-        # Safety net: if thread terminates (e.g., forced cancel), re-enable UI
-        self._fit_worker.finished.connect(
-            lambda: fitter_block.set_running(False))
-        self._fit_worker.start()
+        # Run comes back only once the worker has really stopped
+        # (including a cancelled one), so two fits never overlap.
+        worker.finished.connect(
+            lambda w=worker: self._on_worker_finished(w, fitter_block))
+        worker.start()
+
+    def is_fitting(self):
+        """True while this project's fit worker is running."""
+        return bool(self._fit_worker is not None
+                    and self._fit_worker.isRunning())
+
+    def stop_fit(self, wait_ms=15000):
+        """Cancel a running fit and wait for its worker to stop (closing
+        the window or the project). Returns True once it has stopped."""
+        if not self.is_fitting():
+            return True
+        self._fit_worker.cancel()
+        return bool(self._fit_worker.wait(wait_ms))
+
+    def _on_worker_finished(self, worker, fitter_block):
+        if worker is not self._fit_worker:
+            return
+        fitter_block.set_running(False)
+        if getattr(worker, "_cancelled", False):
+            fitter_block.set_progress(0, 0, "Cancelled")
+            self.fit_cancelled.emit(self._project_name)
 
     def _on_fit_cancel(self):
         if self._fit_worker:
             self._fit_worker.cancel()
-            # Re-enable UI immediately -- don't wait for all_done
-            fitters = self._get_blocks_by_type(FitterBlock)
-            for fb in fitters:
-                fb.set_running(False)
-                fb.set_progress(0, 0, "Cancelled")
+            # Run stays disabled until the worker has finished: enabling
+            # it here let a second fit start while the first still ran,
+            # and the first one's (partial) results then arrived last and
+            # replaced the second's (review 2026-10-08).
+            for fb in self._get_blocks_by_type(FitterBlock):
+                fb.set_progress(0, 0, "Cancelling...")
 
     def _on_single_fit_done(self, result):
         """Called when a single run fit completes."""
         pass  # Could update a live status display
 
-    def _on_all_fits_done(self, results, fitter_block, output_config):
+    def _on_all_fits_done(self, results, fitter_block, output_config,
+                          worker=None):
         """Called when all fits are complete."""
         print(f"[Project] _on_all_fits_done: {len(results)} results")
+        # A cancelled run's partial results are dropped: they used to be
+        # saved as a new iteration (with the CURRENT configuration as
+        # their provenance) and sent on as the project's latest results.
+        cancelled = (getattr(worker, "_cancelled", False)
+                     or any(r.get("cancelled") for r in results))
+        if cancelled or (worker is not None
+                         and worker is not self._fit_worker):
+            fitter_block.set_progress(0, 0, "Cancelled")
+            return
         # Order runs by run number so the fit report, the per-run CSVs,
         # and the saved figures all follow the same numeric ordering
         # (rather than the nondeterministic ProcessPool completion order).
@@ -1226,6 +1286,11 @@ class AnalysisProject(QWidget):
             # ever. Tell it the fit produced nothing and let it mark
             # the step failed and carry on.
             print(f"[{self._project_name}] fit failed: {msg}", flush=True)
+            # Nothing of the previous step may stand in for this one:
+            # the shifts would pair it with this offset's reference
+            # (review 3, 2026-10-08). The scan restores the project's
+            # own results when it ends.
+            self._last_results = []
             self.results_ready.emit(self._project_name, [], {})
             return
         QMessageBox.critical(self, "Fit Error", msg)
@@ -1301,6 +1366,12 @@ class AnalysisProject(QWidget):
         output_config["iter_name"] = iter_name
         if iter_name not in self._session_iterations:
             self._session_iterations.append(iter_name)
+        if self._config_overrides:
+            # A scan's fit (systematic or cooler-calibration): it fits at
+            # an offset the user did not choose for the project.
+            self._scan_iterations.add(iter_name)
+        else:
+            self._scan_iterations.discard(iter_name)
         plots_dir = os.path.join(iter_dir, "plots")
         tracking_dir = os.path.join(iter_dir, "tracking")
         os.makedirs(plots_dir, exist_ok=True)
@@ -2413,6 +2484,10 @@ class AnalysisProject(QWidget):
         }
         if include_iterations and self._session_iterations:
             out["iterations"] = list(self._session_iterations)
+            scans = [n for n in self._session_iterations
+                     if n in self._scan_iterations]
+            if scans:
+                out["scan_iterations"] = scans
         return out
 
     def from_dict(self, d):
@@ -2421,6 +2496,8 @@ class AnalysisProject(QWidget):
         self._is_calibration = bool(d.get("is_calibration", False))
         self._session_iterations = [
             str(x) for x in (d.get("iterations") or [])]
+        self._scan_iterations = {
+            str(x) for x in (d.get("scan_iterations") or [])}
         # Clear existing blocks
         for b in list(self._blocks):
             self._remove_block(b)
@@ -2528,28 +2605,59 @@ class AnalysisProject(QWidget):
                   flush=True)
         return out
 
+    def _iteration_to_load(self, project_dir):
+        """The iteration folder whose results stand for this project.
+
+        In order: the fit made in this window; the last iteration the
+        session file recorded that still has its parameters.csv; only
+        then the newest iter_* folder. It used to be the newest folder
+        whatever the session said, so a test fit made elsewhere (73Ge_T03
+        iter_002) replaced the session's own (review 2026-10-08).
+        Returns ``(folder name, why)`` or ``(None, None)``.
+        """
+        scans = set(getattr(self, "_scan_iterations", ()) or ())
+
+        def _ok(name):
+            # A scan's step is never "the project's result" (a systematic
+            # scan leaves its farthest offset last; review 2, 2026-10-08).
+            return bool(name) and name not in scans and os.path.isfile(
+                os.path.join(project_dir, name, "parameters.csv"))
+
+        if self._last_iter_dir:
+            here = os.path.basename(os.path.normpath(self._last_iter_dir))
+            if (os.path.normcase(os.path.dirname(
+                    os.path.normpath(self._last_iter_dir)))
+                    == os.path.normcase(os.path.normpath(project_dir))
+                    and _ok(here)):
+                return here, "fitted in this session"
+        for name in reversed(list(self._session_iterations or [])):
+            if _ok(name):
+                return name, "recorded by the session"
+        iters = sorted(d for d in os.listdir(project_dir)
+                       if d.startswith("iter_") and _ok(d))
+        if iters:
+            return iters[-1], "newest on disk (none recorded)"
+        return None, None
+
     def load_results_from_disk(self):
-        """Load fit results from the latest iteration on disk into
-        self._last_results so the IS tab can use them."""
+        """Load this project's fit results from disk into
+        self._last_results so the IS tab can use them (which iteration:
+        see _iteration_to_load)."""
         from gui.shared_widgets import get_analysis_dir
         base_dir = get_analysis_dir()
         project_dir = os.path.join(base_dir, self._project_name)
         if not os.path.isdir(project_dir):
             return
 
-        # Find latest iteration
-        iters = sorted([d for d in os.listdir(project_dir)
-                        if os.path.isdir(os.path.join(project_dir, d))
-                        and d.startswith("iter_")])
-        if not iters:
+        iter_name, why = self._iteration_to_load(project_dir)
+        if iter_name is None:
             return
-        iter_name = iters[-1]
         iter_dir = os.path.join(project_dir, iter_name)
+        self._loaded_iteration = iter_name
+        print(f"[{self._project_name}] results read from {iter_name} "
+              f"({why})", flush=True)
 
-        # Load parameters.csv
         params_path = os.path.join(iter_dir, "parameters.csv")
-        if not os.path.isfile(params_path):
-            return
 
         try:
             import pandas as pd
@@ -2564,20 +2672,46 @@ class AnalysisProject(QWidget):
         # Group parameters by run_number
         if "run_number" not in params_df.columns:
             return
+
+        # The per-iteration tables, read once (they used to be re-read
+        # for every run).
+        def _table(name):
+            path = os.path.join(iter_dir, name)
+            if not os.path.isfile(path):
+                return None
+            try:
+                return pd.read_csv(path)
+            except Exception:
+                return None
+
+        meta_table = _table("metadata.csv")
+        summary_table = _table("run_summary.csv")
         for run_num, grp in params_df.groupby("run_number"):
+            # A simultaneous fit saved before 2026-10-08 wrote EVERY
+            # source's rows under each run number; keep this run's own.
+            if "Source" in grp.columns and grp["Source"].nunique() > 1:
+                mine = grp["Source"].astype(str) == f"Run_{run_num}"
+                if mine.any():
+                    grp = grp[mine]
+            pdf = {
+                "Parameter": grp["Parameter"].tolist(),
+                "Value": grp["Value"].tolist(),
+                "Stderr": grp.get("Error",
+                                  grp.get("Stderr",
+                                          pd.Series([0.0] * len(grp))
+                                          )).tolist(),
+            }
+            # Expression too: a tied centroid is recognised by it, and
+            # without it a reopened session counted shared copies again.
+            for col in ("Source", "Model", "Expression"):
+                if col in grp.columns:
+                    pdf[col] = grp[col].tolist()
             result = {
                 "success": True,
                 "run_number": str(run_num),
                 "run_file": "",
                 "report": "",
-                "params_df": {
-                    "Parameter": grp["Parameter"].tolist(),
-                    "Value": grp["Value"].tolist(),
-                    "Stderr": grp.get("Error",
-                                      grp.get("Stderr",
-                                              pd.Series([0.0] * len(grp))
-                                              )).tolist(),
-                },
+                "params_df": pdf,
                 "metadata_df": {},
                 "x": [], "y": [], "yerr": [],
                 "y_fit": [], "x_smooth": [], "y_fit_smooth": [],
@@ -2606,10 +2740,9 @@ class AnalysisProject(QWidget):
                     pass
 
             # Try loading run metadata from metadata.csv
-            meta_path = os.path.join(iter_dir, "metadata.csv")
-            if os.path.isfile(meta_path):
+            if meta_table is not None:
                 try:
-                    meta_df = pd.read_csv(meta_path)
+                    meta_df = meta_table
                     run_meta = meta_df[
                         meta_df["run_number"].astype(str) == str(run_num)]
                     if not run_meta.empty:
@@ -2621,10 +2754,9 @@ class AnalysisProject(QWidget):
                     pass
 
             # Try loading run summary for cooler_v / timestamps
-            summary_path = os.path.join(iter_dir, "run_summary.csv")
-            if os.path.isfile(summary_path):
+            if summary_table is not None:
                 try:
-                    summary_df = pd.read_csv(summary_path)
+                    summary_df = summary_table
                     run_row = summary_df[
                         summary_df["run_number"].astype(str)
                         == str(run_num)]
@@ -2739,9 +2871,24 @@ class AnalysisProject(QWidget):
         from cls_estimations.isotope_shift import extract_centroid
         from gui.analysis.naming import source_name_for_path
 
+        # A centroid tied across runs (simultaneous fit) is ONE fitted
+        # number: training the GP on N copies counted it N times and
+        # pinned the drift between those runs to zero. One observation
+        # (the head run's) per tie group (review 3, 2026-10-08).
+        from cls_estimations.isotope_shift import tie_groups
+        _ok = [r for r in self._last_results if r.get("success")]
+        _tied = set()
+        for _g in tie_groups(_ok):
+            if len(_g) > 1:
+                _tied.update(id(m) for m in _g[1:])
+                print(f"[{self._project_name}] GP reference: runs "
+                      f"{', '.join(str(m.get('run_number', '?')) for m in _g)}"
+                      f" share one fitted centroid -- one observation",
+                      flush=True)
+
         obs = []
         for r in self._last_results:
-            if not r.get("success"):
+            if not r.get("success") or id(r) in _tied:
                 continue
             params = r.get("params_df", {}) or {}
             run_file = r.get("run_file") or ""

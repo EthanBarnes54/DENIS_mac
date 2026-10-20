@@ -17,10 +17,11 @@ gets the look without opting in. This module keeps the layout helpers
 :func:`section_note`) and stays importable for the existing callers;
 ``style_dialog`` is now a no-op kept for compatibility.
 
-Note the plots stay **white**. That is deliberate and app-wide (see
-``shared_widgets._STATIC_PLOT_STYLE``: CMU Serif, ticks-in, framed
-legend) -- these figures are publication output, and a dark diagnostic
-plot would be the thing that looked out of place.
+Note the plots are **white** by default. That is deliberate and app-wide
+(see ``shared_widgets._STATIC_PLOT_STYLE``: CMU Serif, ticks-in, framed
+legend) -- these figures are publication output. A black canvas is
+opt-in where it was asked for: the Pre-Analysis panels, and since
+2026-10-09 the voltage-calibration dialog (its header's sun/moon button).
 
 Depends on: PySide6, gui.theme.
 """
@@ -67,11 +68,12 @@ def stabilize_toolbar(toolbar, label_width: int = 180) -> None:
 
 
 def make_plot_card(title: str, canvas, toolbar, parent=None,
-                   subtitle: str = "") -> QFrame:
+                   subtitle: str = "", extras=()) -> QFrame:
     """A plot in the app's card: dark header strip, title left, toolbar right.
 
     The same construction the Pre-Analysis panels use, so a dialog's plot and
-    a tab's plot are visibly the same kind of object.
+    a tab's plot are visibly the same kind of object. ``extras`` are widgets
+    placed just left of the toolbar (a dark-plot toggle, say).
     """
     card = QFrame(parent)
     card.setObjectName("plotCard")
@@ -91,6 +93,8 @@ def make_plot_card(title: str, canvas, toolbar, parent=None,
         sub.setObjectName("sectionNote")
         hdr.addWidget(sub)
     hdr.addStretch(1)
+    for w in extras or ():
+        hdr.addWidget(w)
 
     if toolbar is not None:
         toolbar.setMaximumHeight(24)

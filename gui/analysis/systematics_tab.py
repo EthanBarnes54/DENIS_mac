@@ -30,12 +30,13 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-    QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStyledItemDelegate, QTableWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from cls_estimations.systematics import (
-    DEFAULT_DEFINITION, DEFINITIONS, ParameterBand, ScanValue,
+    ALL, COMBINATIONS, DEFAULT_DEFINITION, DEFINITIONS, MAX_DEV,
+    QUADRATURE, ExtraSystematic, ParameterBand, ScanValue, budget,
     mean_over_runs, quality_flag, scan_offsets, summarise,
     trend_outliers,
 )
@@ -44,10 +45,25 @@ from gui.analysis.systematic_scan import (
     config_differences, read_baseline, split_key, value_key,
 )
 
+#: Where the offsets come from. The calibration mode is the batch the
+#: Ge analysis ran by hand: every run at the common offset (the numbers
+#: quoted) and at the two zero crossings (the systematic) -- three fits
+#: per run. The range mode walks an even grid between two offsets.
+MODE_CALIBRATION = "Common offset + the two zero crossings"
+MODE_RANGE = "Even grid over a range"
+OFFSET_MODES = (MODE_CALIBRATION, MODE_RANGE)
+
+#: Two offsets closer than this are the same fit.
+SAME_DV = 1e-6
+
 #: Columns of the step table.
 STEP_COLS = ("Use", "Offset (V)", "Status", "Flag", "Value", "Error")
-SUMMARY_COLS = ("Project", "Run", "Parameter", "N", "Baseline", "stat",
-                "min", "max", "band", "systematic", "total", "dP/dV")
+SUMMARY_COLS = ("Project", "Run", "Parameter", "N", "Value", "stat",
+                "min", "max", "band", "low edge Δ", "high edge Δ",
+                "cooler sys", "other sys", "sys total", "total", "dP/dV")
+#: Columns of the extra-systematics table.
+EXTRA_COLS = ("Use", "Name", "Project", "Run / isotope", "Parameter",
+              "Value (MHz)")
 
 
 def _wrap(text, width=54):
@@ -73,6 +89,28 @@ def _clear_cell_widgets(table):
                 old.setParent(None)
                 old.deleteLater()
     table.setRowCount(0)
+
+
+class _ChoiceDelegate(QStyledItemDelegate):
+    """An editable combo for a filter cell: "all", or a name the scan
+    has seen -- typed names are allowed (a project not scanned yet)."""
+
+    def __init__(self, choices_fn, parent=None):
+        super().__init__(parent)
+        self._choices_fn = choices_fn
+
+    def createEditor(self, parent, _option, index):
+        combo = QComboBox(parent)
+        combo.setEditable(True)
+        combo.addItems([ALL] + [c for c in self._choices_fn(index.column())
+                                if c and c != ALL])
+        return combo
+
+    def setEditorData(self, editor, index):
+        editor.setCurrentText(str(index.data() or ALL))
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentText().strip() or ALL)
 
 
 def draw_systematics(fig, d):
@@ -119,7 +157,7 @@ def draw_systematics(fig, d):
     if math.isfinite(base):
         ax.axhline(0.0 if delta else base, ls="--", lw=1.0,
                    color="#555555", zorder=1,
-                   label="baseline fit")
+                   label=d.get("baseline_label") or "baseline fit")
         bs = d.get("baseline_sigma", float("nan"))
         if math.isfinite(bs) and bs > 0:
             centre = 0.0 if delta else base
@@ -133,6 +171,11 @@ def draw_systematics(fig, d):
             lo, hi = lo - base, hi - base
         ax.axhspan(lo, hi, color="#f39c12", alpha=0.12, zorder=0,
                    label="scanned band")
+
+    quoted = d.get("quoted_dv")
+    if quoted is not None and math.isfinite(quoted):
+        ax.axvline(quoted, color="#6a1b9a", ls=":", lw=1.2, zorder=1,
+                   label=f"common offset {quoted:+.2f} V (quoted)")
 
     ax.set_xlabel("Assumed cooler offset (V)")
     unit = d.get("unit", "MHz")
@@ -326,6 +369,7 @@ class SystematicsTab(QGroupBox):
         self._baselines = {}        # project -> Baseline
         self._targets_cache = []
         self._col_width = None
+        self._loading = False       # from_dict: no mode-switch defaults
         self._build_ui()
 
     # ── layout ───────────────────────────────────────────────
@@ -364,16 +408,34 @@ class SystematicsTab(QGroupBox):
         refresh.clicked.connect(self.refresh_projects)
         col.addWidget(refresh)
 
-        rng = QGroupBox("Offset range")
+        rng = QGroupBox("Offsets")
         rl = QVBoxLayout(rng)
+        row0 = QHBoxLayout()
+        row0.addWidget(QLabel("Fit at:"))
+        self._mode = QComboBox()
+        self._mode.addItems(OFFSET_MODES)
+        self._mode.setToolTip(_wrap(
+            "Common offset + the two zero crossings: every run is "
+            "fitted three times -- at the common offset, whose results "
+            "are the values you quote, and at each zero crossing, "
+            "whose deviation from them is the cooler-voltage "
+            "systematic. This is the batch the Ge analysis ran by "
+            "hand. Even grid: walk a range in equal steps, to see how "
+            "a parameter depends on the offset."))
+        self._mode.currentTextChanged.connect(self._on_mode_changed)
+        row0.addWidget(self._mode, 1)
+        rl.addLayout(row0)
         row = QHBoxLayout()
-        row.addWidget(QLabel("from"))
+        self._lbl_from = QLabel("from")
+        row.addWidget(self._lbl_from)
         self._dv_min = self._spin(-33.46)
         row.addWidget(self._dv_min)
-        row.addWidget(QLabel("to"))
+        self._lbl_to = QLabel("to")
+        row.addWidget(self._lbl_to)
         self._dv_max = self._spin(-14.0)
         row.addWidget(self._dv_max)
-        row.addWidget(QLabel("V,"))
+        self._lbl_v = QLabel("V,")
+        row.addWidget(self._lbl_v)
         self._steps = QSpinBox()
         self._steps.setRange(2, 101)
         self._steps.setValue(10)
@@ -382,23 +444,27 @@ class SystematicsTab(QGroupBox):
             "is refitted at each one, so this multiplies the time: 10 "
             "points over 5 projects of 5 runs is 250 fits."))
         row.addWidget(self._steps)
-        row.addWidget(QLabel("points"))
+        self._lbl_points = QLabel("points")
+        row.addWidget(self._lbl_points)
         row.addStretch()
         rl.addLayout(row)
         row2 = QHBoxLayout()
         from_cal = QPushButton("From calibration")
         from_cal.setToolTip(_wrap(
-            "Take the range between the two isotopes' zero crossings "
-            "from the Cooler Calibration tab -- the interval the "
-            "calibration cannot distinguish between."))
+            "Take the common offset and the two zero crossings from "
+            "the Cooler Calibration tab, as chosen there (how the "
+            "common offset is picked, and whether the range is "
+            "widened by the crossings' errors)."))
         from_cal.clicked.connect(self._range_from_calibration)
         row2.addWidget(from_cal)
-        row2.addWidget(QLabel("baseline at"))
+        self._lbl_base = QLabel("baseline at")
+        row2.addWidget(self._lbl_base)
         self._baseline_dv = self._spin(-29.25)
         self._baseline_dv.setToolTip(_wrap(
-            "The offset the baseline iterations were fitted at. The "
-            "scan starts here and works outward, so every step has a "
-            "neighbour already fitted to start from."))
+            "Common offset: the offset every run is analysed at -- the "
+            "fits there give the values you quote, and the scan starts "
+            "there and works outward. Even grid: the offset the "
+            "baseline iterations were fitted at."))
         row2.addWidget(self._baseline_dv)
         row2.addWidget(QLabel("V"))
         row2.addStretch()
@@ -410,7 +476,10 @@ class SystematicsTab(QGroupBox):
         # Outside the group box: both themes draw the frame at the
         # layout's edge, and a label on that line comes out clipped.
         self._offsets_label = QLabel("")
-        self._offsets_label.setStyleSheet("color: palette(mid);")
+        # The themes' muted-note colour. palette(mid) is near-black in
+        # both dark themes: the line was all but invisible.
+        self._offsets_label.setObjectName("sectionNote")
+        self._offsets_label.setWordWrap(True)
         # Clear of both group frames: a group box's rect extends above
         # its visible frame (margin-top carries the title), so a label
         # placed flush against one comes out looking struck through.
@@ -511,6 +580,36 @@ class SystematicsTab(QGroupBox):
         self._definition.currentTextChanged.connect(self.compute)
         drow.addWidget(self._definition, 1)
         rsl.addLayout(drow)
+        crow = QHBoxLayout()
+        crow.addWidget(QLabel("Add systematics:"))
+        self._combine_sys = QComboBox()
+        self._combine_sys.addItems(COMBINATIONS)
+        self._combine_sys.setToolTip(_wrap(
+            "How the cooler-offset term and the other systematics "
+            "(Budget tab) are added up. In quadrature: they are "
+            "independent. Linear sum: they may be fully correlated, "
+            "the conservative bound."))
+        self._combine_sys.currentTextChanged.connect(self.compute)
+        crow.addWidget(self._combine_sys, 1)
+        crow.addWidget(QLabel("with stat:"))
+        self._combine_total = QComboBox()
+        self._combine_total.addItems(COMBINATIONS)
+        self._combine_total.setToolTip(_wrap(
+            "How the total systematic and the statistical error make "
+            "the total. Quadrature is the usual choice; both are "
+            "always listed separately as well."))
+        self._combine_total.currentTextChanged.connect(self.compute)
+        crow.addWidget(self._combine_total, 1)
+        rsl.addLayout(crow)
+        self._birge = QCheckBox(
+            "Scale the run average's error by √χ²/ν when above 1")
+        self._birge.setToolTip(_wrap(
+            "When the runs scatter more than their own errors allow, "
+            "inflate the weighted mean's error by the Birge ratio -- "
+            "what the Ge analysis did for its statistical error. Off: "
+            "the plain inverse-variance error."))
+        self._birge.toggled.connect(self.compute)
+        rsl.addWidget(self._birge)
         self._headline = QLabel("--")
         self._headline.setWordWrap(True)
         rsl.addWidget(self._headline)
@@ -579,6 +678,48 @@ class SystematicsTab(QGroupBox):
         sl.addWidget(self._sum_table, 1)
         right.addTab(sum_page, "Summary")
 
+        budget_page = QWidget()
+        bl = QVBoxLayout(budget_page)
+        bl.setContentsMargins(4, 4, 4, 4)
+        bnote = QLabel(
+            "Systematics the scan does not measure -- the scan-voltage "
+            "calibration, the laser frequency, a mass, a line-shape "
+            "choice... -- in the quantity's own unit (MHz). Each row "
+            "applies where its Project, Run / isotope and Parameter "
+            "match; 'all' matches everything. They are added to the "
+            "cooler-offset term as set under Systematic on the left.")
+        bnote.setWordWrap(True)
+        bl.addWidget(bnote)
+        self._extra_table = QTableWidget(0, len(EXTRA_COLS))
+        self._extra_table.setHorizontalHeaderLabels(list(EXTRA_COLS))
+        self._extra_table.verticalHeader().setVisible(False)
+        hh = self._extra_table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for c, w in ((0, 44), (2, 170), (3, 150), (4, 150), (5, 110)):
+            self._extra_table.setColumnWidth(c, w)
+        self._extra_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self._extra_delegate = _ChoiceDelegate(self._extra_choices,
+                                               self._extra_table)
+        for c in (2, 3, 4):
+            self._extra_table.setItemDelegateForColumn(
+                c, self._extra_delegate)
+        self._extra_table.itemChanged.connect(self._on_extra_changed)
+        bl.addWidget(self._extra_table, 1)
+        brow = QHBoxLayout()
+        add = QPushButton("Add")
+        add.setToolTip("Add a systematic contribution.")
+        add.clicked.connect(lambda: self._add_extra())
+        brow.addWidget(add)
+        rem = QPushButton("Remove")
+        rem.setToolTip("Remove the selected rows.")
+        rem.clicked.connect(self._remove_extras)
+        brow.addWidget(rem)
+        brow.addStretch()
+        bl.addLayout(brow)
+        right.addTab(budget_page, "Budget")
+
         self._grid_table = QTableWidget(0, 1)
         self._grid_table.verticalHeader().setVisible(False)
         self._grid_table.horizontalHeader().setSectionResizeMode(
@@ -592,6 +733,7 @@ class SystematicsTab(QGroupBox):
         self._main_splitter.setStretchFactor(0, 0)
         self._main_splitter.setStretchFactor(1, 1)
         self._main_splitter.setSizes([540, 1160])
+        self._on_mode_changed(self._mode.currentText())
         self._update_offsets_label()
         self.refresh_projects()
 
@@ -715,7 +857,41 @@ class SystematicsTab(QGroupBox):
             left.setMinimumWidth(max(480, sum(widths) + 60))
 
     # ── setup ────────────────────────────────────────────────
+    def is_calibration_mode(self):
+        return self._mode.currentText() == MODE_CALIBRATION
+
+    def _apply_mode_labels(self):
+        cal = self.is_calibration_mode()
+        self._lbl_from.setText("zero crossings" if cal else "from")
+        self._lbl_to.setText("and" if cal else "to")
+        self._lbl_v.setText("V" if cal else "V,")
+        self._steps.setVisible(not cal)
+        self._lbl_points.setVisible(not cal)
+        self._lbl_base.setText("common offset (quoted)" if cal
+                               else "baseline at")
+        self._update_offsets_label()
+
+    def _on_mode_changed(self, _text=None):
+        """The user switched modes (or the tab was just built)."""
+        self._apply_mode_labels()
+        if self._loading:
+            return
+        if self.is_calibration_mode():
+            # The Ge analysis's rule: the larger deviation of the two
+            # zero crossings from the common offset, quoted as +/-.
+            self._definition.setCurrentText(MAX_DEV)
+        if hasattr(self, "_sum_table"):
+            self.compute()
+
     def offsets(self):
+        if self.is_calibration_mode():
+            # The common offset and the two crossings, once each.
+            out = []
+            for v in sorted((self._dv_min.value(), self._baseline_dv.value(),
+                             self._dv_max.value())):
+                if not out or abs(v - out[-1]) > SAME_DV:
+                    out.append(float(v))
+            return out
         try:
             return scan_offsets(self._dv_min.value(), self._dv_max.value(),
                                 self._steps.value())
@@ -727,6 +903,17 @@ class SystematicsTab(QGroupBox):
         if not offs:
             self._offsets_label.setText("(range is empty)")
             return
+        if self.is_calibration_mode():
+            lo = min(self._dv_min.value(), self._dv_max.value())
+            hi = max(self._dv_min.value(), self._dv_max.value())
+            common = self._baseline_dv.value()
+            text = (f"every run at {common:+.2f} V (quoted) and at "
+                    f"{lo:+.2f} / {hi:+.2f} V (systematic): "
+                    f"{len(offs)} fits per run")
+            if not lo - SAME_DV <= common <= hi + SAME_DV:
+                text += " -- the common offset is OUTSIDE the range"
+            self._offsets_label.setText(text)
+            return
         step = (offs[1] - offs[0]) if len(offs) > 1 else 0.0
         self._offsets_label.setText(
             f"{offs[0]:+.2f} .. {offs[-1]:+.2f} V, {len(offs)} points, "
@@ -735,15 +922,24 @@ class SystematicsTab(QGroupBox):
     def _range_from_calibration(self):
         cal = getattr(self._analysis_tab, "_cal_tab", None)
         res = getattr(cal, "_result", None) if cal is not None else None
-        if res is None or not getattr(res, "scan_range", None):
+        common = (cal.common() if cal is not None
+                  and hasattr(cal, "common") else None)
+        lo = common.lo if common is not None else None
+        hi = common.hi if common is not None else None
+        if lo is None and res is not None and getattr(res, "scan_range",
+                                                      None):
+            lo, hi = res.scan_lo, res.scan_hi
+        if lo is None:
             QMessageBox.information(
                 self, "Systematics",
                 "No calibration in this session yet. Run the Cooler "
-                "Calibration tab first, or type the range in.")
+                "Calibration tab first, or type the offsets in.")
             return
-        self._dv_min.setValue(float(res.scan_lo))
-        self._dv_max.setValue(float(res.scan_hi))
-        if res.dv is not None:
+        self._dv_min.setValue(float(lo))
+        self._dv_max.setValue(float(hi))
+        if common is not None and common.value is not None:
+            self._baseline_dv.setValue(float(common.value))
+        elif res is not None and res.dv is not None:
             self._baseline_dv.setValue(float(res.dv))
         self._update_offsets_label()
 
@@ -1017,14 +1213,33 @@ class SystematicsTab(QGroupBox):
                 sigma=float(v.get("sigma", float("nan"))),
                 include=float(dv) not in self._excluded))
         base = self._baselines.get(project, Baseline())
+        if self.is_calibration_mode():
+            # The quoted value is this batch's own fit at the common
+            # offset: same project state, same seeds as the two edge
+            # fits it is compared with. An iteration fitted earlier --
+            # maybe at another offset -- would be compared with fits it
+            # never shared a frame with. No usable fit there, no value.
+            want = self._baseline_dv.value()
+            here = [p for p in points
+                    if abs(p.dv - want) <= SAME_DV and p.usable]
+            value = here[0].value if here else float("nan")
+            sigma = here[0].sigma if here else float("nan")
+            return ParameterBand(
+                project=project, run=base.run_of_source.get(source, source),
+                parameter=pname, points=points, baseline=float(value),
+                baseline_sigma=float(sigma))
         value = base.value(source, model, pname)
         sigma = base.sigma(source, model, pname)
         if value is None and points:
             # Nothing in any iteration knows this quantity: the
             # isotope shifts are computed from the fits, not fitted.
             # Its baseline is the step at the calibrated offset.
+            # Among the points the band uses: an excluded step (the
+            # natural response to a partial one) was the baseline every
+            # deviation was measured from (review 3, 2026-10-08).
             want = self._baseline_dv.value()
-            near = min(points, key=lambda p: abs(p.dv - want))
+            usable = [p for p in points if p.usable] or points
+            near = min(usable, key=lambda p: abs(p.dv - want))
             value, sigma = near.value, near.sigma
         return ParameterBand(
             project=project, run=base.run_of_source.get(source, source),
@@ -1046,7 +1261,12 @@ class SystematicsTab(QGroupBox):
         runs = [self._band_for(project, src, model, pname)
                 for src in self._sources_for(project)]
         runs = [b for b in runs if b.points]
-        return runs, mean_over_runs(runs, project, pname)
+        if project == SystematicScan.SHIFT_PROJECT:
+            # One band per isotope, the reference among them: a weighted
+            # mean across isotopes is no physical quantity (review 3).
+            return runs, None
+        return runs, mean_over_runs(runs, project, pname,
+                                    birge=self._birge.isChecked())
 
     # ── display ──────────────────────────────────────────────
     def compute(self, *_a):
@@ -1070,6 +1290,11 @@ class SystematicsTab(QGroupBox):
             "baseline": float("nan"), "baseline_sigma": float("nan"),
             "band": None, "definition": definition,
             "systematic": float("nan"),
+            "quoted_dv": (self._baseline_dv.value()
+                          if self.is_calibration_mode() else None),
+            "baseline_label": ("quoted value (fit at the common offset)"
+                               if self.is_calibration_mode()
+                               else "baseline fit"),
         }
         for b in runs:
             used = [p for p in b.points if p.usable]
@@ -1108,12 +1333,23 @@ class SystematicsTab(QGroupBox):
             self._headline.setText("--")
             return
         _model, pname = self._selected_key_parts()
+        bud = self._budget(mean, run_label="<weighted mean>")
+        other = (f" +/- {bud['other']:.3g} (other)"
+                 if math.isfinite(bud["other"]) else "")
+        lo_dev, hi_dev = mean.edge_deviations
         self._headline.setText(
             f"{pname}: {mean.baseline:.4g} +/- {mean.baseline_sigma:.3g} "
-            f"(stat) +/- {mean.systematic(definition):.3g} (cooler V) "
-            f"MHz\nband {mean.lo:.4g} .. {mean.hi:.4g} over "
-            f"{mean.n} offsets; total {mean.total(definition):.3g}; "
+            f"(stat) +/- {bud['cooler']:.3g} (cooler V){other} MHz\n"
+            f"systematic {bud['systematic']:.3g}, total "
+            f"{bud['total']:.3g}; edges {lo_dev:+.3g} / {hi_dev:+.3g}; "
+            f"band {mean.lo:.4g} .. {mean.hi:.4g} over {mean.n} offsets; "
             f"sensitivity {mean.slope:.3g} MHz/V")
+
+    def _budget(self, band, run_label=None):
+        return budget(band, self._definition.currentText(),
+                      self.extras(), self._combine_sys.currentText(),
+                      self._combine_total.currentText(),
+                      run_label=run_label)
 
     def _populate_steps(self):
         project = self._plot_project.currentText()
@@ -1135,6 +1371,9 @@ class SystematicsTab(QGroupBox):
             self._step_table.setCellWidget(row, 0, cb)
             self._step_table.setItem(row, 1, _ro(f"{dv:g}"))
             status = rec.get("status", "?")
+            role = self._step_role(dv)
+            if role:
+                status += f" · {role}"
             if dv in self._excluded:
                 status += " (excluded)"
             self._step_table.setItem(row, 2, _ro(status))
@@ -1184,25 +1423,43 @@ class SystematicsTab(QGroupBox):
                              if split_key(k)[0] == project})
             for model, pname in params:
                 runs, mean = self.bands(project, model, pname)
-                if self._per_run_cb.isChecked():
-                    rows.extend(summarise(runs, definition))
+                # Isotope shifts are per isotope by nature: always listed.
+                kw = dict(extras=self.extras(),
+                          combine_sys=self._combine_sys.currentText(),
+                          combine_total=self._combine_total.currentText())
+                if (self._per_run_cb.isChecked()
+                        or project == SystematicScan.SHIFT_PROJECT):
+                    rows.extend(summarise(runs, definition, **kw))
                 if mean is not None:
-                    rows.extend(summarise([mean], definition))
+                    rows.extend(summarise([mean], definition, **kw))
         return rows
 
     def _populate_summary(self):
         rows = self.summary_rows()
         self._sum_table.setRowCount(len(rows))
+
+        def f(v, spec):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return ""
+            return "" if not math.isfinite(v) else format(v, spec)
+
         for r, row in enumerate(rows):
             cells = [row["project"], row["run"], row["parameter"],
                      row["n"],
-                     f"{row['baseline']:.6g}", f"{row['stat']:.3g}",
-                     f"{row['min']:.6g}", f"{row['max']:.6g}",
-                     f"{row['band_width']:.4g}",
-                     f"{row['systematic']:.4g}", f"{row['total']:.4g}",
-                     f"{row['slope']:.4g}"]
+                     f(row["baseline"], ".6g"), f(row["stat"], ".3g"),
+                     f(row["min"], ".6g"), f(row["max"], ".6g"),
+                     f(row["band_width"], ".4g"),
+                     f(row["edge_lo"], "+.4g"), f(row["edge_hi"], "+.4g"),
+                     f(row["systematic"], ".4g"), f(row["other"], ".4g"),
+                     f(row["sys_total"], ".4g"), f(row["total"], ".4g"),
+                     f(row["slope"], ".4g")]
             for c, text in enumerate(cells):
-                self._sum_table.setItem(r, c, _ro(text))
+                item = _ro(text)
+                if SUMMARY_COLS[c] == "other sys" and row.get("extras"):
+                    item.setToolTip(row["extras"])
+                self._sum_table.setItem(r, c, item)
 
     def _populate_grid(self):
         project = self._plot_project.currentText()
@@ -1222,6 +1479,104 @@ class SystematicsTab(QGroupBox):
                 p = by_dv.get(dv)
                 self._grid_table.setItem(
                     r, c, _ro("" if p is None else f"{p.value:.6g}"))
+
+    def _step_role(self, dv):
+        """What a step is for in the three-offset batch, or ""."""
+        if not self.is_calibration_mode():
+            return ""
+        if abs(dv - self._baseline_dv.value()) <= SAME_DV:
+            return "quoted"
+        lo = min(self._dv_min.value(), self._dv_max.value())
+        hi = max(self._dv_min.value(), self._dv_max.value())
+        if abs(dv - lo) <= SAME_DV:
+            return "low edge"
+        if abs(dv - hi) <= SAME_DV:
+            return "high edge"
+        return "not in the batch"
+
+    # ── other systematics (Budget tab) ───────────────────────
+    def extras(self):
+        """The rows of the Budget table as :class:`ExtraSystematic`."""
+        out = []
+        t = self._extra_table
+        for r in range(t.rowCount()):
+            cells = [t.item(r, c) for c in range(len(EXTRA_COLS))]
+            if any(c is None for c in cells):
+                continue
+            try:
+                value = float(cells[5].text().strip())
+            except ValueError:
+                value = float("nan")
+            out.append(ExtraSystematic(
+                name=cells[1].text().strip() or f"row {r + 1}",
+                value=value,
+                project=cells[2].text().strip() or ALL,
+                run=cells[3].text().strip() or ALL,
+                parameter=cells[4].text().strip() or ALL,
+                use=cells[0].checkState() == Qt.CheckState.Checked))
+        return out
+
+    def _extra_choices(self, column):
+        """What a filter cell offers: the names the scan has seen."""
+        keys = [split_key(k) for k in self._keys()]
+        if column == 2:
+            return sorted({k[0] for k in keys}
+                          | {t.project_name
+                             for t in self.scannable_projects()})
+        if column == 3:
+            runs = set()
+            for rec in self._records.values():
+                runs |= {str(v) for v in (rec.get("labels") or {}).values()}
+            return sorted(runs | {"<weighted mean>"})
+        if column == 4:
+            return sorted({k[3] for k in keys})
+        return []
+
+    def _add_extra(self, entry=None):
+        e = entry or ExtraSystematic(name="", value=0.0)
+        t = self._extra_table
+        blocked = t.blockSignals(True)
+        r = t.rowCount()
+        t.insertRow(r)
+        use = QTableWidgetItem()
+        use.setFlags(Qt.ItemFlag.ItemIsUserCheckable
+                     | Qt.ItemFlag.ItemIsEnabled
+                     | Qt.ItemFlag.ItemIsSelectable)
+        use.setCheckState(Qt.CheckState.Checked if e.use
+                          else Qt.CheckState.Unchecked)
+        t.setItem(r, 0, use)
+        value = "" if not math.isfinite(e.value) else f"{e.value:g}"
+        for c, text in ((1, e.name), (2, e.project), (3, e.run),
+                        (4, e.parameter), (5, value)):
+            t.setItem(r, c, QTableWidgetItem(str(text)))
+        t.blockSignals(blocked)
+        if entry is None:
+            t.setCurrentCell(r, 1)
+            t.editItem(t.item(r, 1))
+        self._on_extra_changed()
+
+    def _remove_extras(self):
+        t = self._extra_table
+        rows = sorted({i.row() for i in t.selectedIndexes()}, reverse=True)
+        for r in rows:
+            t.removeRow(r)
+        if rows:
+            self._on_extra_changed()
+
+    def _on_extra_changed(self, item=None):
+        if item is not None and item.column() == 5:
+            # A value that is not a number takes no part; say so.
+            try:
+                float(item.text().strip())
+                ok = True
+            except ValueError:
+                ok = False
+            blocked = self._extra_table.blockSignals(True)
+            item.setForeground(Qt.GlobalColor.red if not ok
+                               else self._extra_table.palette().text())
+            self._extra_table.blockSignals(blocked)
+        if not self._loading:
+            self.compute()
 
     # ── seeds ────────────────────────────────────────────────
     def _edit_seeds(self):
@@ -1262,11 +1617,36 @@ class SystematicsTab(QGroupBox):
         offs = sorted(self._records)
         lines = ["Cooler-voltage systematic", "=" * 40,
                  f"Label: {self._label.text()}",
-                 f"Offsets: {min(offs):+.3f} .. {max(offs):+.3f} V in "
-                 f"{len(offs)} steps" if offs else "Offsets: none",
-                 f"Baseline offset: {self._baseline_dv.value():+.3f} V",
-                 f"Seeds: {self._seed_mode.currentText()}",
-                 f"Quoted systematic: {definition}", ""]
+                 f"Fitted at: {self._mode.currentText()}"]
+        if self.is_calibration_mode():
+            lo = min(self._dv_min.value(), self._dv_max.value())
+            hi = max(self._dv_min.value(), self._dv_max.value())
+            lines += [
+                f"Common offset (values quoted): "
+                f"{self._baseline_dv.value():+.3f} V",
+                f"Zero crossings (systematic): {lo:+.3f} and {hi:+.3f} V"]
+        else:
+            lines += [
+                f"Offsets: {min(offs):+.3f} .. {max(offs):+.3f} V in "
+                f"{len(offs)} steps" if offs else "Offsets: none",
+                f"Baseline offset: {self._baseline_dv.value():+.3f} V"]
+        lines += [f"Seeds: {self._seed_mode.currentText()}",
+                  f"Cooler-offset systematic: {definition}",
+                  f"Systematics added: "
+                  f"{self._combine_sys.currentText().lower()}; total with "
+                  f"stat: {self._combine_total.currentText().lower()}",
+                  "Run average's error: "
+                  + ("scaled by sqrt(chi2/ndf) when above 1"
+                     if self._birge.isChecked() else "inverse variance"),
+                  ""]
+        extras = [e for e in self.extras() if e.use]
+        if extras:
+            lines.append("Other systematics:")
+            for e in extras:
+                lines.append(
+                    f"  {e.name}: {e.value:g} (project {e.project}, run "
+                    f"{e.run}, parameter {e.parameter})")
+            lines.append("")
         if self._excluded:
             lines.append("Excluded offsets: "
                          + ", ".join(f"{v:g}" for v in
@@ -1284,8 +1664,10 @@ class SystematicsTab(QGroupBox):
             lines.append(
                 f"{row['project']:<14} {row['run']:<16} "
                 f"{row['parameter']:<10} {row['baseline']:>14.6g} "
-                f"+/- {row['stat']:<10.3g} sys {row['systematic']:<10.4g} "
-                f"tot {row['total']:<10.4g} dP/dV {row['slope']:.4g}")
+                f"+/- {row['stat']:<10.3g} cooler {row['systematic']:<10.4g}"
+                f"other {row['other']:<10.4g} sys {row['sys_total']:<10.4g}"
+                f"tot {row['total']:<10.4g} edges {row['edge_lo']:+.4g} / "
+                f"{row['edge_hi']:+.4g}  dP/dV {row['slope']:.4g}")
         return "\n".join(lines)
 
     def _send_to_results(self):
@@ -1321,7 +1703,9 @@ class SystematicsTab(QGroupBox):
             head = ["project", "run", "parameter", "unit", "n",
                     "baseline", "stat", "min", "max", "band_width",
                     "half_width", "std", "max_dev", "rms_dev",
-                    "systematic", "total", "slope", "slope_sigma"]
+                    "max_dev_flat", "edge_lo", "edge_hi",
+                    "systematic", "other", "extras", "sys_total",
+                    "total", "slope", "slope_sigma"]
             w.writerow(head)
             for row in rows:
                 w.writerow([row.get(k, "") for k in head])
@@ -1391,10 +1775,15 @@ class SystematicsTab(QGroupBox):
                 "baseline": combo.currentText() if combo else "",
             })
         return {
+            "offset_mode": self._mode.currentText(),
             "dv_min": self._dv_min.value(),
             "dv_max": self._dv_max.value(),
             "steps": self._steps.value(),
             "baseline_dv": self._baseline_dv.value(),
+            "combine_sys": self._combine_sys.currentText(),
+            "combine_total": self._combine_total.currentText(),
+            "birge": self._birge.isChecked(),
+            "extras": [e.to_dict() for e in self.extras()],
             "seed_mode": self._seed_mode.currentText(),
             "label": self._label.text(),
             "light": self._light.isChecked(),
@@ -1415,6 +1804,30 @@ class SystematicsTab(QGroupBox):
     def from_dict(self, d):
         if not d:
             return
+        self._loading = True
+        try:
+            self._from_dict(d)
+        finally:
+            self._loading = False
+        self._apply_mode_labels()
+        self.compute()
+
+    def _from_dict(self, d):
+        # A session from before the three-offset batch ran a range scan.
+        mode = str(d.get("offset_mode", MODE_RANGE))
+        self._mode.setCurrentText(mode if mode in OFFSET_MODES
+                                  else MODE_RANGE)
+        for combo, key in ((self._combine_sys, "combine_sys"),
+                           (self._combine_total, "combine_total")):
+            v = str(d.get(key, QUADRATURE))
+            combo.setCurrentText(v if v in COMBINATIONS else QUADRATURE)
+        self._birge.setChecked(bool(d.get("birge", False)))
+        blocked = self._extra_table.blockSignals(True)
+        self._extra_table.setRowCount(0)
+        self._extra_table.blockSignals(blocked)
+        for e in d.get("extras") or []:
+            if isinstance(e, dict):
+                self._add_extra(ExtraSystematic.from_dict(e))
         self._dv_min.setValue(float(d.get("dv_min", -33.46)))
         self._dv_max.setValue(float(d.get("dv_max", -14.0)))
         self._steps.setValue(int(d.get("steps", 10)))

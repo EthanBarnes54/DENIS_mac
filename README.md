@@ -6,7 +6,7 @@
 
 A comprehensive tool for **Collinear Laser Spectroscopy (CLS)**: run-time estimation, pre-analysis, SATLAS2-based fitting, and results visualization.
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Developer:** [Arda Kayaalp](https://ardakayaalp.com/) (arda.kayaalp@kuleuven.be)
 **Framework:** PySide6 (Qt6) + matplotlib + satlas2 + clstools
 
@@ -66,8 +66,8 @@ If `uv` is already installed: `uv sync && uv run python gui.py`.
 - Multi-start parallel **Auto-Fitter** to seed initial guesses, using the Fitter block's own method and statistics; **Update iteration** regenerates outputs into the existing iteration without re-fitting (walk/correlation rebuilt from saved chains)
 - **Isotope Shifts tab**: weighted averages with Birge inflation, systematic errors from cooler/laser jitter, a full per-shift error budget, and a run preview panel. A Reference Project is listed automatically and marked as the shift reference
 - **Reference Centroid Correction (GP)**: time-dependent drift correction following van den Borne (2025), in its own tab. Fit reference scans in a Reference Project, train a GP (RBF / Matern(5/2) / composite kernel via PyMC v5), exclude individual reference runs, and apply per-run corrections consistently in fits, merges, and the Auto-Fitter; correlated corrections partially cancel in shifts via the GP cross-covariance. A two-panel GP figure and a Centroids diagnostic show the drift and each run's corrected centroid
-- **Cooler-voltage calibration**: 171Yb+/173Yb+ calibration projects fitted over a grid of assumed cooler offsets; each isotope's hyperfine A(dV) line meets its literature value, and the crossing of the two isotope lines gives the offset (validated against an independent analysis of the same runs to 0.01 V). The offset is applied on top of each file's voltage, and iterations carry it in their name (`iter_001_-30V_CO`)
-- **Systematics tab**: scans the cooler offset across the calibrated interval and refits the whole chain at every step (reference fit, GP retraining, per-file corrections, sample fits, isotope shifts), seeding each step from its neighbours. The band per parameter uses the definition you choose (half/full width, std, max or RMS deviation); flagged steps can be re-run with edited seeds; results go to the Results tab
+- **Cooler-voltage calibration**: 171Yb+/173Yb+ calibration projects fitted over a grid of assumed cooler offsets; each isotope's hyperfine A(dV) line meets its literature value at a zero crossing, and the crossing of the two isotope lines gives the offset (validated against an independent analysis of the same runs to 0.01 V). The common offset applied to all runs can instead be the middle or the weighted mean of the two zero crossings, or a manual value; the zero crossings (optionally widened by their 1 sigma) bound the systematic range. The offset rides on each event's cooler readback, and iterations carry it in their name (`iter_001_-30V_CO`)
+- **Systematics tab**: refits the whole chain (reference fit, GP retraining, per-file corrections, sample fits, isotope shifts) at several cooler offsets, seeding each step from its neighbours. By default every run is fitted three times: at the common offset (the quoted values) and at the two zero crossings (the systematic is the larger edge deviation; both signed deviations are listed); an even grid across the range is also available. The band per parameter uses the definition you choose (half/full width, std, max or RMS deviation, max deviation / sqrt(3)); a **Budget** tab adds further systematics per project, run or parameter, combined in quadrature or as a linear sum, with optional Birge scaling of run averages; flagged steps can be re-run with edited seeds; results go to the Results tab
 - A project can be converted between **sample, reference, and cooler-calibration** from its tab's right-click menu
 - On-plot fit-values box, shade-under-fit, and per-plot-type styling via the Output block's **Plot Options...** dialog
 
@@ -91,6 +91,7 @@ If `uv` is already installed: `uv sync && uv run python gui.py`.
 - Settings in `settings/settings.yaml`: theme, plot defaults (global + per-plot-type), UI scale, path auto-conversion, output/fitting defaults
 - Session log always written to `logs/denis_<timestamp>.log` (newest 20 kept, crash hook included, native crashes traced); a Verbose toggle raises it to DEBUG
 - Loading a session shows its progress; tooltips appear as compact boxes by the pointer
+- Data moved since the session was saved: a **missing-files dialog** searches the session's folder (and any folder you pick, with or without subfolders) for every missing run at once, and one located file resolves a whole moved folder; runs still missing are never removed from the session file
 
 ---
 
@@ -148,7 +149,7 @@ Each run carries a DAC->HV calibration table; a polynomial through it turns ever
 **DENIS owns the calibration fit** (`gui/calibration.py`): every load path overwrites `data.Cal` before `Compute_Voltages`, so the numbers do not depend on the installed clstools build, and by default **nothing is dropped** (upstream clstools silently applies a 2-sigma cut; DENIS turns it off and makes rejection an explicit, recorded choice).
 
 - Runs whose calibration outliers would actually move their centroid get a **blinking `!`** badge (Pre-Analysis and Analysis); clicking it reports the cost in MHz and the acknowledgement is saved with the project
-- Right-click a run -> **Calibration...**: fit-vs-file overlay, residuals before/after, cost in MHz, point exclusion (click, drop-first-N, or iterative n-sigma), a zero-intercept (p0 = 0) option, borrowing another run's calibration, or manual coefficients
+- Right-click a run -> **Calibration...**: fit-vs-file overlay, residuals before/after, cost in MHz, point exclusion (click, drop-first-N, or iterative n-sigma), a zero-intercept (p0 = 0) option, borrowing another run's calibration, or manual coefficients. Points are coloured by acquisition order, hovering one reads it out in V and MHz, the table and plot select together, and the plot has a dark mode
 - **Calibration overview...** triages every loaded run at once, worst first
 - Overrides are per-file, shared across tabs, and persist under the save file's top-level `calibrations:` key; every drop is recorded in the fit report
 

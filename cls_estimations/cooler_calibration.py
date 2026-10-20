@@ -69,6 +69,13 @@ class ScanPoint:
     dv: float            # assumed cooler-voltage offset, V
     value: float         # extracted A, MHz
     sigma: float         # its fit error, MHz
+    flag: str = ""       # why the fit is not trusted ("" = used)
+
+
+#: A run's point further than this many sigma off that run's own line
+#: is a fit that landed elsewhere (a wrong minimum with a plausible
+#: error bar); it is left out of the calibration and listed.
+OUTLIER_SIGMA = 5.0
 
 
 @dataclass
@@ -124,22 +131,29 @@ class LineFit:
 def fit_line(x, y, sigma=None):
     """Weighted least-squares line through *(x, y)* with errors.
 
-    Points with a non-finite or non-positive error are given unit
-    weight rather than dropped: a fit result with a zero error bar is
-    usually a parameter that hit a bound, and silently discarding it
-    would change which runs the calibration rests on.
+    Points without a usable error (non-finite or not positive) are left
+    out when at least two others have one; with fewer, the line is
+    unweighted. They used to get unit weight -- a weight that depends on
+    the unit (1 MHz) and, beside 2 MHz points, outweighed them 4x; a
+    fit with no error bar is usually one that hit a bound and should
+    not pull the line at all (review 3, 2026-10-08). The calibration
+    marks such points before they get here (ScanPoint.flag).
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    if x.size < 2:
-        raise ValueError("a line needs at least two points "
-                         f"(got {x.size})")
     if sigma is None:
         w = np.ones_like(x)
     else:
         s = np.asarray(sigma, dtype=float)
         good = np.isfinite(s) & (s > 0)
-        w = np.where(good, 1.0 / np.where(good, s, 1.0) ** 2, 1.0)
+        if good.sum() >= 2:
+            x, y, s = x[good], y[good], s[good]
+            w = 1.0 / s ** 2
+        else:
+            w = np.ones_like(x)
+    if x.size < 2:
+        raise ValueError("a line needs at least two points "
+                         f"(got {x.size})")
 
     design = np.vstack([np.ones_like(x), x]).T
     wd = design * w[:, None]
@@ -249,6 +263,9 @@ class CalibrationResult:
     scan_lo: float | None = None       # systematic range, from the
     scan_hi: float | None = None       # two zero crossings
     note: str = ""
+    #: ``[(ScanPoint, reason)]`` left out of every line: flagged by the
+    #: scan, or off their run's trend by more than OUTLIER_SIGMA.
+    excluded: list = field(default_factory=list)
 
     @property
     def scan_range(self):
@@ -277,6 +294,10 @@ def calibrate(points, literature=None):
     pts = list(points)
     if not pts:
         return CalibrationResult(isotopes=[], note="no scan points")
+    excluded = [(p, p.flag) for p in pts if p.flag]
+    pts, outliers = _drop_trend_outliers(
+        [p for p in pts if not p.flag], lit)
+    excluded += outliers
 
     by_iso: dict[str, list[ScanPoint]] = {}
     for p in pts:
@@ -328,7 +349,7 @@ def calibrate(points, literature=None):
                  for r in solved])
         solutions.append(iso_sol)
 
-    result = CalibrationResult(isotopes=solutions)
+    result = CalibrationResult(isotopes=solutions, excluded=excluded)
     if len(solutions) < 2:
         result.note = ("need two isotopes to cross: "
                        f"have {[s.isotope for s in solutions]}")
@@ -345,7 +366,179 @@ def calibrate(points, literature=None):
     zeros = [s.zero for s in (a, b) if s.zero is not None]
     if len(zeros) == 2:
         result.scan_lo, result.scan_hi = min(zeros), max(zeros)
+    if excluded:
+        left = f"{len(excluded)} fit(s) left out"
+        result.note = f"{result.note}; {left}" if result.note else left
     return result
+
+
+# -- the one offset every run is analysed at ------------------------
+
+#: Ways to turn the calibration into the single offset applied to every
+#: run. The crossing of the two isotope lines is the report's choice;
+#: the zero crossings disagree by more than their errors on real data
+#: (3.1 sigma on the Ge campaign), so the middle of the interval and
+#: their weighted mean are defensible too -- the Ge analysis quoted the
+#: middle. Values are stable keys: they are saved with the session.
+COMMON_INTERSECTION = "intersection"
+COMMON_MIDRANGE = "midrange"
+COMMON_WEIGHTED = "weighted"
+COMMON_MANUAL = "manual"
+COMMON_METHODS = {
+    COMMON_INTERSECTION: "Intersection of the two isotope lines",
+    COMMON_MIDRANGE: "Middle of the two zero crossings",
+    COMMON_WEIGHTED: "Weighted mean of the two zero crossings",
+    COMMON_MANUAL: "Manual value",
+}
+DEFAULT_COMMON = COMMON_INTERSECTION
+
+
+@dataclass(frozen=True)
+class CommonOffset:
+    """The offset every run is fitted at, and the range around it.
+
+    ``sigma`` is the statistical 1-sigma of the value itself (None when
+    it has none, e.g. typed in). ``lo``/``hi`` are the systematic range
+    -- always the zero crossings, whichever way the value was chosen.
+    For the weighted mean, ``chi2`` (one degree of freedom) says how
+    well the two crossings agree, and ``sigma_scaled`` is ``sigma``
+    inflated by sqrt(chi2) when that is above 1.
+    """
+    method: str
+    value: float | None
+    sigma: float | None = None
+    lo: float | None = None
+    hi: float | None = None
+    chi2: float | None = None
+    sigma_scaled: float | None = None
+    note: str = ""
+
+    @property
+    def half_range(self):
+        if self.lo is None or self.hi is None:
+            return None
+        return abs(self.hi - self.lo) / 2.0
+
+
+def zero_crossings(result):
+    """``[(isotope, zero, sigma)]`` of the two isotopes the calibration
+    crossed, in the order it used them; fewer when one has none."""
+    out = []
+    for iso in (result.isotopes or [])[:2]:
+        if iso.zero is not None:
+            out.append((iso.isotope, float(iso.zero),
+                        float(iso.zero_sigma or 0.0)))
+    return out
+
+
+def systematic_range(result, widen=False):
+    """``(lo, hi)`` between the two zero crossings, or None.
+
+    With ``widen`` each end moves outward by its OWN crossing's 1-sigma
+    -- the conservative envelope the Ge analysis used (its -24.42 V is
+    the middle of that, -38.52 .. -10.31 V).
+    """
+    zs = zero_crossings(result)
+    if len(zs) < 2:
+        return None
+    (_i1, z1, s1), (_i2, z2, s2) = zs
+    if z1 <= z2:
+        lo, s_lo, hi, s_hi = z1, s1, z2, s2
+    else:
+        lo, s_lo, hi, s_hi = z2, s2, z1, s1
+    if widen:
+        lo, hi = lo - s_lo, hi + s_hi
+    return lo, hi
+
+
+def common_offset(result, method=DEFAULT_COMMON, manual=None,
+                  widen=False):
+    """The offset to apply to every run, by *method* (COMMON_METHODS).
+
+    The range is the zero crossings' (see :func:`systematic_range`)
+    whichever method picks the value; a value outside it is said so in
+    ``note``, since the systematic would then not bracket it.
+    """
+    rng = systematic_range(result, widen) if result is not None else None
+    lo, hi = rng if rng else (None, None)
+    zs = zero_crossings(result) if result is not None else []
+    value = sigma = chi2 = scaled = None
+    note = ""
+    if method == COMMON_MANUAL:
+        try:
+            value = float(manual)
+        except (TypeError, ValueError):
+            value = None
+        if value is None or not math.isfinite(value):
+            value, note = None, "no manual value"
+    elif method == COMMON_MIDRANGE:
+        if rng is None:
+            note = "needs both zero crossings"
+        else:
+            value = (lo + hi) / 2.0
+            # The middle of two independent crossings.
+            sigma = 0.5 * math.hypot(zs[0][2], zs[1][2])
+    elif method == COMMON_WEIGHTED:
+        good = [(z, s) for _iso, z, s in zs if s > 0]
+        if len(good) < 2:
+            note = "needs both zero crossings with errors"
+        else:
+            w = np.array([1.0 / s ** 2 for _z, s in good])
+            z = np.array([zz for zz, _s in good])
+            value = float((w * z).sum() / w.sum())
+            sigma = math.sqrt(1.0 / float(w.sum()))
+            chi2 = float((w * (z - value) ** 2).sum())
+            scaled = sigma * math.sqrt(max(1.0, chi2 / (len(good) - 1)))
+    else:
+        method = COMMON_INTERSECTION
+        if result is None or result.dv is None:
+            note = "the isotope lines do not cross"
+        else:
+            value, sigma = float(result.dv), result.dv_sigma
+    if (value is not None and lo is not None
+            and not (lo <= value <= hi)):
+        note = (f"{value:+.2f} V lies outside the zero-crossing range "
+                f"[{lo:+.2f}, {hi:+.2f}] V")
+    return CommonOffset(method=method, value=value, sigma=sigma, lo=lo,
+                        hi=hi, chi2=chi2, sigma_scaled=scaled, note=note)
+
+
+def _drop_trend_outliers(points, literature):
+    """``(kept, [(point, reason)])``: per run, drop the worst point while
+    it sits more than OUTLIER_SIGMA off the run's own line (and at least
+    four points remain). Catches a fit that converged to the wrong
+    minimum with an error bar that looks fine (seen 580-9500 MHz off on
+    the Yb data when the scan was unseeded)."""
+    by_run: dict = {}
+    for p in points:
+        by_run.setdefault((p.isotope, p.run), []).append(p)
+    kept, out = [], []
+    for (iso, _run), rp in by_run.items():
+        rp = list(rp)
+        a_lit = literature.get(iso)
+        while a_lit is not None and len(rp) >= 4:
+            try:
+                line = fit_line([q.dv for q in rp],
+                                [q.value - a_lit for q in rp],
+                                [q.sigma for q in rp])
+            except ValueError:
+                break
+            worst, worst_z = None, 0.0
+            for q in rp:
+                s = q.sigma if (math.isfinite(q.sigma)
+                                and q.sigma > 0) else 0.0
+                denom = math.hypot(s, float(line.sigma_at(q.dv)))
+                if denom <= 0:
+                    continue
+                z = abs(q.value - a_lit - float(line.value(q.dv))) / denom
+                if z > worst_z:
+                    worst, worst_z = q, z
+            if worst is None or worst_z <= OUTLIER_SIGMA:
+                break
+            rp.remove(worst)
+            out.append((worst, f"{worst_z:.0f} sigma off the run's line"))
+        kept.extend(rp)
+    return kept, out
 
 
 

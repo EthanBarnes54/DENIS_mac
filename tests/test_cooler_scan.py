@@ -127,7 +127,9 @@ class ScanTests(unittest.TestCase):
         p = _StubProject("171Yb_cal", ["7547", "7507"], -0.21, 12636.0)
         self.addCleanup(p.deleteLater)
         _scan, out = self._scan((p, "171Yb"))
-        self.assertEqual([dv for dv, _o in p.seen], [-50.0, 0.0, 50.0])
+        # Outward from the offset the blocks were fitted at (0 here), so
+        # each fit can start from its neighbour's answer (review 3).
+        self.assertEqual([dv for dv, _o in p.seen], [0.0, -50.0, 50.0])
         # two runs x three offsets
         self.assertEqual(len(out["points"]), 6)
 

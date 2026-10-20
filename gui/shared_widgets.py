@@ -4157,7 +4157,15 @@ _OLD_SETTINGS_PATHS = [
 
 
 def _get_settings_path():
-    """Return the active settings file path, migrating from old locations."""
+    """Return the active settings file path, migrating from old locations.
+
+    ``DENIS_SETTINGS_PATH`` overrides it -- the test suite points it at a
+    private copy so no test can write into the real preferences."""
+    override = os.environ.get("DENIS_SETTINGS_PATH")
+    if override:
+        os.makedirs(os.path.dirname(os.path.abspath(override)),
+                    exist_ok=True)
+        return override
     new_path = os.path.join(_DEFAULT_SETTINGS_DIR, "settings.yaml")
     # Migrate: if an old path exists but new doesn't, copy it
     if not os.path.isfile(new_path):
@@ -6119,6 +6127,9 @@ class QuickPlotDialog(QDialog):
             data_rows = rows
 
         ncols = len(headers)
+        # Replace, not overlay: a shorter paste kept the old rows below
+        # it and plotted them with the new ones (review 2, 2026-10-08).
+        self._table.clearContents()
         self._table.setColumnCount(ncols)
         self._table.setHorizontalHeaderLabels(headers)
         self._table.setRowCount(len(data_rows) + 3)
@@ -6171,6 +6182,9 @@ class QuickPlotDialog(QDialog):
     # ── Combos ──
 
     def _update_combos(self):
+        """Offer the current headers as X/Y, keeping the chosen columns
+        when they still exist."""
+        keep_x, keep_y = self._x_col.currentText(), self._y_col.currentText()
         self._x_col.blockSignals(True)
         self._y_col.blockSignals(True)
         self._x_col.clear()
@@ -6180,6 +6194,10 @@ class QuickPlotDialog(QDialog):
             self._y_col.addItem(h)
         if len(self._headers) > 1:
             self._y_col.setCurrentIndex(1)
+        if keep_x in self._headers:
+            self._x_col.setCurrentText(keep_x)
+        if keep_y in self._headers:
+            self._y_col.setCurrentText(keep_y)
         self._x_col.blockSignals(False)
         self._y_col.blockSignals(False)
 
@@ -6233,9 +6251,15 @@ class QuickPlotDialog(QDialog):
     # ── Plot ──
 
     def _do_plot(self):
-        # If on manual tab, re-read table data
+        # If on manual tab, re-read table data -- and offer its columns:
+        # only a file load or a paste used to fill the X/Y selectors, so a
+        # fresh manual table never plotted (review 2026-10-08).
         if self._input_tabs.currentIndex() == 1:
             self._read_table_data()
+            items = [self._x_col.itemText(i)
+                     for i in range(self._x_col.count())]
+            if items != list(self._headers):
+                self._update_combos()
 
         if not self._data or not self._headers:
             return
@@ -6249,11 +6273,14 @@ class QuickPlotDialog(QDialog):
         for row in self._data:
             xv = row.get(x_col, '')
             yv = row.get(y_col, '')
+            # Both or neither: appending x before y failed left x one
+            # longer than y and the plot raised.
             try:
-                xs.append(float(xv))
-                ys.append(float(yv))
+                xf, yf = float(xv), float(yv)
             except (ValueError, TypeError):
                 continue
+            xs.append(xf)
+            ys.append(yf)
 
         if not xs:
             return
@@ -6309,7 +6336,10 @@ class StatusBarManager:
     def __init__(self, status_bar, timeout_ms=8000):
         self._bar = status_bar
         self._timeout = timeout_ms
-        self._timer = QTimer()
+        # Parented to the bar, so they die with it: unparented, they
+        # fired on a deleted QStatusBar after its window closed (every
+        # 600 ms for the flash) -- review 2, 2026-10-08.
+        self._timer = QTimer(status_bar)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._on_timeout)
         self._progress = QProgressBar()
@@ -6338,7 +6368,8 @@ class StatusBarManager:
         if message:
             self.show_persistent(message)
         if current >= total:
-            QTimer.singleShot(3000, self.hide_progress)
+            # Context object: dropped if the bar is gone by then.
+            QTimer.singleShot(3000, self._progress, self.hide_progress)
 
     def hide_progress(self):
         """Hide the progress bar (public - call on cancel/error too)."""
@@ -6355,7 +6386,7 @@ class StatusBarManager:
         self._bar.showMessage(f"[{ts}]  {message}")
         self._timer.stop()  # don't let the auto-clear wipe the flash
         if not hasattr(self, "_flash_timer"):
-            self._flash_timer = QTimer()
+            self._flash_timer = QTimer(self._bar)
             self._flash_timer.timeout.connect(self._flash_tick)
         self._flash_on = False
         self._flash_timer.start(600)

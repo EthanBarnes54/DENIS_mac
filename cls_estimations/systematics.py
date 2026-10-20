@@ -46,9 +46,109 @@ FULL_WIDTH = "Full band width"
 STD_DEV = "Std deviation"
 MAX_DEV = "Max deviation from baseline"
 RMS_DEV = "RMS deviation from baseline"
+#: The max deviation read as the half-width of a uniform distribution:
+#: its 1-sigma is that over sqrt(3). The Ge analysis records it beside
+#: the max deviation without quoting it -- the choice is still open.
+MAX_DEV_FLAT = "Max deviation / sqrt(3) (uniform 1 sigma)"
 
-DEFINITIONS = (HALF_WIDTH, FULL_WIDTH, STD_DEV, MAX_DEV, RMS_DEV)
+DEFINITIONS = (HALF_WIDTH, FULL_WIDTH, STD_DEV, MAX_DEV, RMS_DEV,
+               MAX_DEV_FLAT)
 DEFAULT_DEFINITION = HALF_WIDTH
+
+#: How several error contributions are added up. Quadrature treats them
+#: as independent; the linear sum as fully correlated (the conservative
+#: bound).
+QUADRATURE = "In quadrature"
+LINEAR = "Linear sum"
+COMBINATIONS = (QUADRATURE, LINEAR)
+
+
+def combine(values, how=QUADRATURE):
+    """Add error contributions up; non-finite ones are skipped, and
+    nothing finite gives NaN."""
+    vals = [abs(float(v)) for v in values
+            if v is not None and math.isfinite(float(v))]
+    if not vals:
+        return float("nan")
+    if how == LINEAR:
+        return float(sum(vals))
+    return math.sqrt(sum(v * v for v in vals))
+
+
+#: The word that means "every project / run / parameter" in an extra
+#: systematic's filter.
+ALL = "all"
+
+
+@dataclass
+class ExtraSystematic:
+    """A contribution the scan does not measure, typed in by the user:
+    the scan-voltage calibration, the laser frequency, a mass ... in
+    the parameter's own unit (MHz for frequencies).
+
+    ``project``, ``run`` and ``parameter`` narrow where it applies;
+    empty or ``"all"`` matches everything. ``run`` is the isotope label
+    for the isotope shifts (a mass uncertainty differs per isotope).
+    """
+    name: str
+    value: float
+    project: str = ALL
+    run: str = ALL
+    parameter: str = ALL
+    use: bool = True
+
+    @staticmethod
+    def _hit(want, have):
+        want = str(want or "").strip()
+        return (not want or want.lower() == ALL
+                or want == str(have or "").strip())
+
+    def matches(self, project, run, parameter):
+        return (self.use and math.isfinite(self.value)
+                and self._hit(self.project, project)
+                and self._hit(self.run, run)
+                and self._hit(self.parameter, parameter))
+
+    def to_dict(self):
+        return {"name": self.name, "value": self.value,
+                "project": self.project, "run": self.run,
+                "parameter": self.parameter, "use": self.use}
+
+    @classmethod
+    def from_dict(cls, d):
+        try:
+            value = float(d.get("value", float("nan")))
+        except (TypeError, ValueError):
+            value = float("nan")
+        return cls(name=str(d.get("name", "") or ""), value=value,
+                   project=str(d.get("project", ALL) or ALL),
+                   run=str(d.get("run", ALL) or ALL),
+                   parameter=str(d.get("parameter", ALL) or ALL),
+                   use=bool(d.get("use", True)))
+
+
+def budget(band, definition=DEFAULT_DEFINITION, extras=(),
+           combine_sys=QUADRATURE, combine_total=QUADRATURE,
+           run_label=None):
+    """The error budget of one band.
+
+    ``{"stat", "cooler", "extras": [(name, value)], "other",
+    "systematic", "total"}`` -- the cooler term by *definition*, the
+    extras that apply to this band combined into "other", every
+    systematic combined into "systematic" by *combine_sys*, and that
+    with the statistical error into "total" by *combine_total*.
+    """
+    cooler = band.systematic(definition)
+    run = band.run if run_label is None else run_label
+    hits = [(e.name, abs(float(e.value))) for e in (extras or ())
+            if e.matches(band.project, run, band.parameter)]
+    other = combine([v for _n, v in hits], combine_sys) if hits \
+        else float("nan")
+    systematic = combine([cooler] + [v for _n, v in hits], combine_sys)
+    total = combine([band.baseline_sigma, systematic], combine_total)
+    return {"stat": band.baseline_sigma, "cooler": cooler,
+            "extras": hits, "other": other, "systematic": systematic,
+            "total": total}
 
 #: Points this far from the fitted trend (in combined sigma) are
 #: flagged. A scan of a well-behaved parameter is close to a straight
@@ -159,6 +259,17 @@ class ParameterBand:
         d = self.values - self.baseline
         return float(math.sqrt(float(np.mean(d * d))))
 
+    @property
+    def edge_deviations(self):
+        """``(at the lowest offset, at the highest)``, each value minus
+        the baseline, signed -- the Ge analysis's ``edge_minus_prod``.
+        A one-sided dependence shows here and nowhere else."""
+        if not self.n or not math.isfinite(self.baseline):
+            return float("nan"), float("nan")
+        order = np.argsort(self.dvs)
+        v = self.values[order]
+        return (float(v[0] - self.baseline), float(v[-1] - self.baseline))
+
     # -- sensitivity ------------------------------------------------
     @property
     def trend(self):
@@ -189,6 +300,8 @@ class ParameterBand:
     # -- the quoted number ------------------------------------------
     def systematic(self, definition=DEFAULT_DEFINITION):
         """The band as one number, by the caller's definition."""
+        if definition == MAX_DEV_FLAT:
+            return self.max_dev / math.sqrt(3.0)
         return {
             HALF_WIDTH: self.half_width,
             FULL_WIDTH: self.width,
@@ -265,7 +378,7 @@ def quality_flag(*, success=True, sigma=float("nan"),
     return ""
 
 
-def mean_over_runs(bands, project="", parameter=""):
+def mean_over_runs(bands, project="", parameter="", birge=False):
     """Collapse per-run bands into the band of their weighted mean.
 
     The number that gets published is usually the average over runs,
@@ -273,10 +386,23 @@ def mean_over_runs(bands, project="", parameter=""):
     the runs move together when the offset changes, so averaging first
     and banding second is the right order.
 
-    Offsets that no run reached are dropped; a band whose points are
+    Offsets that not every run reached are dropped (their mean is over a
+    different set of runs); a band whose points are
     all excluded contributes nothing.
+
+    With ``birge`` every mean's error is scaled by sqrt(chi2/ndf) of
+    the runs about it when that is above 1 -- the runs scatter more
+    than their own errors say (the Ge analysis's "option b").
     """
-    from cls_estimations.isotope_shift import weighted_average
+    from cls_estimations.isotope_shift import (
+        weighted_average as _plain, weighted_average_with_birge)
+
+    def weighted_average(values, sigmas):
+        if not birge:
+            return _plain(values, sigmas)
+        mean, sig, _scatter, factor = weighted_average_with_birge(
+            values, sigmas)
+        return mean, sig * factor
 
     bands = [b for b in bands if b is not None]
     if not bands:
@@ -287,21 +413,35 @@ def mean_over_runs(bands, project="", parameter=""):
         parameter = bands[0].parameter
 
     by_dv = {}
+    n_runs = 0
+    contributing = []
     for b in bands:
-        for p in b.points:
-            if p.usable:
-                by_dv.setdefault(p.dv, []).append(p)
+        usable = [p for p in b.points if p.usable]
+        n_runs += bool(usable)
+        if usable:
+            contributing.append(b)
+        for p in usable:
+            by_dv.setdefault(p.dv, []).append(p)
 
     points = []
     for dv in sorted(by_dv):
         group = by_dv[dv]
+        if len(group) < n_runs:
+            # Not every run reached this offset: its mean is over a
+            # different set of runs than the others and would read as
+            # an offset dependence (review 2, 2026-10-08).
+            continue
         mean, sig = weighted_average([g.value for g in group],
                                      [g.sigma for g in group])
         points.append(ScanValue(dv=float(dv), value=float(mean),
                                 sigma=float(sig)))
 
-    base_vals = [b.baseline for b in bands if math.isfinite(b.baseline)]
-    base_sigs = [b.baseline_sigma for b in bands
+    # The baseline over the SAME runs as the points: a run whose scan
+    # points are all excluded stayed in the baseline, and its offset
+    # from the others read as a 50 MHz max/RMS deviation (review 3).
+    base_vals = [b.baseline for b in contributing
+                 if math.isfinite(b.baseline)]
+    base_sigs = [b.baseline_sigma for b in contributing
                  if math.isfinite(b.baseline)]
     if base_vals:
         bmean, bsig = weighted_average(base_vals, base_sigs)
@@ -314,12 +454,22 @@ def mean_over_runs(bands, project="", parameter=""):
         unit=bands[0].unit)
 
 
-def summarise(bands, definition=DEFAULT_DEFINITION):
-    """One row per band, for the summary table, the CSV and the report."""
+def summarise(bands, definition=DEFAULT_DEFINITION, extras=(),
+              combine_sys=QUADRATURE, combine_total=QUADRATURE):
+    """One row per band, for the summary table, the CSV and the report.
+
+    "systematic" is the cooler-offset term by *definition*; "other" the
+    *extras* that apply to the band, "sys_total" both combined, and
+    "total" that with the statistical error (see :func:`budget`). With
+    no extras and quadrature this is the old stat (+) systematic.
+    """
     rows = []
     for b in bands:
         if b is None:
             continue
+        bud = budget(b, definition, extras, combine_sys, combine_total,
+                     run_label=b.run or "<weighted mean>")
+        lo_dev, hi_dev = b.edge_deviations
         rows.append({
             "project": b.project,
             "run": b.run or "<weighted mean>",
@@ -335,8 +485,14 @@ def summarise(bands, definition=DEFAULT_DEFINITION):
             "std": b.std,
             "max_dev": b.max_dev,
             "rms_dev": b.rms_dev,
-            "systematic": b.systematic(definition),
-            "total": b.total(definition),
+            "max_dev_flat": b.systematic(MAX_DEV_FLAT),
+            "edge_lo": lo_dev,
+            "edge_hi": hi_dev,
+            "systematic": bud["cooler"],
+            "other": bud["other"],
+            "extras": "; ".join(f"{n} {v:g}" for n, v in bud["extras"]),
+            "sys_total": bud["systematic"],
+            "total": bud["total"],
             "slope": b.slope,
             "slope_sigma": b.slope_sigma,
         })

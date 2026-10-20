@@ -39,7 +39,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush
 
 from cls_estimations.isotope_shift import (
-    extract_centroid, weighted_average, isotope_shift,
+    extract_centroid, weighted_average, isotope_shift, tie_groups,
     cooler_voltage_systematic, compute_all_shifts,
     weighted_average_with_birge, gp_propagated_sigma,
     gp_cross_covariance, mixed_mode_propagated_sigma,
@@ -107,6 +107,26 @@ def _pick_color(btn, parent):
 # ═══════════════════════════════════════════════════════════════════
 #  IsotopeShiftTab
 # ═══════════════════════════════════════════════════════════════════
+
+
+def _span_hours(meta):
+    """A run's acquisition window (start, stop) in hours from its
+    metadata, or None without a start time. A missing or bad stop is
+    the start (the GP at that instant)."""
+    try:
+        t0 = float(meta.get("ts_start", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if t0 <= 0:
+        return None
+    try:
+        t1 = float(meta.get("ts_stop", 0) or 0)
+    except (TypeError, ValueError):
+        t1 = 0.0
+    if not t1 > t0:
+        t1 = t0
+    return (t0 / 3600.0, t1 / 3600.0)
+
 
 class IsotopeShiftTab(QWidget):
     """Permanent tab inside the Analysis QTabWidget for isotope shift
@@ -1204,9 +1224,13 @@ class IsotopeShiftTab(QWidget):
                       if r.get("success")]
         if not ok_results:
             return "failed", "--", ""
+        # One entry per independent fitted centroid; a pinned run takes
+        # its whole tie group (a tied centroid is the joint value).
+        groups = tie_groups(ok_results)
         if run_sel != "Weighted Average":
-            ok_results = [r for r in ok_results
-                          if str(r.get("run_number", "")) == run_sel]
+            groups = [g for g in groups
+                      if any(str(m.get("run_number", "")) == run_sel
+                             for m in g)]
 
         # A sample row in GP mode is shown corrected, because that is
         # the number the shift is taken from. A raw centroid beside a
@@ -1218,19 +1242,16 @@ class IsotopeShiftTab(QWidget):
                 "fitted. Fit it on the Reference Correction tab.")
 
         vals, errs, n_fly = [], [], 0
-        for r in ok_results:
-            c, s = extract_centroid(r.get("params_df", {}))
-            if c is None:
+        for g in groups:
+            if extract_centroid(g[0].get("params_df", {}))[0] is None:
                 continue
-            if gp_mode:
-                fr = self._frame(project, r, c)
-                if fr["corrected"] is None:
-                    return "no time", "--", (
-                        f"Run {r.get('run_number', '?')} has no "
-                        f"timestamp, so the GP cannot be evaluated "
-                        f"for it.")
-                c = fr["corrected"]
-                n_fly += int(fr["on_the_fly"])
+            meas = self._tie_measurement(project, g, "", [], gp_mode)
+            if meas is None:
+                return "no time", "--", (
+                    f"Run {g[0].get('run_number', '?')} has no "
+                    f"timestamp, so the GP cannot be evaluated for it.")
+            c, s, _rm, fly = meas
+            n_fly += fly
             vals.append(c)
             errs.append(s)
         if not vals:
@@ -1246,6 +1267,23 @@ class IsotopeShiftTab(QWidget):
             tip += (f" ({n_fly} run(s) here, the rest at fit time)."
                     if n_fly else " (at fit time).")
         return f"{c:.4f}", f"{s:.4f}", tip
+
+    def clear_shifts(self):
+        """Forget the computed shifts: table, log, plot and the
+        Centroids tab -- the state of a tab that never computed any."""
+        self._last_shift_data = []
+        self._last_log = ""
+        self._log_text.setPlainText("")
+        self._result_table.setRowCount(0)
+        self._figure.clear()
+        self._canvas.draw_idle()
+        table = getattr(self, "_centroid_table", None)
+        if table is not None:
+            table.setRowCount(0)
+        try:
+            self._update_centroids()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _update_centroids(self):
         """Refresh every row's Centroid / Stat. err cells.
@@ -1313,6 +1351,90 @@ class IsotopeShiftTab(QWidget):
                 f"= {fr['corrected']:.4f} MHz  (GP applied here, "
                 f"{kind})")
         return fr["corrected"], effective_run_metadata(result, fr)
+
+    def _tie_measurement(self, project, group, label, log_lines,
+                         gp_mode):
+        """``(centroid, sigma, run_metadata, n_on_the_fly)`` for one
+        independent measurement (a tie group, see tie_groups), or None
+        when the GP cannot be evaluated for any of its runs.
+
+        A single run: its centroid, GP-corrected in GP mode. Runs whose
+        centroid is one tied parameter: that value and its error ONCE,
+        minus the count-weighted mean of the members' own GP
+        corrections, and every member's acquisition window handed to the
+        propagation as the constituents of a merged measurement. Keeping
+        only the head run (review 2's dedup) dropped the others'
+        corrections -- a 20 MHz bias for two runs whose drift differed by
+        40 MHz -- and their uncertainty (review 3, 2026-10-08).
+        """
+        head = group[0]
+        c_fit, s = extract_centroid(head.get("params_df", {}) or {})
+        if c_fit is None:
+            return None
+        if len(group) == 1:
+            if not gp_mode:
+                return c_fit, s, head.get("run_metadata") or {}, 0
+            c, rm = self._gp_correct(project, head, c_fit, label,
+                                     log_lines)
+            if c is None:
+                return None
+            return c, s, rm, int(bool(
+                rm.get("centroid_correction_on_the_fly")))
+        values, counts, parts, n_fly = [], [], [], 0
+        for m in group:
+            rm_m = m.get("run_metadata") or {}
+            c_m = c_fit
+            if gp_mode:
+                c_m, rm_m = self._gp_correct(project, m, c_fit, label,
+                                             log_lines)
+                if c_m is None:
+                    continue
+                n_fly += int(bool(
+                    rm_m.get("centroid_correction_on_the_fly")))
+            runs = self._runs_of(project, m) or []
+            values.append(float(c_m))
+            counts.append(float(sum(r[3] for r in runs)))
+            parts.append((m, rm_m, runs))
+        if not values:
+            return None
+        counts = np.asarray(counts, dtype=float)
+        v = (counts / counts.sum() if counts.sum() > 0
+             else np.full(len(values), 1.0 / len(values)))
+        c = float(np.dot(v, values))
+        constituents = []
+        for (m, rm_m, runs), n_ev in zip(parts, counts):
+            if not rm_m.get("centroid_correction_applied"):
+                continue
+            if (rm_m.get("centroid_correction_mode") == "merged"
+                    and rm_m.get("correction_constituents")):
+                constituents.extend(
+                    dict(cc) for cc in rm_m["correction_constituents"])
+                continue
+            run, ts0, ts1 = (runs[0][:3] if runs
+                             else (m.get("run_number", "?"), 0.0, 0.0))
+            constituents.append({
+                "run_num": str(m.get("run_number", run)),
+                "ts_start": rm_m.get("ts_start") or ts0,
+                "ts_stop": rm_m.get("ts_stop") or ts1,
+                "n_events": float(n_ev),
+                "centroid_correction_mode": (
+                    rm_m.get("centroid_correction_mode") or "Auto"),
+                "centroid_correction_mhz": float(
+                    rm_m.get("centroid_correction_mhz", 0.0) or 0.0),
+                "centroid_correction_sigma_mhz": float(
+                    rm_m.get("centroid_correction_sigma_mhz", 0.0)
+                    or 0.0)})
+        rm = ({"centroid_correction_applied": True,
+               "centroid_correction_mode": "merged",
+               "correction_constituents": constituents}
+              if constituents else {})
+        names = ", ".join(str(m.get("run_number", "?")) for m in group)
+        log_lines.append(
+            f"{label}: runs {names} share one fitted centroid "
+            f"({c_fit:.4f} ± {s:.4f} MHz), counted once"
+            + (f"; minus their count-weighted GP correction -> "
+               f"{c:.4f} MHz" if gp_mode else ""))
+        return c, s, rm, n_fly
 
     def _runs_of(self, project, result):
         """``[(run_num, ts_start, ts_stop, n_events)]`` behind one fit
@@ -1589,8 +1711,14 @@ class IsotopeShiftTab(QWidget):
             # independent diagonal noise. Auto/Manual mode also
             # tells us how a run participates in inter-isotope
             # cross-cov (only Auto contributes).
-            iso_auto_t: list[float] = []
+            # Auto rows as (start, stop) spans in hours: the applied
+            # correction is the GP averaged over the run, so its sd and
+            # covariances must be taken over the same window.
+            iso_auto_t: list[tuple[float, float]] = []
             iso_auto_w: list[float] = []
+            # The sigma each Auto row's fit recorded -- used only when no
+            # GP is loaded to propagate through (finding 3, review 3).
+            iso_auto_sig: list[float] = []
             iso_manual_sigmas: list[float] = []
             iso_manual_w: list[float] = []
             # Merged-spectrum constituents: when a fit result has a
@@ -1635,16 +1763,14 @@ class IsotopeShiftTab(QWidget):
             if run_sel == "Weighted Average":
                 vals, errs = [], []
                 run_metas: list[dict] = []
-                for r in ok_results:
-                    c, s = extract_centroid(r.get("params_df", {}))
-                    if c is None:
+                # A centroid shared across runs is ONE measurement,
+                # carrying every member's GP correction (tie_groups).
+                for group in tie_groups(ok_results):
+                    meas = self._tie_measurement(
+                        project, group, label, log_lines, gp_mode)
+                    if meas is None:
                         continue
-                    rm_r = r.get("run_metadata") or {}
-                    if gp_mode:
-                        c, rm_r = self._gp_correct(
-                            project, r, c, label, log_lines)
-                        if c is None:
-                            continue
+                    c, s, rm_r, _fly = meas
                     vals.append(c)
                     errs.append(s if (s and s > 0) else 1.0)
                     run_metas.append(rm_r)
@@ -1705,28 +1831,29 @@ class IsotopeShiftTab(QWidget):
                                                        or 0.0))
                         iso_manual_w.append(w)
                     else:  # Auto (default for non-merged applied)
-                        try:
-                            ts_h = float(
-                                rm.get("ts_start", 0) or 0) / 3600.0
-                        except (TypeError, ValueError):
-                            ts_h = 0.0
-                        if ts_h > 0:
-                            iso_auto_t.append(ts_h)
+                        span = _span_hours(rm)
+                        if span is not None:
+                            iso_auto_t.append(span)
                             iso_auto_w.append(w)
+                            iso_auto_sig.append(float(rm.get(
+                                "centroid_correction_sigma_mhz", 0.0)
+                                or 0.0))
                 sigma = sigma_fit
             else:
                 centroid, sigma = None, None
                 run_meta = {}
-                for r in ok_results:
-                    if str(r.get("run_number", "")) == run_sel:
-                        centroid, sigma = extract_centroid(
-                            r.get("params_df", {}))
-                        run_meta = r.get("run_metadata") or {}
-                        if gp_mode and centroid is not None:
-                            centroid, run_meta = self._gp_correct(
-                                project, r, centroid, label, log_lines)
-                            run_meta = run_meta or {}
-                        break
+                for group in tie_groups(ok_results):
+                    if not any(str(m.get("run_number", "")) == run_sel
+                               for m in group):
+                        continue
+                    # A pinned run whose centroid is tied takes its
+                    # whole group: the fitted value is the joint one.
+                    meas = self._tie_measurement(
+                        project, group, label, log_lines, gp_mode)
+                    if meas is not None:
+                        centroid, sigma, run_meta, _fly = meas
+                        run_meta = run_meta or {}
+                    break
                 if centroid is None:
                     log_lines.append(
                         f"WARNING: '{label}' run {run_sel} has no centroid.")
@@ -1767,11 +1894,13 @@ class IsotopeShiftTab(QWidget):
                                                        or 0.0))
                         iso_manual_w.append(full_w)
                     else:
-                        ts_single = float(
-                            run_meta.get("ts_start", 0) or 0)
-                        if ts_single > 0:
-                            iso_auto_t.append(ts_single / 3600.0)
+                        span = _span_hours(run_meta)
+                        if span is not None:
+                            iso_auto_t.append(span)
                             iso_auto_w.append(full_w)
+                            iso_auto_sig.append(float(run_meta.get(
+                                "centroid_correction_sigma_mhz", 0.0)
+                                or 0.0))
 
             isotope_entries[label] = {
                 "centroid": centroid,
@@ -1812,17 +1941,19 @@ class IsotopeShiftTab(QWidget):
                                                        or 0.0))
                         iso_manual_w.append(cw)
                     else:
-                        try:
-                            ts_h = (float(c.get("ts_start", 0) or 0)
-                                     / 3600.0)
-                        except (TypeError, ValueError):
-                            ts_h = 0.0
-                        if ts_h > 0:
-                            iso_auto_t.append(ts_h)
+                        span = _span_hours(c)
+                        if span is not None:
+                            iso_auto_t.append(span)
                             iso_auto_w.append(cw)
+                            iso_auto_sig.append(float(c.get(
+                                "centroid_correction_sigma_mhz", 0.0)
+                                or 0.0))
             isotope_runs[label] = {
-                "auto_t": np.asarray(iso_auto_t, dtype=float),
+                "auto_t": (np.asarray(iso_auto_t, dtype=float)
+                           if iso_auto_t
+                           else np.zeros((0, 2), dtype=float)),
                 "auto_w": np.asarray(iso_auto_w, dtype=float),
+                "auto_sig": np.asarray(iso_auto_sig, dtype=float),
                 "manual_sigmas": np.asarray(
                     iso_manual_sigmas, dtype=float),
                 "manual_w": np.asarray(iso_manual_w, dtype=float),
@@ -1898,8 +2029,13 @@ class IsotopeShiftTab(QWidget):
         # metadata exists in run_metadata even though the panel's
         # GP isn't loaded yet.
         gp_cross_cov: dict[tuple[str, str], float] = {}
-        corrector = (self._ref_corr_panel.corrector
-                     if self._ref_corr_panel.apply_globally else None)
+        # Which runs carry a correction is decided per result, by what
+        # its fit RECORDED (centroid_correction_applied) -- never by the
+        # "apply at fit time" box, which is about future fits. Gating on
+        # it zeroed the uncertainty of corrections already inside the
+        # centroids (5 MHz -> 0 with the centroid unchanged; review 3,
+        # 2026-10-08).
+        corrector = self._gp_corrector()
         # GP mode always has a GP to propagate through: it just
         # applied it. "Apply correction at fit time" is about the fit,
         # not about whether the shift should carry the GP's error.
@@ -1917,11 +2053,32 @@ class IsotopeShiftTab(QWidget):
                 if n_auto == 0 and n_manual == 0:
                     continue
                 if n_auto > 0 and corrector is None:
+                    # No GP to propagate through: the corrections are
+                    # still inside the centroids, so their uncertainty
+                    # must stay. Use the sigma each fit recorded, taken
+                    # as fully correlated within the isotope (the
+                    # conservative bound) and uncorrelated with other
+                    # isotopes. They used to be dropped (sigma 0).
+                    try:
+                        s_man = mixed_mode_propagated_sigma(
+                            None, manual_sigmas=runs["manual_sigmas"],
+                            manual_w=runs["manual_w"],
+                            total_weight=runs["total_weight"])
+                    except Exception:  # noqa: BLE001
+                        s_man = 0.0
+                    W = float(runs["total_weight"] or 0.0)
+                    sig = runs.get("auto_sig", np.zeros(0))
+                    s_auto = (float(np.dot(runs["auto_w"], sig) / W)
+                              if W > 0 and len(sig) == n_auto else 0.0)
+                    s_corr = float(np.hypot(s_auto, s_man))
+                    isotope_entries[label]["sigma_correction"] = s_corr
                     log_lines.append(
-                        f"  {label}: skipped {n_auto} Auto rows -- "
-                        f"no GP corrector loaded; propagating "
-                        f"{n_manual} Manual rows only.")
-                    auto_t_arg, auto_w_arg = (), ()
+                        f"  {label}: σ_correction = {s_corr:.4f} MHz -- "
+                        f"no GP loaded: {n_auto} Auto rows use the σ "
+                        f"their fits recorded, fully correlated "
+                        f"(conservative), + {n_manual} Manual; no "
+                        f"cross-isotope covariance.")
+                    continue
                 else:
                     auto_t_arg = runs["auto_t"]
                     auto_w_arg = runs["auto_w"]
@@ -2845,9 +3002,11 @@ class IsotopeShiftTab(QWidget):
         }
 
     def from_dict(self, d):
-        """Restore the IS tab state from a dict."""
-        if not d:
-            return
+        """Restore the IS tab state from a dict.
+
+        An empty dict is a session with no isotope-shift study: the rows
+        and the GP of the session loaded before are cleared, not kept."""
+        d = d or {}
         self._study_name.setText(d.get("study_name", "Isotope_Shift"))
 
         # Clear existing rows

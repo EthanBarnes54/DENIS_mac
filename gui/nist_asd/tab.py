@@ -44,7 +44,7 @@ from gui.nist_asd.search import SchemeSearchConfig, SchemeSearcher
 
 class _FetchWorker(QThread):
     """Fetch lines + levels for one spectrum (cache-first)."""
-    done = Signal(object, object)          # lines_df, levels_df
+    done = Signal(str, object, object)     # spectrum, lines_df, levels_df
     error = Signal(str)
 
     def __init__(self, spectrum: str, refresh: bool, parent=None):
@@ -57,7 +57,7 @@ class _FetchWorker(QThread):
             lines = nd.get_lines(self._spectrum, refresh=self._refresh)
             levels = nd.get_levels(self._spectrum,
                                    refresh=self._refresh)
-            self.done.emit(lines, levels)
+            self.done.emit(self._spectrum, lines, levels)
         except Exception as e:                     # noqa: BLE001
             self.error.emit(str(e))
 
@@ -103,8 +103,20 @@ class _SearchWorker(QThread):
             self.error.emit(str(e))
 
 
+class _NumItem(QTableWidgetItem):
+    """Sorts by the number in UserRole, not by its text: a header click
+    put 100000 before 2000 and 100 before 12 (review 3, 2026-10-08)."""
+
+    def __lt__(self, other):
+        try:
+            return (float(self.data(Qt.ItemDataRole.UserRole))
+                    < float(other.data(Qt.ItemDataRole.UserRole)))
+        except (TypeError, ValueError, AttributeError):
+            return super().__lt__(other)
+
+
 def _num_item(value, text=None):
-    it = QTableWidgetItem()
+    it = _NumItem()
     if value is None or (isinstance(value, float)
                          and not np.isfinite(value)):
         it.setText("")
@@ -112,7 +124,15 @@ def _num_item(value, text=None):
     else:
         it.setText(text if text is not None else str(value))
         it.setData(Qt.ItemDataRole.UserRole, float(value))
+    # The text as DENIS wrote it: an edit is a change of this text. The
+    # value in UserRole keeps full precision while the text is the one
+    # shown (e.g. a level written with 3 decimals).
+    it.setData(_SHOWN_ROLE, it.text())
     return it
+
+
+#: Item role holding the text a numeric cell was last given.
+_SHOWN_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class NistAsdWindow(QWidget):
@@ -126,8 +146,18 @@ class NistAsdWindow(QWidget):
         self._lines = pd.DataFrame()
         self._levels = pd.DataFrame()
         self._results: list[RankedScheme] = []
+        # The spectrum _lines/_levels belong to (None = nothing loaded).
+        # The edit box can say something else: a new name typed, a fetch
+        # still running or failed, a cache miss on restore.
+        self._loaded_spectrum = None
+        # The species the shown schemes were found for, and schemes from
+        # a restored session waiting for their species to be loaded:
+        # (spectrum, [RankedScheme], selected row) or None.
+        self._results_spectrum = None
+        self._parked_results = None
         self._fetch_worker = None
         self._search_worker = None
+        self._resyncing = False
 
         outer = QVBoxLayout(self)
 
@@ -657,6 +687,7 @@ class NistAsdWindow(QWidget):
         self.start_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         self.start_table.setMaximumHeight(140)
+        self.start_table.itemChanged.connect(self._resync_numeric_cell)
         sg.addWidget(self.start_table)
         btn_row = QHBoxLayout()
         add_btn = QPushButton("Add")
@@ -700,6 +731,7 @@ class NistAsdWindow(QWidget):
         self.laser_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         self.laser_table.setMaximumHeight(140)
+        self.laser_table.itemChanged.connect(self._resync_numeric_cell)
         lg.addWidget(self.laser_table)
         lbtn = QHBoxLayout()
         ladd = QPushButton("Add laser")
@@ -873,6 +905,33 @@ class NistAsdWindow(QWidget):
                              else "ANY")
         self.laser_table.setCellWidget(r, 3, combo)
 
+    def _resync_numeric_cell(self, item):
+        """Keep a numeric cell's stored value in step with its text.
+
+        The search reads the value from UserRole, which kept the number
+        the row was created with: a typed-over laser of 250 \u00b1 50 nm
+        was searched as 400 \u00b1 10 (review 2026-10-08). An edited text
+        is parsed into UserRole; text that is not a number is put back.
+        """
+        if self._resyncing or item is None:
+            return
+        shown = item.data(_SHOWN_ROLE)
+        if shown is None or item.text() == shown:
+            return                     # not a numeric cell / not edited
+        self._resyncing = True
+        try:
+            try:
+                value = float(item.text().strip())
+                if not np.isfinite(value):
+                    raise ValueError
+            except ValueError:
+                item.setText(shown)
+                return
+            item.setData(Qt.ItemDataRole.UserRole, value)
+            item.setData(_SHOWN_ROLE, item.text())
+        finally:
+            self._resyncing = False
+
     def _add_iso_row(self, spectrum="", prox=2.0):
         r = self.iso_table.rowCount()
         self.iso_table.insertRow(r)
@@ -901,18 +960,45 @@ class NistAsdWindow(QWidget):
                      self.refresh_btn.setEnabled(True)))
         self._fetch_worker.start()
 
-    def _on_fetch_done(self, lines, levels):
-        self.set_data(lines, levels)
+    def _on_fetch_done(self, spectrum, lines, levels):
+        self.set_data(lines, levels, spectrum)
 
     def _on_fetch_error(self, msg):
-        self.cache_label.setText("Fetch failed")
+        # Whatever was loaded before stays visible -- but labelled as what
+        # it is, and the search refuses to run it under the new name.
+        wanted = self.spectrum_edit.text().strip()
+        if self._loaded_spectrum:
+            self.cache_label.setText(
+                f"Fetch of {wanted} failed \u2014 still showing "
+                f"{self._loaded_spectrum}")
+        else:
+            self.cache_label.setText(f"Fetch of {wanted} failed")
         QMessageBox.warning(self, "NIST ASD", f"Fetch failed:\n{msg}")
 
-    def set_data(self, lines: pd.DataFrame, levels: pd.DataFrame):
-        """Install fetched tables and refresh every view."""
+    def set_data(self, lines: pd.DataFrame, levels: pd.DataFrame,
+                 spectrum: str | None = None):
+        """Install fetched tables and refresh every view.
+
+        ``spectrum`` names the species the tables belong to (default:
+        the edit box, for callers that load what it says)."""
         self._lines = lines if lines is not None else pd.DataFrame()
         self._levels = levels if levels is not None else pd.DataFrame()
-        spectrum = self.spectrum_edit.text().strip()
+        if spectrum is None:
+            spectrum = self.spectrum_edit.text().strip()
+        previous = getattr(self, "_loaded_spectrum", None)
+        self._loaded_spectrum = spectrum or None
+        if self._results and previous != self._loaded_spectrum:
+            # Schemes found for another species are not this one's (they
+            # were shown -- and saved -- under the new name; review 2).
+            self.set_results([])
+        parked = self._parked_results
+        if parked and parked[0] == self._loaded_spectrum:
+            # A restored session's schemes, now that their species is.
+            self._parked_results = None
+            self.set_results(parked[1], spectrum=parked[0])
+            if isinstance(parked[2], int) and 0 <= parked[2] < len(
+                    parked[1]):
+                self.results_table.selectRow(parked[2])
         info = nd.cache_info(spectrum, "lines")
         if info:
             import datetime as _dt
@@ -928,21 +1014,52 @@ class NistAsdWindow(QWidget):
         self._refresh_all_views()
 
     def load_cached_spectrum(self) -> bool:
-        """Offline restore: fill from the disk cache if present."""
+        """Offline restore: fill from the disk cache if present.
+
+        On a miss the previous species' tables are cleared: leaving them
+        showed (and searched) species A under species B's name."""
         spectrum = self.spectrum_edit.text().strip()
         lines = nd.load_cache(spectrum, "lines")
         if lines is None:
+            self._clear_data()
+            if spectrum:
+                self.cache_label.setText(
+                    f"{spectrum}: not in the local cache \u2014 press "
+                    "Fetch")
             return False
         levels = nd.load_cache(spectrum, "levels")
         if levels is None:
             levels = nd.derive_levels_from_lines(lines)
-        self.set_data(lines, levels)
+        self.set_data(lines, levels, spectrum)
         return True
+
+    def _clear_data(self):
+        """Drop the loaded species and empty its tables and plots."""
+        self._lines = pd.DataFrame()
+        self._levels = pd.DataFrame()
+        self._loaded_spectrum = None
+        self.cache_label.setText("No spectrum loaded")
+        if self._results:
+            self.set_results([])
+        for table in (self.levels_table, self.lines_table):
+            table.setRowCount(0)
+        for draw in (self._draw_levels_plot, self._draw_lines_plot):
+            try:
+                draw(pd.DataFrame())
+            except Exception:                     # noqa: BLE001
+                pass                  # an empty plot is cosmetic only
 
     def _refresh_all_views(self):
         if not self._lines.empty or not self._levels.empty:
             self._fill_levels_table()
             self._fill_lines_table()
+        # The ranked table shows wavelengths in the chosen medium too;
+        # it used to keep the medium of the search (review 2026-10-08).
+        if self._results:
+            row = self.results_table.currentRow()
+            self._fill_results_table()
+            if 0 <= row < len(self._results):
+                self.results_table.selectRow(row)
         self._show_selected_scheme()
 
     # ── Search flow ─────────────────────────────────────────────
@@ -1019,15 +1136,32 @@ class NistAsdWindow(QWidget):
         return cfg
 
     def _run_search(self):
+        if self._fetch_worker is not None and \
+                self._fetch_worker.isRunning():
+            QMessageBox.information(
+                self, "NIST ASD",
+                "The spectrum is still loading \u2014 search once it is in.")
+            return
         if self._lines.empty:
             QMessageBox.information(
                 self, "NIST ASD",
                 "Fetch a spectrum first (top bar).")
             return
+        wanted = self.spectrum_edit.text().strip()
+        if self._loaded_spectrum and wanted != self._loaded_spectrum:
+            QMessageBox.information(
+                self, "NIST ASD",
+                f"The loaded data is {self._loaded_spectrum}, not "
+                f"{wanted}. Press Fetch to load {wanted} first.")
+            return
         if self._search_worker is not None and \
                 self._search_worker.isRunning():
             return
         cfg = self.collect_search_config()
+        # The species this search is about: a result that comes back
+        # after another species was loaded is dropped, not shown as
+        # that one's (review 2, 2026-10-08).
+        self._search_spectrum = self._loaded_spectrum
         self.find_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.search_status.setText("Searching…")
@@ -1047,7 +1181,14 @@ class NistAsdWindow(QWidget):
             self.search_status.setText("Cancelling…")
 
     def _on_search_done(self, ranked):
-        self.set_results(list(ranked))
+        searched = getattr(self, "_search_spectrum", None)
+        if searched != self._loaded_spectrum:
+            self.search_status.setText(
+                f"Search for {searched} finished after "
+                f"{self._loaded_spectrum or 'another spectrum'} was loaded "
+                f"-- result discarded.")
+            return
+        self.set_results(list(ranked), spectrum=searched)
         self.search_status.setText(
             f"{len(self._results)} scheme(s) found.")
 
@@ -1058,8 +1199,22 @@ class NistAsdWindow(QWidget):
 
     # ── Results ─────────────────────────────────────────────────
 
-    def set_results(self, ranked: list):
+    def set_results(self, ranked: list, spectrum: str | None = None):
+        """Show *ranked*, found for *spectrum* (default: the species
+        loaded now)."""
         self._results = ranked
+        self._results_spectrum = (
+            (spectrum if spectrum is not None else self._loaded_spectrum)
+            if ranked else None)
+        self._fill_results_table()
+        if ranked:
+            self.results_table.selectRow(0)
+        else:
+            self._show_selected_scheme()
+
+    def _fill_results_table(self):
+        """Write the ranked schemes, wavelengths in the current medium."""
+        ranked = self._results
         t = self.results_table
         medium = self._medium()
         t.setRowCount(len(ranked))
@@ -1082,10 +1237,6 @@ class NistAsdWindow(QWidget):
             t.setItem(r, 6, QTableWidgetItem(
                 "⚠" if rs.issues else ""))
             t.setItem(r, 7, QTableWidgetItem("; ".join(rs.warnings)))
-        if ranked:
-            t.selectRow(0)
-        else:
-            self._show_selected_scheme()
 
     def _show_selected_scheme(self):
         row = self.results_table.currentRow()
@@ -1174,6 +1325,11 @@ class NistAsdWindow(QWidget):
     def to_dict(self) -> dict:
         return {
             "spectrum": self.spectrum_edit.text().strip(),
+            # What the tables and the schemes actually belong to: the
+            # edit box can hold a name typed over them and never fetched
+            # (review 3, 2026-10-08).
+            "loaded_spectrum": self._loaded_spectrum,
+            "results_spectrum": self._results_spectrum,
             "medium": self._medium(),
             "levels_filters": {
                 "conf": self.lv_conf_edit.text(),
@@ -1193,7 +1349,18 @@ class NistAsdWindow(QWidget):
             "results": [r.to_dict() for r in self._results[:200]],
             "selected": (self.results_table.currentRow()
                          if self._results else None),
+            **self._parked_dict(),
         }
+
+    def _parked_dict(self):
+        """Restored schemes still waiting for their species survive a
+        save (they are the session's, just not shown yet)."""
+        if not self._parked_results or self._results:
+            return {}
+        sp, ranked, sel = self._parked_results
+        return {"results_spectrum": sp,
+                "results": [r.to_dict() for r in ranked[:200]],
+                "selected": sel}
 
     def from_dict(self, d: dict) -> None:
         if not d:
@@ -1254,12 +1421,24 @@ class NistAsdWindow(QWidget):
             self._add_iso_row(str(iso.get("spectrum", "")),
                               float(iso.get("proximity_nm", 1.0)))
 
-        # Results restore offline (schemes are self-contained dicts).
+        # Results restore offline (schemes are self-contained dicts) --
+        # but only beside the species they were found for. A save older
+        # than this has no results_spectrum: its "spectrum" is the best
+        # guess (it may be a name typed over them; review 3).
         results = [RankedScheme.from_dict(r)
                    for r in d.get("results", [])]
+        results_sp = d.get("results_spectrum") or d.get("spectrum")
+        self._parked_results = None
         self.load_cached_spectrum()   # tables refill if cache present
-        self.set_results(results)
         sel = d.get("selected")
-        if results and isinstance(sel, int) \
-                and 0 <= sel < len(results):
-            self.results_table.selectRow(sel)
+        if results and results_sp == self._loaded_spectrum:
+            self.set_results(results, spectrum=results_sp)
+            if isinstance(sel, int) and 0 <= sel < len(results):
+                self.results_table.selectRow(sel)
+        else:
+            self.set_results([])
+            if results:
+                self._parked_results = (results_sp, results, sel)
+                self.search_status.setText(
+                    f"{len(results)} saved scheme(s) for {results_sp} "
+                    f"-- load {results_sp} to see them.")

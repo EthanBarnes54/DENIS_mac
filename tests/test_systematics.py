@@ -94,7 +94,8 @@ class DefinitionTests(unittest.TestCase):
         self.b = line_band(dvs=(-30, -20, -10))   # 40, 60, 80
 
     def test_every_definition_is_offered(self):
-        self.assertEqual(len(DEFINITIONS), 5)
+        # Six since 2026-10-09: max deviation / sqrt(3) joined them.
+        self.assertEqual(len(DEFINITIONS), 6)
         for d in DEFINITIONS:
             self.assertTrue(math.isfinite(self.b.systematic(d)), d)
 
@@ -236,17 +237,23 @@ class MeanOverRunsTests(unittest.TestCase):
                                102.0)
 
     def test_an_offset_only_one_run_reached(self):
+        """Left out: a mean over a different set of runs than at the
+        other offsets reads as an offset dependence (review 2,
+        2026-10-08; it used to count, as that one run's value)."""
         bands = self._bands()
         bands[1].points.append(ScanValue(-5.0, 94.0, 1.0))
         m = mean_over_runs(bands)
-        self.assertEqual(m.n, 4)
-        self.assertAlmostEqual(m.values[-1], 94.0)
+        self.assertEqual(m.n, 3)
+        self.assertAlmostEqual(m.values[-1], 82.0)
 
     def test_excluded_points_stay_out_of_the_mean(self):
         bands = self._bands()
         bands[0].points[0] = ScanValue(-30.0, 1e4, 1.0, include=False)
         m = mean_over_runs(bands)
-        self.assertAlmostEqual(m.values[0], 44.0)
+        # The excluded value never enters -- and that offset, now
+        # reached by one run of two, leaves the mean altogether.
+        self.assertEqual(m.n, 2)
+        self.assertNotIn(1e4, list(m.values))
 
     def test_nothing_to_average(self):
         self.assertIsNone(mean_over_runs([]))

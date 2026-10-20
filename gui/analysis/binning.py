@@ -23,6 +23,7 @@ satlas2, plus clstools' CLSDataFrame at call time).
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -44,6 +45,13 @@ YERR_MODES: Tuple[str, ...] = ("None", "Poisson sqrt(y+1)",
 DEFAULT_BIN_DEFINITION = "Per scan step"
 DEFAULT_BIN_COUNT = 100
 DEFAULT_BIN_WIDTH_MHZ = 10.0
+
+# Per-scan-step frequency binning keeps a measured step whose photons all
+# fail the ToF / PMT gates as a zero-count bin, as Raw Voltage always did.
+# Until 2026-10-08 such a step vanished from the spectrum, which overstates
+# the background of a sparse run. The Source config key
+# ``keep_empty_steps`` overrides it.
+KEEP_EMPTY_STEPS_DEFAULT = True
 
 # Minimum bin count for the sqrt(N) fallback used when clstools' default
 # binning fails: the fallback uses max(_FALLBACK_FLOOR, sqrt(N)) bins.
@@ -115,18 +123,46 @@ def effective_binning_config(source_cfg: Dict[str, Any],
 
 # ── Internal helpers ───────────────────────────────────────────────────
 
+@contextmanager
+def strict_pmt_gate(data, pmt_gate):
+    """Keep only the ticked channels in ``data.Run`` for one clstools call.
+
+    clstools' PMT gate removes only the channels 1-4 left unticked
+    (``PMTS = [1, 2, 3, 4]``; each excluded one is dropped): an event on
+    any other channel -- the DC channel -- always passed, ticked or not.
+    DENIS's own in-memory paths (np.isin) did filter it, so the two
+    disagreed (2026-09-27). Filtering to exactly the gate first makes
+    clstools' own gate a no-op and both paths agree. No-op without a
+    gate, and ``data.Run`` is restored afterwards.
+    """
+    run = getattr(data, "Run", None)
+    if pmt_gate is None or run is None:
+        yield
+        return
+    try:
+        data.Run = run[run["TDC"].isin([int(p) for p in pmt_gate])]
+    except Exception:                                     # noqa: BLE001
+        yield
+        return
+    try:
+        yield
+    finally:
+        data.Run = run
+
+
 def _do_compute_bins(data, gates, bins) -> bool:
     """Call clstools Compute_Bins; return True if the sqrt(N) fallback fired."""
     tof_gate, pmt_gate, v_gate, f_gate = gates
-    try:
-        data.Compute_Bins(TOF_gate=tof_gate, PMT_gate=pmt_gate,
-                          V_gate=v_gate, F_gate=f_gate, bins=bins)
-        return False
-    except (ValueError, ZeroDivisionError):
-        fb = max(_FALLBACK_FLOOR, int(getattr(data, "Size", 0) ** 0.5))
-        data.Compute_Bins(TOF_gate=tof_gate, PMT_gate=pmt_gate,
-                          V_gate=v_gate, F_gate=f_gate, bins=fb)
-        return True
+    with strict_pmt_gate(data, pmt_gate):
+        try:
+            data.Compute_Bins(TOF_gate=tof_gate, PMT_gate=pmt_gate,
+                              V_gate=v_gate, F_gate=f_gate, bins=bins)
+            return False
+        except (ValueError, ZeroDivisionError):
+            fb = max(_FALLBACK_FLOOR, int(getattr(data, "Size", 0) ** 0.5))
+            data.Compute_Bins(TOF_gate=tof_gate, PMT_gate=pmt_gate,
+                              V_gate=v_gate, F_gate=f_gate, bins=fb)
+            return True
 
 
 def _make_yerr(y: np.ndarray, yerr_mode: str):
@@ -259,7 +295,7 @@ def _capture_raw_events(data, bin_mode, tof_gate, pmt_gate, v_gate,
 
 
 def _per_step_frequency_bins(data, tof_gate, pmt_gate, v_gate, f_gate,
-                             want_xerr=False):
+                             want_xerr=False, keep_empty_steps=True):
     """One frequency bin per scanning-voltage step (no uniform re-histogram).
 
     Groups the gated per-event frame by ``DV`` -- the raw DAC scanning-voltage
@@ -280,6 +316,15 @@ def _per_step_frequency_bins(data, tof_gate, pmt_gate, v_gate, f_gate,
     same precondition the clstools frequency path has). Returns
     ``(x_mhz, counts, xerr_mhz|None)`` sorted by frequency; ``xerr`` is the
     per-step spread of event frequencies when ``want_xerr`` is set, else None.
+
+    A step is *measured* when the file holds any event at it, whatever its
+    channel or time of flight. With ``keep_empty_steps`` a measured step
+    whose photons all fail the ToF / PMT gates stays in the spectrum as a
+    zero-count bin, placed at the mean frequency of all its events -- the
+    gates decide what is counted, not which steps were scanned. Without it
+    (the behaviour before 2026-10-08) such a step disappears, as if never
+    measured, and a sparse run's background comes out too high. A step
+    with no event at all cannot be placed and is never added.
     """
     import pandas as pd
 
@@ -296,6 +341,19 @@ def _per_step_frequency_bins(data, tof_gate, pmt_gate, v_gate, f_gate,
     if df is None or "F" not in df.columns or "DV" not in df.columns:
         return np.array([]), np.array([]), None
 
+    # The scanned steps: every DV the file holds an event at, before the
+    # photon (ToF / PMT) gates. The V and F gates restrict the scan range
+    # itself, so they apply to the steps as well.
+    step_f = None
+    if keep_empty_steps:
+        steps = df
+        if v_gate is not None:
+            steps = steps[(steps["DV"] < max(v_gate))
+                          & (steps["DV"] > min(v_gate))]
+        step_f = steps.groupby("DV")["F"].mean()
+        if f_gate is not None:
+            step_f = step_f[(step_f < max(f_gate)) & (step_f > min(f_gate))]
+
     # Same gating as clstools' Compute_Bins / _capture_raw_events.
     if tof_gate is not None and "TOF" in df.columns:
         df = df[(df["TOF"] < max(tof_gate)) & (df["TOF"] > min(tof_gate))]
@@ -306,17 +364,38 @@ def _per_step_frequency_bins(data, tof_gate, pmt_gate, v_gate, f_gate,
     if pmt_gate is not None and "TDC" in df.columns:
         df = df[df["TDC"].isin(list(pmt_gate))]
     if len(df) == 0:
+        if step_f is not None and len(step_f):
+            # Nothing passed the gates, but the steps were measured:
+            # all zeros, as Raw Voltage gives (review 2, 2026-10-08).
+            order = np.argsort(step_f.values)
+            x = step_f.values[order] / 1e6
+            y = np.zeros(len(x))
+            return x, y, (np.zeros(len(x)) if want_xerr else None)
         return np.array([]), np.array([]), None
 
     grp = df.groupby("DV")["F"]
-    centers_hz = grp.mean().values
-    counts = grp.size().values.astype(float)
+    mean_f = grp.mean()
+    size = grp.size()
+    std_f = grp.std() if want_xerr else None
+    if step_f is not None:
+        missing = step_f.index.difference(mean_f.index)
+        if len(missing):
+            # A step with counts keeps the mean frequency of its counted
+            # events, exactly as before; an emptied step takes the mean of
+            # all its events.
+            idx = mean_f.index.union(missing)
+            mean_f = mean_f.reindex(idx).fillna(step_f.reindex(idx))
+            size = size.reindex(idx, fill_value=0)
+            if std_f is not None:
+                std_f = std_f.reindex(idx)
+    centers_hz = mean_f.values
+    counts = size.values.astype(float)
     order = np.argsort(centers_hz)
     x = centers_hz[order] / 1e6
     y = counts[order]
     xerr = None
     if want_xerr:
-        std_hz = grp.std().values[order]
+        std_hz = std_f.values[order]
         xerr = np.nan_to_num(np.asarray(std_hz, dtype=float)) / 1e6
     return x, y, xerr
 
@@ -429,10 +508,21 @@ def _uniform_grid_bins(data, cfg, info, bin_def, requested_n,
 
     xerr = None
     if cfg.get("xerr_mode", "None") == "From voltage std":
+        # The spread of the bin's events in FREQUENCY (Hz -> MHz) -- the
+        # scanning-voltage spread seen through the Doppler map. This used
+        # to be Vstd / 1e6, i.e. volts divided by a million: ~1e7 times
+        # too small, and NaN (a crash in lmfit) for a bin with 0 or 1
+        # events (review 2026-10-08). An undefined spread is half the
+        # bin width.
         try:
-            vstd = data.Binned.get("Vstd")
-            if vstd is not None:
-                xerr = vstd.values.astype(float) / 1e6
+            fstd = data.Binned.get("Fstd")
+            if fstd is not None:
+                xerr = fstd.values.astype(float) / 1e6
+                bad = ~np.isfinite(xerr)
+                if bad.any():
+                    half = (0.5 * float(np.median(np.diff(np.sort(x))))
+                            if len(x) > 1 else 0.0)
+                    xerr[bad] = half
         except Exception:
             xerr = None
     return x, y, xerr, "Frequency [MHz]"
@@ -598,8 +688,9 @@ def compute_binned(data, cfg: Dict[str, Any],
     if bin_mode == "Raw Voltage":
         # Voltage mode is Auto only: clstools groups unique DV values, so
         # bin_count / bin_width are not natively supported here.
-        data.Compute_Raw_Bins(TOF_gate=tof_gate, V_gate=v_gate,
-                              PMT_gate=pmt_gate)
+        with strict_pmt_gate(data, pmt_gate):
+            data.Compute_Raw_Bins(TOF_gate=tof_gate, V_gate=v_gate,
+                                  PMT_gate=pmt_gate)
         raw = data.Raw_binned
         # Compute_Raw_Bins does groupby('DV').sum(), which DROPS voltage
         # steps that have zero surviving events after TOF/PMT gating.
@@ -638,7 +729,11 @@ def compute_binned(data, cfg: Dict[str, Any],
         # makes an Auto frequency view show a spurious doubled-count spike.
         x, y, xerr = _per_step_frequency_bins(
             data, tof_gate, pmt_gate, v_gate, f_gate,
-            want_xerr=(cfg.get("xerr_mode", "None") == "From voltage std"))
+            want_xerr=(cfg.get("xerr_mode", "None") == "From voltage std"),
+            keep_empty_steps=bool(cfg.get("keep_empty_steps",
+                                          KEEP_EMPTY_STEPS_DEFAULT)))
+        info["keep_empty_steps"] = bool(cfg.get(
+            "keep_empty_steps", KEEP_EMPTY_STEPS_DEFAULT))
         if len(x) == 0 and not _per_step_possible(data):
             # Structural absence (no per-event F/DV frame) — not a gate
             # emptying the spectrum. Fall back to the uniform grid so the
@@ -859,7 +954,53 @@ def build_binning_warnings(per_run_infos):
     return warnings
 
 
-def rebin_to_common_grid(per_source_xy, bin_width=None):
+def _common_grid(per_source_xy, bin_width=None):
+    """Shared edges / centres / width over the union of all sources, and
+    each source's grid index per sample: ``(edges, centers, width,
+    [idx per source])``."""
+    if bin_width is None or bin_width <= 0:
+        spacings = []
+        for x, _ in per_source_xy:
+            if len(x) > 1:
+                d = np.diff(np.sort(np.asarray(x, dtype=float)))
+                d = d[d > 0]
+                if len(d):
+                    spacings.append(float(np.median(d)))
+        bin_width = float(np.median(spacings)) if spacings else 1.0
+    # Common edges over the union of all source ranges, padded half a bin
+    # so the extreme samples land in real bins, not on edges.
+    x_lo = min(float(np.min(x)) for x, _ in per_source_xy) - 0.5 * bin_width
+    x_hi = max(float(np.max(x)) for x, _ in per_source_xy) + 0.5 * bin_width
+    edges = np.arange(x_lo, x_hi + bin_width, bin_width)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    idxs = []
+    for x, _ in per_source_xy:
+        x_arr = np.asarray(x, dtype=float)
+        idxs.append(np.clip(np.searchsorted(edges, x_arr, side="right") - 1,
+                            0, len(centers) - 1))
+    return edges, centers, bin_width, idxs
+
+
+def common_grid_matrix(per_source_xy, bin_width=None):
+    """Every source on the shared grid as one (n_sources, n_bins) array,
+    NaN where a source has no sample -- for DISPLAY (the Binning dialog's
+    Compare tab). Returns ``(Z, centers, width, occupancy)``; occupancy
+    counts the samples per bin, so values >= 2 are merged steps."""
+    if not per_source_xy:
+        return np.zeros((0, 0)), np.array([]), 0.0, np.zeros((0, 0), int)
+    _edges, centers, bw, idxs = _common_grid(per_source_xy, bin_width)
+    Z = np.full((len(per_source_xy), len(centers)), np.nan)
+    occ = np.zeros((len(per_source_xy), len(centers)), dtype=int)
+    for i, ((_x, y), idx) in enumerate(zip(per_source_xy, idxs)):
+        if len(idx):
+            row = np.zeros(len(centers))
+            np.add.at(row, idx, np.asarray(y, dtype=float))
+            occ[i] = np.bincount(idx, minlength=len(centers))
+            Z[i, occ[i] > 0] = row[occ[i] > 0]
+    return Z, centers, bw, occ
+
+
+def rebin_to_common_grid(per_source_xy, bin_width=None, stats=None):
     """Re-bin each source's (x, y) onto a single shared grid.
 
     Used by the simultaneous fit's "Common grid" option. Each source keeps
@@ -878,43 +1019,35 @@ def rebin_to_common_grid(per_source_xy, bin_width=None):
 
     Returns
     -------
-    rebinned : list of (x_centers, y_summed) per source, in the same order.
+    rebinned : list of (x_centers, y_summed) per source, in the same order;
+        each holds only the grid bins that source has a sample in.
     common_centers : ndarray of bin centers used.
     bin_width_used : float
+
+    ``stats``, if a dict, receives ``merged_samples`` -- how many bins
+    hold two or more of a source's samples (a uniform grid at about one
+    bin per step aliases against the step spacing).
     """
     if not per_source_xy:
         return [], np.array([]), 0.0
-
-    # Pick bin width from median spacing across sources if unspecified.
-    if bin_width is None or bin_width <= 0:
-        spacings = []
-        for x, _ in per_source_xy:
-            if len(x) > 1:
-                d = np.diff(np.sort(np.asarray(x, dtype=float)))
-                d = d[d > 0]
-                if len(d):
-                    spacings.append(float(np.median(d)))
-        bin_width = float(np.median(spacings)) if spacings else 1.0
-
-    # Common edges over the union of all source ranges, padded half a bin
-    # so the extreme samples land in real bins, not on edges.
-    x_lo = min(float(np.min(x)) for x, _ in per_source_xy) - 0.5 * bin_width
-    x_hi = max(float(np.max(x)) for x, _ in per_source_xy) + 0.5 * bin_width
-    edges = np.arange(x_lo, x_hi + bin_width, bin_width)
-    centers = 0.5 * (edges[:-1] + edges[1:])
-
+    _edges, centers, bin_width, idxs = _common_grid(per_source_xy,
+                                                    bin_width)
     rebinned = []
-    for x, y in per_source_xy:
-        x_arr = np.asarray(x, dtype=float)
-        y_arr = np.asarray(y, dtype=float)
-        # Assign each sample to its bin via np.searchsorted, an
-        # O(N log M) lookup over the M bin edges.
-        idx = np.clip(np.searchsorted(edges, x_arr, side="right") - 1,
-                      0, len(centers) - 1)
+    merged = 0
+    for (_x, y), idx in zip(per_source_xy, idxs):
         y_new = np.zeros(len(centers), dtype=float)
-        np.add.at(y_new, idx, y_arr)
-        rebinned.append((centers.copy(), y_new))
-
+        np.add.at(y_new, idx, np.asarray(y, dtype=float))
+        occ = np.bincount(idx, minlength=len(centers))
+        # Only the bins this source has a sample in. Every source used
+        # to get the whole union of ranges, and after a first fix still
+        # every bin between its first and last sample -- zero-count
+        # "data" wherever it never measured (a flat 10 fitted as 1.67;
+        # [10, 10] at x = 0, 2 became [10, 0, 10]) -- reviews 2026-10-08.
+        keep = occ > 0
+        merged += int(np.sum(occ >= 2))
+        rebinned.append((centers[keep].copy(), y_new[keep]))
+    if isinstance(stats, dict):
+        stats["merged_samples"] = merged
     return rebinned, centers, bin_width
 
 

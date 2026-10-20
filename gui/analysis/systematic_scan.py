@@ -431,8 +431,28 @@ class SystematicScan(QObject):
         if not offsets:
             raise ValueError("no offsets to scan")
 
+        if gp is not None:
+            # The GP is retrained at every offset from the reference
+            # projects ticked on its panel. One the scan does not refit
+            # keeps its NOMINAL results, so the "per-offset" GP would be
+            # the same at every offset and the band meaningless (a
+            # sample-only scan reported 127 MHz for 0.5) -- review 2.
+            names = getattr(gp, "reference_project_names", None)
+            trained_on = set(names()) if callable(names) else set()
+            refit = {t.name for t in targets if t.is_reference}
+            stale = sorted(trained_on - refit)
+            if stale:
+                raise ValueError(
+                    "The GP is trained on " + ", ".join(stale)
+                    + ", which this scan does not refit. Add "
+                    + ("it" if len(stale) == 1 else "them")
+                    + " to the scan as reference"
+                    + ("" if len(stale) == 1 else "s")
+                    + ", or turn the GP leg off.")
+
         self._targets = targets
         self._label = str(label or "sys_001")
+        self._snapshot = self._take_snapshot(targets, gp, is_tab)
         self._seed_mode = seed_mode
         self._gp = gp
         self._is_tab = is_tab
@@ -455,6 +475,9 @@ class SystematicScan(QObject):
             p = t.project
             if p not in self._connected:
                 p.results_ready.connect(self._on_results)
+                _sig = getattr(p, "fit_cancelled", None)
+                if _sig is not None:
+                    _sig.connect(self._on_cancelled)
                 self._connected.add(p)
         if gp is not None and self._gp_connected is not gp:
             gp.gp_fit_done.connect(self._on_gp_done)
@@ -492,9 +515,16 @@ class SystematicScan(QObject):
         self._current_dv = dv
         self._forget(dv)
         self._records[dv] = new_record(dv)
+        refs = [t for t in self._targets if t.is_reference]
         self._jobs = (
-            [("fit", t) for t in self._targets if t.is_reference]
+            [("fit", t) for t in refs]
             + ([("gp", None), ("corr", None)] if self._gp is not None else [])
+            # With the GP leg on, the first reference fit used the
+            # PREVIOUS offset's corrections (its band came out at -10 /
+            # 0 / +20 MHz where 0 was right). The GP is trained on it
+            # un-corrected, so that is fine for the GP; the values kept
+            # come from this refit, corrected by this offset's GP.
+            + ([("fit", t) for t in refs] if self._gp is not None else [])
             + [("fit", t) for t in self._targets if not t.is_reference]
             + ([("shifts", None)] if self._is_tab is not None else [])
             + [("endstep", None)]
@@ -531,7 +561,7 @@ class SystematicScan(QObject):
                 rec["status"] = "failed"
                 if not rec["message"]:
                     rec["message"] = "no parameters came back"
-            elif rec.get("failed_projects"):
+            elif rec.get("failed_projects") or rec.get("failed_runs"):
                 # Some projects fitted and some did not. What did
                 # arrive is real and stays in the band; the step says
                 # which projects are missing from it.
@@ -572,13 +602,70 @@ class SystematicScan(QObject):
         self.progress.emit(self._done, self._total, "done")
         self.finished.emit(out)
 
+    @staticmethod
+    def _take_snapshot(targets, gp, is_tab):
+        """Everything a scan changes that is not its own output."""
+        snap = {"projects": {}, "gp": None, "is_tab": None}
+        for t in targets:
+            p = t.project
+            snap["projects"][id(p)] = (p, {
+                k: getattr(p, k) for k in (
+                    "_last_results", "_last_iter_dir",
+                    "_last_output_config") if hasattr(p, k)})
+        if gp is not None and hasattr(gp, "snapshot_state"):
+            snap["gp"] = gp.snapshot_state()
+        if is_tab is not None:
+            snap["is_tab"] = {"had": bool(getattr(
+                is_tab, "_last_shift_data", None))}
+        return snap
+
+    def _restore_snapshot(self):
+        """Put the analysis back as it was before the scan. Left at the
+        farthest offset, the next normal fit of a sample was corrected
+        by that offset's GP (90 MHz for 100; at Ge scale +198 MHz), and
+        a save stored that GP as the session's (review 2, 2026-10-08)."""
+        snap = getattr(self, "_snapshot", None)
+        self._snapshot = None
+        if not snap:
+            return
+        for p, attrs in snap["projects"].values():
+            for k, v in attrs.items():
+                try:
+                    setattr(p, k, v)
+                except (AttributeError, RuntimeError):
+                    pass
+        if snap["gp"] is not None and self._gp is not None:
+            try:
+                self._gp.restore_state(snap["gp"])
+            except Exception as exc:                      # noqa: BLE001
+                self.log.emit(f"could not restore the GP: {exc}")
+        if snap["is_tab"] is not None and self._is_tab is not None:
+            # Shifts before the scan: show the nominal ones again, not
+            # the last offset's. None before it: show none -- an empty
+            # tab used to keep the last offset's shifts, ready for Send
+            # to Results and Export (review 3, 2026-10-08).
+            try:
+                if snap["is_tab"].get("had"):
+                    self._is_tab.shifts_for_scan()
+                elif hasattr(self._is_tab, "clear_shifts"):
+                    self._is_tab.clear_shifts()
+                else:
+                    self._is_tab._last_shift_data = []
+            except Exception as exc:                      # noqa: BLE001
+                self.log.emit(f"could not refresh the shifts: {exc}")
+
     def _cleanup(self):
         self._pending = False
         self._clear_overrides()
+        self._restore_snapshot()
         for p in self._connected:
             try:
                 p.results_ready.disconnect(self._on_results)
             except (RuntimeError, TypeError):
+                pass
+            try:
+                p.fit_cancelled.disconnect(self._on_cancelled)
+            except (AttributeError, RuntimeError, TypeError):
                 pass
         self._connected.clear()
         if self._gp_connected is not None:
@@ -644,6 +731,21 @@ class SystematicScan(QObject):
                 f"{target.name} did not start a fit at {dv:+.2f} V. "
                 f"Check the project runs on its own first.")
 
+    def _on_cancelled(self, project_name):
+        """The fit in flight was stopped (the Fitter's Stop): it sends no
+        results, so stop the scan here instead of waiting for them."""
+        if (self._current_target is None
+                or project_name != self._current_target.name):
+            return
+        self._stop = True
+        # The rest of this offset's chain (GP, other projects) would
+        # build on a fit that never finished: drop it, and say why.
+        self._jobs = []
+        rec = self._records.get(self._current_dv)
+        if rec is not None and not rec.get("message"):
+            rec["message"] = "stopped: a fit was cancelled"
+        self._on_results(project_name, [], {})
+
     def _on_results(self, project_name, results, _output_config):
         if self._current_dv is None or self._current_target is None:
             return
@@ -701,6 +803,21 @@ class SystematicScan(QObject):
 
     def _collect_shifts(self, dv):
         rec = self._records.setdefault(dv, new_record(dv))
+        missing = list(rec.get("failed_projects") or []) + list(
+            rec.get("failed_runs") or [])
+        if missing:
+            # A shift averaged over whichever runs survived is over a
+            # different population than the other offsets' and reads
+            # as an offset dependence (a false 25 MHz half-width for two
+            # flat runs, one failing once); with a failed project it
+            # paired another offset's results (review 3, 2026-10-08).
+            self.log.emit(
+                f"{dv:+.2f} V: isotope shifts not taken -- "
+                f"{', '.join(map(str, missing))} did not fit at this "
+                f"offset")
+            rec["shifts"] = []
+            self._later()
+            return
         try:
             rows = self._is_tab.shifts_for_scan() or []
         except Exception as exc:                          # noqa: BLE001
@@ -754,6 +871,18 @@ class SystematicScan(QObject):
                     float(redchi)
             self._collect_params(target, rec, source or run,
                                  r.get("params_df") or {})
+        failed = [str(r.get("run_number", "") or "?")
+                  for r in (results or []) if not r.get("success")]
+        if failed and n_ok:
+            # Some runs of this project fitted, some did not. The ones
+            # that did are real, but an average over a different set of
+            # runs than the other offsets is not comparable with them
+            # (two flat runs at 0 and 100 MHz, one failing at one offset,
+            # made a 25 MHz "band") -- review 2.
+            runs = rec.setdefault("failed_runs", [])
+            runs.extend(f"{target.name}/{r}" for r in failed
+                        if f"{target.name}/{r}" not in runs)
+            rec["message"] = ("failed run(s): " + ", ".join(runs))
         if not n_ok:
             rec.setdefault("failed_projects", []).append(target.name)
             rec["message"] = f"{target.name}: no run fitted"
@@ -775,6 +904,8 @@ class SystematicScan(QObject):
                   or [float("nan")] * len(names))
         models = params.get("Model") or [""] * len(names)
         sources = params.get("Source") or [fallback_source] * len(names)
+        mins = params.get("Minimum") or []
+        maxs = params.get("Maximum") or []
         for i, pname in enumerate(names):
             try:
                 value = float(values[i])
@@ -784,6 +915,15 @@ class SystematicScan(QObject):
                 sigma = float(errors[i])
             except (TypeError, ValueError, IndexError):
                 sigma = float("nan")
+            at_bound = False
+            for seq in (mins, maxs):
+                try:
+                    b = float(seq[i])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if math.isfinite(b) and abs(value - b) <= 1e-6 * max(
+                        1.0, abs(b)):
+                    at_bound = True
             src = str(sources[i]) if i < len(sources) else ""
             if not src:
                 src = str(fallback_source)
@@ -791,6 +931,8 @@ class SystematicScan(QObject):
                             str(models[i]) if i < len(models) else "",
                             str(pname))
             rec["values"][key] = {"value": value, "sigma": sigma}
+            if at_bound:
+                rec["values"][key]["at_bound"] = True
 
     def _remember(self, rec):
         """Feed a step's numbers into the seeding history.
@@ -803,6 +945,10 @@ class SystematicScan(QObject):
         if rec.get("status") == "failed":
             return
         for key, v in (rec.get("values") or {}).items():
+            # A value pinned at its bound is where the fit gave up, not
+            # where the next step should start (review 3, 2026-10-08).
+            if v.get("at_bound"):
+                continue
             try:
                 value = float(v["value"])
             except (TypeError, ValueError, KeyError):

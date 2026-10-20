@@ -1077,6 +1077,44 @@ class ReferenceCorrectionPanel(QGroupBox):
         self._fit_worker.start()
         return True
 
+    def reference_project_names(self) -> set[str]:
+        """The reference projects the GP is trained on (ticked)."""
+        return set(self._checked_names(self._ref_list))
+
+    def snapshot_state(self) -> dict:
+        """What a systematic scan replaces, so it can be put back: the
+        trained GP (a refit replaces the object, never mutates it), the
+        per-file corrections and the status line."""
+        import copy as _copy
+        return {
+            "corrector": self._corrector,
+            "corrections": _copy.deepcopy(self._corrections),
+            "fitted_excluded": _copy.copy(self._fitted_excluded),
+            "status": self._status.text(),
+        }
+
+    def restore_state(self, state: dict):
+        """Undo a scan: the GP and corrections the user had before it,
+        re-sent to the projects (also those the scan gave corrections
+        that they did not have before)."""
+        if not state:
+            return
+        touched = set(self._corrections) | set(state["corrections"])
+        self._corrector = state["corrector"]
+        self._corrections = state["corrections"]
+        self._fitted_excluded = state["fitted_excluded"]
+        self._populate_table()
+        if self._corrector is not None:
+            self._render_diagnostic_plot()
+        else:
+            self._figure.clear()
+            self._canvas.draw_idle()
+            if hasattr(self, "_send_btn"):
+                self._send_btn.setEnabled(False)
+        self._status.setText(state["status"])
+        for project in touched:
+            self._emit_corrections(project)
+
     def recompute_corrections(self):
         """Re-evaluate the per-file corrections from the current GP.
 
@@ -2136,8 +2174,30 @@ class ReferenceCorrectionPanel(QGroupBox):
         }
         return d
 
+    def reset(self):
+        """Forget the trained GP and everything derived from it.
+
+        Restoring a session that has no saved GP used to leave the
+        previous session's GP in place -- its plot, its Send button, and
+        the corrector every GP-mode isotope shift and the next Save read
+        (review 2026-10-08)."""
+        self._corrector = None
+        self._fitted_excluded = None
+        self._excluded_obs = set()
+        self._corrections = {}
+        self._hover_points = []
+        self._figure.clear()
+        self._canvas.draw_idle()
+        if hasattr(self, "_send_btn"):
+            self._send_btn.setEnabled(False)
+        self._status.setText("(no GP fit yet)")
+
     def from_dict(self, d: dict):
+        # Always start from nothing: a session without a GP must not
+        # inherit the one loaded before it.
+        self.reset()
         if not d:
+            self._populate_table()
             return
         kernel = d.get("kernel", "rbf")
         idx = self._kernel_combo.findData(kernel)
