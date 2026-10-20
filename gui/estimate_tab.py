@@ -1235,7 +1235,7 @@ class GlobalParamsWidget(QWidget):
         elem_row = QHBoxLayout()
         elem_row.setSpacing(6)
         self.element_edit = QLineEdit()
-        self.element_edit.setToolTip("Chemical element symbol (e.g., 'Co', 'Ge')")
+        self.element_edit.setToolTip("Chemical element symbol (e.g., 'Co', 'Sn')")
         self.element_edit.setMaximumWidth(52)
         elem_row.addWidget(QLabel("Element:"))
         elem_row.addWidget(self.element_edit)
@@ -1333,7 +1333,7 @@ class GlobalParamsWidget(QWidget):
         self.anchor_isotope.setToolTip(
             "Label of isotope whose centroid defines the laser frequency "
             "(must match an isotope label)")
-        self.anchor_isotope.setPlaceholderText("e.g. 77Ge")
+        self.anchor_isotope.setPlaceholderText("e.g. 59Co")
         self.anchor_isotope.setMaximumWidth(80)
         anc_row.addWidget(self.anchor_isotope)
         anc_row.addStretch()
@@ -1426,7 +1426,7 @@ class GlobalParamsWidget(QWidget):
         # Compact pass: the stored values are short, so cap every field
         # (the element/anchor edits keep their tighter caps) and densify
         # the forms — the column narrows without any clipping. 130 px
-        # still fits the widest value ("39760.285000" + spin buttons).
+        # still fits the widest value ("12345.678900" + spin buttons).
         for cls in (QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox):
             for w in content.findChildren(cls):
                 if w.maximumWidth() > 130:

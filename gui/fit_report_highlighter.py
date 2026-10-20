@@ -1,18 +1,18 @@
 """Syntax highlighting for lmfit fit reports in the Results viewer.
 
 A fit report is mostly boilerplate. Every parameter line repeats the
-run and model it belongs to -- ``Run_7934___Model_1___centroid`` is
+run and model it belongs to -- ``Run_1001___Model_1___centroid`` is
 28 characters of which 8 carry information -- and the numbers that
 decide whether a fit is any good are scattered among numbers that do
 not matter. Reading one means scanning for three things:
 
 * **the relative error**. ``(2.35%)`` is a measured parameter;
-  ``(671509.73%)`` is a parameter the data does not constrain at all,
+  ``(123456.78%)`` is a parameter the data does not constrain at all,
   and it looks exactly the same in monospace grey.
 * **the correlations**. ``C(Al, Bl) = +1.0000`` means those two are
   perfectly degenerate and the fit has no unique solution -- that
-  single line explains the 671509% above it.
-* **reduced chi-square**. 0.78 and 19.73 are two very different
+  single line explains the 123456% above it.
+* **reduced chi-square**. 0.95 and 12.34 are two very different
   outcomes sitting in identically formatted lines.
 
 So this does not colour by token type alone. Percentages, correlation
@@ -107,12 +107,12 @@ def build_formats(dark: bool = True) -> dict:
     if dark:
         return {
             "rule": _c("#546E7A"),            # the ==== and ---- runs
-            "run": _c("#4DD0E1", bold=True),  # RUN 7934
+            "run": _c("#4DD0E1", bold=True),  # RUN 1001
             "section": _c("#FFB74D", bold=True),   # [[Variables]]
             "section_note": _c("#8D6E63"),    # its trailing remark
             "subsection": _c("#CE93D8", bold=True),  # --- FWHM ---
             "key": _c("#90CAF9"),             # stat / metadata names
-            "prefix": _c("#546E7A"),          # Run_7934___Model_1___
+            "prefix": _c("#546E7A"),          # Run_1001___Model_1___
             "name": _c("#A5D6A7", bold=True),  # ...centroid
             "punct": _c("#78909C"),
             "value": _c("#ECEFF1"),
@@ -317,12 +317,12 @@ class FitReportHighlighter(QSyntaxHighlighter):
             return
 
         # Anything else: at least make the numbers legible (the
-        # "Model_1: [-72.39, -220.69, ...]" peak-position lines).
+        # "Model_1: [-50.00, -150.00, ...]" peak-position lines).
         for mm in _RE_NUMBER.finditer(text):
             self._apply(mm.start(), len(mm.group(0)), "value")
 
     def _name_span(self, start: int, name: str):
-        """``Run_7934___Model_1___centroid`` -- dim the path, light up
+        """``Run_1001___Model_1___centroid`` -- dim the path, light up
         the leaf. The prefix is the same on every line of the block
         and carries no information once you know which run you are
         reading; the leaf is the parameter you are looking for."""

@@ -1,7 +1,7 @@
 """The Results tab's CSV viewer: shaded by run, sortable, filterable.
 
-A parameters.csv holds one row per parameter per run -- 32 rows a run
-on the Ge sets, nearly a thousand for a campaign -- in one long
+A parameters.csv holds one row per parameter per run -- a few dozen
+rows a run, hundreds to thousands for a campaign -- in one long
 undifferentiated list. Reading it meant counting rows to find where
 one run ended, and there was no way to ask the two questions it is
 opened for: "just the centroids" and "which run has the worst

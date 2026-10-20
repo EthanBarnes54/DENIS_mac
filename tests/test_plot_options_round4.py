@@ -91,16 +91,16 @@ class FitValueLinesTests(unittest.TestCase):
         from gui.shared_widgets import format_fit_value_lines
         records = [
             {"Model": "Model_1", "Parameter": "centroid",
-             "Value": 75.04, "Stderr": 11.23},
+             "Value": 42.37, "Stderr": 12.34},
             {"Model": "Model_1", "Parameter": "Al",
-             "Value": -298.61, "Stderr": 10.5},
+             "Value": -150.42, "Stderr": 4.2},
             {"Model": "Model_1", "Parameter": "bkg",
              "Value": 25.0, "Stderr": 0.0},
         ]
         lines = format_fit_value_lines(
             records, ["Model_1:centroid", "Model_1:Al"])
         self.assertEqual(len(lines), 2)
-        self.assertIn("Centroid = 75 ± 11", lines[0])
+        self.assertIn("Centroid = 42 ± 12", lines[0])
         self.assertIn("Al = ", lines[1])
         # Nothing selected → nothing rendered.
         self.assertEqual(format_fit_value_lines(records, []), [])

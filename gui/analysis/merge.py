@@ -179,17 +179,18 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # gates on ``override_enabled`` and this must not diverge from it.
         # The spinboxes keep their defaults (29977 V / 10920 cm^-1) while
         # unticked, so reading them unconditionally silently Doppler-shifted
-        # every merge with a laser the run never used: with a real setpoint
-        # of 18555 cm^-1 the merged axis landed ~458 THz from the reference
-        # and no model could reach it (2026-09-20).
+        # every merge with a laser the run never used: whenever the run's
+        # own setpoint differs from that default by thousands of cm^-1,
+        # the merged axis lands hundreds of THz from the reference and no
+        # model can reach it.
         _use_src_override = bool(source_config.get("override_enabled"))
         cooler_override = (source_config.get("cooler_override", 0)
                            if _use_src_override else 0)
         # The cooler OFFSET (Yb calibration) on top of the override, else
         # on top of the run's own recorded voltage -- exactly as
-        # pipeline.prepare_run_data does for a run's fit. Ignored here
-        # until 2026-10-08: with the offset on, the runs moved ~450 MHz
-        # and their merge did not.
+        # pipeline.prepare_run_data does for a run's fit. It was once
+        # ignored here: with an offset of tens of volts the runs moved by
+        # hundreds of MHz and their merge did not.
         # The same plan as pipeline.prepare_run_data: on top of the
         # override, else on top of each event's own cooler readback.
         from gui.analysis.pipeline import (
@@ -670,7 +671,7 @@ def project_voltage_merge_to_frequency(merged_data, source_config):
     # The same reference and beam energy a run's own fit uses
     # (pipeline.prepare_run_data): ref_freq PLUS the Source block's
     # reference shift, and the cooler voltage PLUS its cooler offset.
-    # Both used to be ignored here -- a 10 MHz shift or a -24 V offset
+    # Both used to be ignored here -- a 10 MHz shift or a -20 V offset
     # left the projected axis unchanged (review 2026-10-08).
     ref_freq_hz = (float(source_config.get("ref_freq", 0.0))
                    + float(source_config.get("ref_shift", 0.0) or 0.0))

@@ -47,7 +47,7 @@ satlas2 = __import__("pytest").importorskip("satlas2")
 
 _APP = QApplication.instance() or QApplication([])
 
-E_LO, E_UP, HARM = 557.1341, 37702.3054, 2
+E_LO, E_UP, HARM = 1000.0, 41000.0, 2
 
 
 def _transition_mhz():
@@ -102,12 +102,12 @@ class MergedImportTests(unittest.TestCase):
         np.testing.assert_allclose(md["x"], [-10.0, 0.0, 10.0], atol=1e-3)
 
     def test_a_voltage_merge_keeps_its_calibration(self):
-        xcal = [1127.4, 1128.4, 1129.4]
+        xcal = [1127.0, 1128.0, 1129.0]
         md = self._import(self._mfe([1130.0, 1131.0, 1132.0], "voltage",
                                     merged_x_cal=xcal,
-                                    merged_cal_spread_v=2.04))
+                                    merged_cal_spread_v=1.5))
         np.testing.assert_allclose(md["x_cal"], xcal)
-        self.assertEqual(md["cal_spread_v"], 2.04)
+        self.assertEqual(md["cal_spread_v"], 1.5)
         self.assertEqual(md["x_unit"], "V")
 
     def test_the_pa_plot_uses_the_fits_conversion(self):
@@ -120,9 +120,9 @@ class MergedImportTests(unittest.TestCase):
         pa._e_upper.setValue(E_UP)
         pa._harmonic.setValue(HARM)
         x = np.array([1130.0, 1131.0, 1132.0])
-        xcal = x - 2.6
-        meta = dict(merge_cooler_v=29907.412, merge_laser_sp=18555.15,
-                    merge_mass_amu=69.924249, merge_harmonic=HARM)
+        xcal = x - 3.0
+        meta = dict(merge_cooler_v=30000.0, merge_laser_sp=20000.0,
+                    merge_mass_amu=100.0, merge_harmonic=HARM)
         pa._add_merged_entry("vm", x, [4.0, 9.0, 5.0], "voltage", [],
                              merged_x_cal=xcal, **meta)
 
@@ -153,9 +153,9 @@ class CoolerPlanTests(unittest.TestCase):
                 resolve_cooler(override, offset, 30000)
         p = resolve_cooler(5000, -100, 30000)
         self.assertEqual((p.mode, p.constant), ("constant", 4900.0))
-        p = resolve_cooler(0, -24.42, 29900)
+        p = resolve_cooler(0, -20.0, 30000)
         self.assertEqual((p.mode, p.constant), ("readback", None))
-        self.assertAlmostEqual(p.effective, 29875.58)
+        self.assertAlmostEqual(p.effective, 29980.0)
         with self.assertRaises(ValueError):
             resolve_cooler(0, -31000, 30000)
 
@@ -199,13 +199,16 @@ class CoolerPlanTests(unittest.TestCase):
 
 
 def _synthetic_points(extra=()):
-    """Two isotopes whose lines cross zero at -25 V, 15 offsets each."""
+    """Two isotopes whose lines cross zero at -10 V, 15 offsets each.
+
+    Each slope is dA/dV = -A/(2V), what a 30 kV beam gives."""
     from cls_estimations.cooler_calibration import LITERATURE_A, ScanPoint
     pts = []
-    for iso, b in (("171Yb", -0.21), ("173Yb", 0.059)):
+    for iso in ("171Yb", "173Yb"):
+        b = -LITERATURE_A[iso] / (2.0 * 30000.0)
         for dv in np.linspace(-50, 50, 15):
             pts.append(ScanPoint(run="1", isotope=iso, dv=float(dv),
-                                 value=LITERATURE_A[iso] + b * (dv + 25.0),
+                                 value=LITERATURE_A[iso] + b * (dv + 10.0),
                                  sigma=2.0))
     return pts + list(extra)
 
@@ -224,18 +227,18 @@ class CalibrationTests(unittest.TestCase):
 
     def test_untrustworthy_fits_are_named(self):
         from gui.analysis.cooler_scan import fit_point_problem as why
-        self.assertEqual(why(self._res(12640.0, 2.0), "Al", 12640.0, 2.0),
+        self.assertEqual(why(self._res(12650.0, 2.0), "Al", 12650.0, 2.0),
                          "")
-        self.assertIn("upper bound", why(self._res(20000.0, 3.6e-5), "Al",
-                                         20000.0, 3.6e-5))
-        self.assertIn("no error bar", why(self._res(12640.0, None), "Al",
-                                          12640.0, float("nan")))
+        self.assertIn("upper bound", why(self._res(20000.0, 1e-5), "Al",
+                                         20000.0, 1e-5))
+        self.assertIn("no error bar", why(self._res(12650.0, None), "Al",
+                                          12650.0, float("nan")))
         self.assertIn("did not converge", why(
-            self._res(12640.0, 2.0, msg="Fit aborted: number of function "
+            self._res(12650.0, 2.0, msg="Fit aborted: number of function "
                                         "evaluations > 20000"),
-            "Al", 12640.0, 2.0))
+            "Al", 12650.0, 2.0))
         self.assertIn("did not converge", why(
-            self._res(12640.0, 2.0, converged=False), "Al", 12640.0, 2.0))
+            self._res(12650.0, 2.0, converged=False), "Al", 12650.0, 2.0))
 
     def test_a_line_ignores_points_without_an_error(self):
         from cls_estimations.cooler_calibration import fit_line
@@ -247,10 +250,10 @@ class CalibrationTests(unittest.TestCase):
         from dataclasses import replace
         from cls_estimations.cooler_calibration import calibrate
         pinned = replace(_synthetic_points()[0], value=20000.0,
-                         sigma=3.6e-5)
+                         sigma=1e-5)
         res = calibrate(_synthetic_points([replace(pinned, flag="at its "
                                                    "upper bound")]))
-        self.assertAlmostEqual(res.dv, -25.0, places=6)
+        self.assertAlmostEqual(res.dv, -10.0, places=6)
         self.assertEqual([why for _p, why in res.excluded],
                          ["at its upper bound"])
         self.assertIn("left out", res.note)
@@ -261,7 +264,7 @@ class CalibrationTests(unittest.TestCase):
         bad = replace(_synthetic_points()[3], value=_synthetic_points()[3]
                       .value + 600.0)
         res = calibrate(_synthetic_points([bad]))
-        self.assertAlmostEqual(res.dv, -25.0, places=6)
+        self.assertAlmostEqual(res.dv, -10.0, places=6)
         self.assertIn("sigma off", res.excluded[0][1])
 
     def test_only_accepted_fits_seed_the_next_offset(self):
@@ -270,12 +273,12 @@ class CalibrationTests(unittest.TestCase):
         self.addCleanup(scan.deleteLater)
         proj = types.SimpleNamespace(project_name="P")
         scan._parameter = "Al"
-        scan._collect(proj, "171Yb", -50.0, [self._res(20000.0, 3.6e-5)])
+        scan._collect(proj, "171Yb", -50.0, [self._res(20000.0, 1e-5)])
         self.assertEqual(scan._history, {})
         self.assertTrue(scan._points[0].flag)
-        scan._collect(proj, "171Yb", 0.0, [self._res(12637.0, 2.0)])
+        scan._collect(proj, "171Yb", 0.0, [self._res(12650.0, 2.0)])
         self.assertEqual(list(scan._history.values()),
-                         [{0.0: (12637.0, 2.0)}])
+                         [{0.0: (12650.0, 2.0)}])
 
     def test_seeds_extrapolate_along_the_walk(self):
         from gui.analysis import systematic_scan as ss
@@ -283,9 +286,9 @@ class CalibrationTests(unittest.TestCase):
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
         scan._history = {ss.value_key("P", "Run_1", "M", "centroid"):
-                         {0.0: (628.7, 0.8), -7.0: (570.2, 0.8)}}
+                         {0.0: (600.0, 0.8), -7.0: (530.0, 0.8)}}
         model = [{"type": "HFS", "name": "M",
-                  "params": {"centroid": _p(628.7)}}]
+                  "params": {"centroid": _p(600.0)}}]
         with mock.patch.object(ss, "checked_entries_of",
                                return_value=[("run_1.asdf", "Run_1")]), \
                 mock.patch.object(ss, "model_configs_of",
@@ -293,12 +296,12 @@ class CalibrationTests(unittest.TestCase):
             out = scan._seed_map(types.SimpleNamespace(project_name="P"),
                                  -14.0)
         self.assertAlmostEqual(
-            out["run_1.asdf"][0]["params"]["centroid"]["value"], 511.7)
+            out["run_1.asdf"][0]["params"]["centroid"]["value"], 460.0)
 
     def test_seeds_and_the_no_dialog_flag_reach_the_fit(self):
         from tests.test_cooler_scan import _StubProject, _spin
         from gui.analysis.cooler_scan import CoolerScan
-        p = _StubProject("171", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171", ["1001"], -0.21, 12650.0)
         self.addCleanup(p.deleteLater)
         seen = []
         orig = p._on_fit_requested
@@ -321,7 +324,7 @@ class CalibrationTests(unittest.TestCase):
     def test_the_scan_walks_outward_from_the_fitted_offset(self):
         from tests.test_cooler_scan import _StubProject, _spin
         from gui.analysis.cooler_scan import CoolerScan
-        p = _StubProject("171", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171", ["1001"], -0.21, 12650.0)
         self.addCleanup(p.deleteLater)
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
@@ -394,25 +397,25 @@ def _shifts(ref, smp, *, ref_mode, gp=GP, apply_global=True,
             sample_run="Weighted Average"):
     from gui.analysis.tab import AnalysisTab
     at = AnalysisTab()
-    r = at._add_project("74Ge", is_reference=True)
-    s = at._add_project("70Ge")
+    r = at._add_project("116Sn", is_reference=True)
+    s = at._add_project("112Sn")
     r._last_results, s._last_results = ref, smp
     ist = at._is_tab
     ist._ref_corr_panel._corrector = gp
     ist._ref_corr_panel._apply_global_cb.setChecked(apply_global)
     ist._refresh_projects()
     rows = {e.project_combo.currentText(): e for e in ist._entries}
-    for name, a in (("74Ge", 74), ("70Ge", 70)):
+    for name, a in (("116Sn", 116), ("112Sn", 112)):
         if name not in rows:
             ist._add_row(project_name=name, label=name, A=a)
     rows = {e.project_combo.currentText(): e for e in ist._entries}
-    rows["74Ge"].ref_radio.setChecked(True)
-    rows["74Ge"].run_combo.setCurrentText(ref_mode)
-    rows["70Ge"].run_combo.setCurrentText(sample_run)
+    rows["116Sn"].ref_radio.setChecked(True)
+    rows["116Sn"].run_combo.setCurrentText(ref_mode)
+    rows["112Sn"].run_combo.setCurrentText(sample_run)
     for e in ist._entries:
         e.select_cb.setChecked(True)
     data = {d["label"]: d for d in ist.shifts_for_scan()}
-    cell = ist._row_centroid(rows["70Ge"], ref_mode != "Weighted Average"
+    cell = ist._row_centroid(rows["112Sn"], ref_mode != "Weighted Average"
                              and True)
     at.deleteLater()
     return data, cell
@@ -422,17 +425,17 @@ def _refs(applied):
     out = []
     for i, t in enumerate((0.5, 2.0, 3.5, 4.5, 5.5)):
         g = float(GP.g(t + DUR / 2))
-        out.append(_result(10.0 if applied else 10.0 + g, t, run=7900 + i,
+        out.append(_result(10.0 if applied else 10.0 + g, t, run=1100 + i,
                            err=2.0, applied=g if applied else None))
     return out
 
 
 def _tied_sample(c, *, applied, nA=1000, nB=1000, tied=True):
-    a = _result(c, TA, run=8001, n_events=nA,
+    a = _result(c, TA, run=1001, n_events=nA,
                 applied=GA if applied else None)
-    b = _result(c, TB, run=8002, n_events=nB,
+    b = _result(c, TB, run=1002, n_events=nB,
                 applied=GB if applied else None,
-                expr="Run_8001___Model_1___centroid" if tied else None)
+                expr="Run_1001___Model_1___centroid" if tied else None)
     return [a, b]
 
 
@@ -464,7 +467,7 @@ class TieGroupTests(unittest.TestCase):
                                   _tied_sample(c_raw, applied=False, nA=nA,
                                                nB=nB),
                                   ref_mode=GP_REFERENCE)
-            row = data["70Ge"]
+            row = data["112Sn"]
             self.assertAlmostEqual(row["centroid"], -85.0, places=6)
             self.assertAlmostEqual(row["sigma_fit"], 3.0, places=6)
             self.assertAlmostEqual(row["sigma_correction"], want_sigma,
@@ -473,9 +476,9 @@ class TieGroupTests(unittest.TestCase):
     def test_fit_time_corrections_propagate_over_every_run(self):
         data, _cell = _shifts(_refs(True), _tied_sample(-75.0, applied=True),
                               ref_mode="Weighted Average")
-        self.assertAlmostEqual(data["70Ge"]["sigma_delta_nu"], 3.2551,
+        self.assertAlmostEqual(data["112Sn"]["sigma_delta_nu"], 3.2551,
                                places=3)
-        self.assertAlmostEqual(data["70Ge"]["cov_with_reference_mhz2"],
+        self.assertAlmostEqual(data["112Sn"]["cov_with_reference_mhz2"],
                                14.257, places=2)
 
     def test_a_pinned_tied_run_is_its_whole_group(self):
@@ -483,8 +486,8 @@ class TieGroupTests(unittest.TestCase):
         c_raw = -85.0 + 0.5 * (GA + GB)
         data, _cell = _shifts(_refs(False),
                               _tied_sample(c_raw, applied=False),
-                              ref_mode=GP_REFERENCE, sample_run="8002")
-        self.assertAlmostEqual(data["70Ge"]["centroid"], -85.0, places=6)
+                              ref_mode=GP_REFERENCE, sample_run="1002")
+        self.assertAlmostEqual(data["112Sn"]["centroid"], -85.0, places=6)
 
     def test_the_row_cell_agrees(self):
         from gui.analysis.isotope_shift_tab import GP_REFERENCE
@@ -498,27 +501,27 @@ class TieGroupTests(unittest.TestCase):
 class PropagationTests(unittest.TestCase):
 
     def _sample(self):
-        return [_result(-75.0, t, run=8000 + i, err=3.0,
+        return [_result(-75.0, t, run=1000 + i, err=3.0,
                         applied=float(GP.g(t + DUR / 2)))
                 for i, t in enumerate((2.0, 2.2))]
 
     def test_the_apply_box_does_not_touch_recorded_corrections(self):
-        ref = [_result(10.0, t, run=7900 + i, err=2.0)
+        ref = [_result(10.0, t, run=1100 + i, err=2.0)
                for i, t in enumerate((1.0, 1.5, 2.5, 3.0))]
         on, _ = _shifts(ref, self._sample(), ref_mode="Weighted Average")
         off, _ = _shifts(ref, self._sample(), ref_mode="Weighted Average",
                          apply_global=False)
-        self.assertGreater(on["70Ge"]["sigma_correction"], 4.0)
-        self.assertAlmostEqual(off["70Ge"]["sigma_correction"],
-                               on["70Ge"]["sigma_correction"])
+        self.assertGreater(on["112Sn"]["sigma_correction"], 4.0)
+        self.assertAlmostEqual(off["112Sn"]["sigma_correction"],
+                               on["112Sn"]["sigma_correction"])
 
     def test_no_gp_loaded_keeps_the_recorded_sigma(self):
-        ref = [_result(10.0, t, run=7900 + i, err=2.0)
+        ref = [_result(10.0, t, run=1100 + i, err=2.0)
                for i, t in enumerate((1.0, 1.5, 2.5, 3.0))]
         data, _ = _shifts(ref, self._sample(), ref_mode="Weighted Average",
                           gp=None)
         # Fully correlated recorded sigmas (5 MHz each): 5 MHz.
-        self.assertAlmostEqual(data["70Ge"]["sigma_correction"], 5.0,
+        self.assertAlmostEqual(data["112Sn"]["sigma_correction"], 5.0,
                                places=6)
 
 
@@ -526,7 +529,7 @@ class TiedReferenceObservationTests(unittest.TestCase):
 
     def test_one_gp_observation_per_tied_centroid(self):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("74Ge")
+        p = AnalysisProject("116Sn")
         self.addCleanup(p.deleteLater)
         p._is_reference = True
         p._last_results = [
@@ -548,7 +551,7 @@ class ScanTests(unittest.TestCase):
         self.addCleanup(scan.deleteLater)
         scan._is_tab = mock.Mock()
         rec = new_record(10.0)
-        rec["failed_runs"] = ["70Ge/8002"]
+        rec["failed_runs"] = ["112Sn/1002"]
         scan._records = {10.0: rec}
         scan._later = lambda: None
         scan._collect_shifts(10.0)
@@ -566,7 +569,7 @@ class ScanTests(unittest.TestCase):
         tgt = ScanTarget(project=types.SimpleNamespace(project_name="P"))
         scan._collect_params(tgt, rec, "Run_1", {
             "Parameter": ["Al", "centroid"], "Value": [20000.0, 600.0],
-            "Stderr": [3.6e-5, 0.8], "Model": ["M", "M"],
+            "Stderr": [1e-5, 0.8], "Model": ["M", "M"],
             "Source": ["Run_1", "Run_1"], "Minimum": [-2e4, -1e12],
             "Maximum": [2e4, 1e12]})
         scan._history = {}
@@ -576,7 +579,7 @@ class ScanTests(unittest.TestCase):
 
     def test_a_failed_project_forgets_the_last_step(self):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("70Ge")
+        p = AnalysisProject("112Sn")
         self.addCleanup(p.deleteLater)
         p._last_results = [{"success": True, "run_number": "1"}]
         p._scan_driven = True
@@ -586,11 +589,11 @@ class ScanTests(unittest.TestCase):
     def test_the_baseline_is_over_the_runs_the_points_use(self):
         from cls_estimations.systematics import (
             ParameterBand, ScanValue, mean_over_runs)
-        a = ParameterBand("70Ge", "Run_A", "centroid",
+        a = ParameterBand("112Sn", "Run_A", "centroid",
                           [ScanValue(dv, 0.0, 1.0)
                            for dv in (-10.0, 0.0, 10.0)],
                           baseline=0.0, baseline_sigma=1.0)
-        b = ParameterBand("70Ge", "Run_B", "centroid",
+        b = ParameterBand("112Sn", "Run_B", "centroid",
                           [ScanValue(-10.0, 100.0, 1.0, include=False)],
                           baseline=100.0, baseline_sigma=1.0)
         m = mean_over_runs([a, b])
@@ -606,7 +609,7 @@ class ScanTests(unittest.TestCase):
         for dv, shift in ((-10.0, 50.0), (0.0, 50.0), (10.0, 0.0)):
             r = new_record(dv)
             r["status"] = "ok"
-            for label, v in (("70Ge", shift), ("74Ge", 0.0)):
+            for label, v in (("112Sn", shift), ("116Sn", 0.0)):
                 r["values"][value_key("Isotope shifts", label, "IS",
                                       "delta_nu")] = {"value": v,
                                                       "sigma": 1.0}
@@ -625,14 +628,14 @@ class ScanTests(unittest.TestCase):
         st = self._tab_with_shift_records()
         runs, mean = st.bands("Isotope shifts", "IS", "delta_nu")
         by = {b.run: b for b in runs}
-        self.assertEqual(by["70Ge"].baseline, 50.0)
+        self.assertEqual(by["112Sn"].baseline, 50.0)
         self.assertIsNone(mean)
 
     def test_no_weighted_mean_across_isotopes(self):
         st = self._tab_with_shift_records()
         rows = [r for r in st.summary_rows()
                 if r["project"] == "Isotope shifts"]
-        self.assertEqual(sorted(r["run"] for r in rows), ["70Ge", "74Ge"])
+        self.assertEqual(sorted(r["run"] for r in rows), ["112Sn", "116Sn"])
 
     def test_an_empty_shift_tab_stays_empty(self):
         from gui.analysis.systematic_scan import SystematicScan
@@ -651,7 +654,7 @@ class ScanTests(unittest.TestCase):
         at = AnalysisTab()
         self.addCleanup(at.deleteLater)
         ist = at._is_tab
-        ist._last_shift_data = [{"label": "70Ge"}]
+        ist._last_shift_data = [{"label": "112Sn"}]
         ist._last_log = "x"
         ist._result_table.setRowCount(2)
         ist.clear_shifts()
@@ -874,7 +877,7 @@ class AutoFitterTests(unittest.TestCase):
 
 
 
-# ── 13: the GP window average (Arda's choice, 2026-10-09) ────────────
+# ── 13: the GP window average (2026-10-09) ───────────────────────────
 
 
 class GaussLegendreWindowTests(unittest.TestCase):

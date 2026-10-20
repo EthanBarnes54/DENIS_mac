@@ -163,15 +163,15 @@ class TiedCentroidTests(unittest.TestCase):
     def _pdf(source, value, expr):
         return {"Source": [source], "Model": ["Model_1"],
                 "Parameter": ["centroid"], "Value": [value],
-                "Stderr": [0.34674], "Expression": [expr]}
+                "Stderr": [0.5], "Expression": [expr]}
 
     def test_a_cross_source_tie_counts_once(self):
         from cls_estimations.isotope_shift import (
             independent_results, centroid_tie)
         head = {"source_name": "Run_mA",
-                "params_df": self._pdf("Run_mA", 24.8, float("nan"))}
+                "params_df": self._pdf("Run_mA", 25.0, float("nan"))}
         tied = {"source_name": "Run_mB",
-                "params_df": self._pdf("Run_mB", 24.8,
+                "params_df": self._pdf("Run_mB", 25.0,
                                        "Run_mA___Model_1___centroid")}
         self.assertIsNone(centroid_tie(head["params_df"],
                                        source_name="Run_mA"))
@@ -180,7 +180,7 @@ class TiedCentroidTests(unittest.TestCase):
     def test_a_within_source_tie_still_counts(self):
         from cls_estimations.isotope_shift import independent_results
         r = {"source_name": "Run_mA",
-             "params_df": self._pdf("Run_mA", 24.8,
+             "params_df": self._pdf("Run_mA", 25.0,
                                     "Run_mA___Model_2___centroid")}
         self.assertEqual(independent_results([r]), [r])
 
@@ -357,14 +357,14 @@ class VoltageMergeCalibrationTests(unittest.TestCase):
     def _md(self, **extra):
         md = {"x": [1150.0, 1200.0, 1250.0], "y": [1.0, 2.0, 1.0],
               "yerr": [1.0, 1.0, 1.0], "merged_name": "m",
-              "merge_metadata": {"cooler_v": 29907.4, "laser_sp": 18555.15,
-                                 "mass_amu": 69.924249, "harmonic": 2}}
+              "merge_metadata": {"cooler_v": 30000.0, "laser_sp": 20000.0,
+                                 "mass_amu": 100.0, "harmonic": 2}}
         md.update(extra)
         return md
 
     def test_the_projection_uses_the_calibrated_voltage(self):
         from gui.analysis.merge import project_voltage_merge_to_frequency
-        src = {"ref_freq": 1.1135842e15}
+        src = {"ref_freq": 1.2e15}
         cal = [1.02 * v + 5 for v in (1150.0, 1200.0, 1250.0)]
         x_raw = project_voltage_merge_to_frequency(self._md(), src)[0]
         x_cal = project_voltage_merge_to_frequency(
@@ -382,11 +382,11 @@ class VoltageMergeCalibrationTests(unittest.TestCase):
 
     def test_cooler_readback_is_never_a_beam_energy(self):
         from gui.analysis.merge import project_voltage_merge_to_frequency
-        md = self._md(per_run=[{"cooler_v": 2.99}, {"cooler_v": 29906.9}])
+        md = self._md(per_run=[{"cooler_v": 3.0}, {"cooler_v": 30010.0}])
         md["merge_metadata"]["cooler_v"] = None
         x = project_voltage_merge_to_frequency(md, {"ref_freq": 1e15})[0]
         ref = self._md()
-        ref["merge_metadata"]["cooler_v"] = 29906.9
+        ref["merge_metadata"]["cooler_v"] = 30010.0
         x_ref = project_voltage_merge_to_frequency(ref,
                                                    {"ref_freq": 1e15})[0]
         np.testing.assert_allclose(x, x_ref)
@@ -425,7 +425,7 @@ class ScanStateTests(unittest.TestCase):
         from gui.analysis.systematic_scan import SystematicScan
         from tests.test_systematic_scan import _target
         _ref, sample, gp = self._setup()
-        gp.reference_project_names = lambda: {"74Ge"}
+        gp.reference_project_names = lambda: {"116Sn"}
         with self.assertRaises(ValueError):
             SystematicScan().start([_target(sample)], [-10.0], gp=gp)
 
@@ -497,7 +497,7 @@ class LoadGuardTests(unittest.TestCase):
     def test_a_load_does_not_proceed_past_a_fit_that_will_not_stop(self):
         stub = self._stub()
         stub.analysis_tab = mock.Mock()
-        stub.analysis_tab.running_fits.return_value = ["74Ge"]
+        stub.analysis_tab.running_fits.return_value = ["116Sn"]
         stub.analysis_tab.stop_all_fits.return_value = False
         with mock.patch("gui.main_window.QMessageBox") as box:
             box.StandardButton = QMessageBox.StandardButton
@@ -618,7 +618,7 @@ class StatusBarTimerTests(unittest.TestCase):
 
 
 class CoolerOffsetTests(unittest.TestCase):
-    """Arda (2026-10-08): the Yb cooler offset switched the per-event
+    """The Yb cooler offset used to switch the per-event
     cooler correction off. clstools: V = Vrfq * VCoolDiv + VCoolOffset -
     DV_cal; the offset path set VCoolDiv = 0 (one constant cooler)."""
 
@@ -629,8 +629,8 @@ class CoolerOffsetTests(unittest.TestCase):
             def __init__(self):
                 self.VCoolDiv = 10000
                 self.VCoolOffset = 0
-                self.Vcool_init = 2.99
-                self.Laser_set = 18555.15
+                self.Vcool_init = 3.0
+                self.Laser_set = 20000.0
                 self.Size = 10
                 self.at_voltages = None
 
@@ -649,7 +649,7 @@ class CoolerOffsetTests(unittest.TestCase):
 
         fake = types.ModuleType("clstools")
         fake.CLSDataFrame = _D
-        base = {"mass": 70.0, "ref_freq": 1.1e15, "harmonic": 2,
+        base = {"mass": 100.0, "ref_freq": 1.2e15, "harmonic": 2,
                 "bin_mode": "Frequency", "cooler_correction": "pbp"}
         base.update(cfg)
         cal = mock.Mock()
@@ -663,14 +663,14 @@ class CoolerOffsetTests(unittest.TestCase):
         return data, meta
 
     def test_offset_rides_on_the_per_event_readback(self):
-        data, meta = self._prepare(cooler_offset_v=-24.42)
-        self.assertEqual(data.at_voltages, (10000, -24.42))
-        self.assertAlmostEqual(meta["cooler_v_effective"], 29900.0 - 24.42)
+        data, meta = self._prepare(cooler_offset_v=-20.0)
+        self.assertEqual(data.at_voltages, (10000, -20.0))
+        self.assertAlmostEqual(meta["cooler_v_effective"], 30000.0 - 20.0)
 
     def test_the_step_size_follows_the_offset(self):
-        data, _ = self._prepare(cooler_offset_v=-24.42)
-        self.assertAlmostEqual(data.stepsize_v, 29900.0 - 24.42, places=6)
-        self.assertAlmostEqual(data.Vcool_init, 2.99)    # put back
+        data, _ = self._prepare(cooler_offset_v=-20.0)
+        self.assertAlmostEqual(data.stepsize_v, 30000.0 - 20.0, places=6)
+        self.assertAlmostEqual(data.Vcool_init, 3.0)     # put back
 
     def test_the_source_preview_applies_the_offset(self):
         from gui.analysis import blocks
@@ -680,14 +680,14 @@ class CoolerOffsetTests(unittest.TestCase):
             pass
 
         class _D:
-            VCoolDiv, VCoolOffset, Vcool_init = 10000, 0, 2.99
+            VCoolDiv, VCoolOffset, Vcool_init = 10000, 0, 3.0
 
             def Compute_Voltages(self, cooler_correction="pbp"):
                 seen["v"] = (self.VCoolDiv, self.VCoolOffset)
                 raise _Stop
 
         sb = blocks.SourceBlock()
-        sb._cooler_offset.setValue(-24.42)
+        sb._cooler_offset.setValue(-20.0)
         fake = types.SimpleNamespace(CLSDataFrame=_D)
         with mock.patch.object(sb, "get_checked_files",
                                return_value=[{"path": "run_1.asdf"}]), \
@@ -696,13 +696,13 @@ class CoolerOffsetTests(unittest.TestCase):
                 mock.patch("gui.calibration.load_run_calibrated"), \
                 mock.patch.object(blocks, "QMessageBox"):
             sb._show_preview_at_index()
-        self.assertEqual(seen["v"], (10000, -24.42))
+        self.assertEqual(seen["v"], (10000, -20.0))
 
     def test_offset_on_an_override_stays_a_constant(self):
-        data, _ = self._prepare(cooler_offset_v=-24.42,
+        data, _ = self._prepare(cooler_offset_v=-20.0,
                                 override_enabled=True,
-                                cooler_override=29977.0)
-        self.assertEqual(data.at_voltages, (0, 29977.0 - 24.42))
+                                cooler_override=30100.0)
+        self.assertEqual(data.at_voltages, (0, 30100.0 - 20.0))
 
     def test_no_offset_changes_nothing(self):
         data, _ = self._prepare()

@@ -111,7 +111,7 @@ class ScanMissingPathsTests(unittest.TestCase):
 
     def test_merged_paths_ignored(self):
         d = _yaml(pa_files=[
-            {"path": "merged://run_7164_7165"},
+            {"path": "merged://run_1001_1002"},
             {"path": self.fake},
         ])
         self.assertEqual(scan_missing_paths(d), [self.fake])

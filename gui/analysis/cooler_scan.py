@@ -1,6 +1,6 @@
 """Walk a calibration project's fit across a grid of cooler offsets.
 
-The Yb calibration needs the same runs fitted many times over, each
+The Yb calibration needs every run fitted many times over, each
 time pretending the cooler sat at a slightly different voltage. Rather
 than a second fitting path, this drives the project's OWN fit -- the
 one the Run Fit button uses -- with ``_config_overrides["source"]``
@@ -13,8 +13,8 @@ One offset at a time, sequentially: each fit already runs its own runs
 in parallel across cores, and the results have to be attributed to the
 offset that produced them.
 
-File output is suppressed for the duration -- a 15-point scan over 5
-runs would otherwise write 75 reports, 75 plot sets and 75 CSVs that
+File output is suppressed for the duration -- an M-point scan over N
+runs would otherwise write N x M reports, plot sets and CSVs that
 nobody asked for. The fitted values live in memory; only the
 calibration's own summary is ever written.
 """
@@ -105,8 +105,8 @@ def _fitted_offset(project):
 def fit_point_problem(result, name, value, sigma):
     """Why one scan point cannot be trusted, or "".
 
-    Each of these produced numbers the calibration believed, on the Yb
-    data (review 3, 2026-10-08): a parameter pinned at its bound with a
+    Each of these can produce numbers the calibration would otherwise
+    believe: a parameter pinned at its bound with a
     tiny but non-zero error (so a near-infinite weight), a fit with no
     error bar, an optimiser that gave up but was reported a success.
     """
@@ -164,8 +164,8 @@ class CoolerScan(QObject):
         were fitted at, every fit seeded from its neighbours' answers --
         the systematic scan's continuation. Unseeded, a fit 30-50 V out
         starts hundreds of MHz from the peaks and lands on a bound or in
-        a wrong minimum: the Yb calibration came out at -3457 V that
-        way, -23.8 V seeded (review 3, 2026-10-08).
+        a wrong minimum, which can throw the calibration off by
+        kilovolts; seeded, it lands where it should.
         """
         from cls_estimations.systematics import order_outward
         if self.busy:
@@ -224,7 +224,7 @@ class CoolerScan(QObject):
         seeds = self._seed_map(project, dv)
         if seeds:
             project._config_overrides["model_configs_map"] = seeds
-        # No modal box in the middle of a 75-fit scan (project.py).
+        # No modal box in the middle of a many-fit scan (project.py).
         project._scan_driven = True
         try:
             project._on_fit_requested()

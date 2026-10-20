@@ -17,7 +17,7 @@ Source name:
     Run_<run_id>
 
     where ``<run_id>`` is the trailing token of the ASDF filename
-    (e.g. ``run_7164.asdf`` -> ``7164``) for standard runs, or
+    (e.g. ``run_1001.asdf`` -> ``1001``) for standard runs, or
     ``merged_data["merged_name"]`` for pre-merged spectra.
 
 Full parameter name:
@@ -97,7 +97,7 @@ def source_name_for_merged(merged_data: dict) -> str:
     """Source name for a pre-merged spectrum descriptor.
 
     User-edited merge labels often contain hyphens or other
-    non-identifier characters (e.g. ``merged-7164-7191``). Those
+    non-identifier characters (e.g. ``merged-1001-1002``). Those
     would crash lmfit's ``add_many`` later, so sanitize here at
     the single source of truth for source naming.
     """
@@ -110,16 +110,16 @@ def source_name_for_descriptor(desc: dict) -> str:
 
     Descriptor shape::
 
-        {"kind": "asdf",          "path": ".../run_7509.asdf"}
+        {"kind": "asdf",          "path": ".../run_1001.asdf"}
         {"kind": "merged",        "merged_data": {...}}
-        {"kind": "virtual_split", "source_id": "7509_A",
-                                  "parent_path": ".../run_7509.asdf"}
+        {"kind": "virtual_split", "source_id": "1001_A",
+                                  "parent_path": ".../run_1001.asdf"}
 
     The canonical ``source_id`` for a virtual split is the parent's
     run id with a short suffix (``_A``, ``_B``, ``_2``, ...), with no
     leading ``run_`` — this function prepends ``Run_`` itself, so a
-    ``source_id`` of ``7509_A`` becomes ``Run_7509_A``. Passing in
-    ``run_7509_A`` would produce the unwanted ``Run_run_7509_A``.
+    ``source_id`` of ``1001_A`` becomes ``Run_1001_A``. Passing in
+    ``run_1001_A`` would produce the unwanted ``Run_run_1001_A``.
     """
     kind = desc.get("kind", "asdf")
     if kind == "merged":

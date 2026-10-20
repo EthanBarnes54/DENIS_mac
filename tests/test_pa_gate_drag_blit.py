@@ -1,7 +1,7 @@
 """The ToF-gate drag must never leave the previous spectrum on screen.
 
-Arda (2026-09-27): "when I move the ToF window around, the spectrum plot
-doesn't update properly ... it shows the previous spectrum". The drag
+Moving the ToF window around once left the spectrum plot showing the
+previous spectrum instead of updating. The drag
 redraws only the spectrum line over a cached background (blitting). When
 the new counts left the y-view, the fast path rescaled and re-captured
 that background with the line still VISIBLE, so the old spectrum was

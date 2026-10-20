@@ -1,14 +1,14 @@
 """What an emcee (or likelihood) fit reports about itself.
 
-Found on run 7507 (2026-09-25): a Chi-square + emcee fit whose curve
-had a reduced chi-square of 1.72 reported 181134, with "# data points
-= 1". lmfit evaluates an emcee objective once at the medians, gets the
+The failure pinned here: a Chi-square + emcee fit whose curve has a
+reduced chi-square near 1 can report a huge one, with "# data
+points = 1". lmfit evaluates an emcee objective once at the medians, gets the
 summed log-likelihood as ONE number, and computes chisqr = (ln L)^2
 from it. A Poisson + emcee fit was recomputed from the residuals but
 divided by a dof taken from that "1 data point", so its reduced
 chi-square was the total chi-square.
 
-Also found: after the burn-in recompute the table held the burned-in
+Also pinned: after the burn-in recompute the table held the burned-in
 values while the models -- which every plotted curve, residual and
 chi-square is evaluated from -- still held satlas2's full-chain ones.
 
@@ -35,12 +35,12 @@ REPORT = """[[Fit Statistics]]
     # function evals   = 50000
     # data points      = 1
     # variables        = 8
-    chi-square         = 181134.581
-    reduced chi-square = 181134.581
-    Akaike info crit   = 28.1069956
-    Bayesian info crit = 12.1069956
+    chi-square         = 123456.789
+    reduced chi-square = 123456.789
+    Akaike info crit   = 30.0000000
+    Bayesian info crit = 14.0000000
 [[Variables]]
-    s___v___mu: 628.437 +/- 0.819
+    s___v___mu: 500.000 +/- 1.000
 """
 
 
@@ -88,20 +88,20 @@ class ResidualStatisticsTests(unittest.TestCase):
 
 class ReportRewriteTests(unittest.TestCase):
 
-    STATS = {"ndata": 502, "nvarys": 8, "nfree": 494, "chisqr": 851.2,
-             "redchi": 1.7231, "aic": 281.1, "bic": 314.8}
+    STATS = {"ndata": 500, "nvarys": 8, "nfree": 492, "chisqr": 738.0,
+             "redchi": 1.5, "aic": 280.0, "bic": 310.0}
 
     def test_the_numbers_are_replaced(self):
         out = _rewrite_fit_statistics(REPORT, self.STATS)
-        self.assertIn("# data points      = 502", out)
-        self.assertIn("reduced chi-square = 1.7231", out)
-        self.assertNotIn("181134", out)
+        self.assertIn("# data points      = 500", out)
+        self.assertIn("reduced chi-square = 1.5", out)
+        self.assertNotIn("123456", out)
 
     def test_everything_else_is_kept(self):
         out = _rewrite_fit_statistics(REPORT, self.STATS)
         self.assertIn("# fitting method   = emcee", out)
         self.assertIn("# variables        = 8", out)
-        self.assertIn("s___v___mu: 628.437 +/- 0.819", out)
+        self.assertIn("s___v___mu: 500.000 +/- 1.000", out)
         self.assertLess(out.index("[[Fit Statistics]]"),
                         out.index("[[Variables]]"))
 
@@ -190,7 +190,7 @@ class BurnInModelTests(unittest.TestCase):
 
 def _source_config():
     return {
-        "Z": 32, "A": 73, "mass": 72.923459, "harmonic": 2,
+        "Z": 50, "A": 115, "mass": 114.903345, "harmonic": 2,
         "e_lower": 0, "e_upper": 0, "tof_gate": [38.0, 44.0],
         "pmt_gate": [3, 4], "v_gate": None, "f_gate": None,
         "noise_filter": 0, "cooler_correction": "pbp",

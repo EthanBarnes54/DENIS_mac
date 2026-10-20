@@ -22,18 +22,26 @@ from cls_estimations.cooler_calibration import (  # noqa: E402
 )
 
 
-def _points(zero_171=-33.46, zero_173=-14.00):
+#: Synthetic isotope lines, ``(A - A_lit) = slope * (dV - zero)``.
+ZERO_171, SLOPE_171 = -30.0, -0.3
+ZERO_173, SLOPE_173 = -10.0, +0.1
+#: Where they cross: (b1 z1 - b2 z2) / (b1 - b2) = (9 + 1) / -0.4 = -25 V.
+CROSSING = ((SLOPE_171 * ZERO_171 - SLOPE_173 * ZERO_173)
+            / (SLOPE_171 - SLOPE_173))
+
+
+def _points(zero_171=ZERO_171, zero_173=ZERO_173):
     """Scan points whose isotope lines cross literature where asked."""
     a171, a173 = LITERATURE_A["171Yb"], LITERATURE_A["173Yb"]
     out = []
-    for run in ("7547", "7507"):
+    for run in ("1001", "1002"):
         for dv in (-50.0, -25.0, 0.0, 25.0, 50.0):
             out.append(ScanPoint(run, "171Yb", dv,
-                                 a171 - 0.21 * (dv - zero_171), 0.5))
-    for run in ("7502",):
+                                 a171 + SLOPE_171 * (dv - zero_171), 0.5))
+    for run in ("1003",):
         for dv in (-50.0, -25.0, 0.0, 25.0, 50.0):
             out.append(ScanPoint(run, "173Yb", dv,
-                                 a173 + 0.058 * (dv - zero_173), 0.1))
+                                 a173 + SLOPE_173 * (dv - zero_173), 0.1))
     return out
 
 
@@ -75,7 +83,7 @@ class ProjectTypeTests(unittest.TestCase):
         it must not appear in the Isotope Shifts table or in the GP's
         project lists."""
         at = self._tab()
-        at._add_project("70Ge")
+        at._add_project("112Sn")
         at._add_project("Yb_cal", is_calibration=True)
         ist = at._is_tab
         ist._refresh_projects()
@@ -110,7 +118,7 @@ class CalibrationTabTests(unittest.TestCase):
 
     def test_it_lists_the_calibration_projects_only(self):
         at, cal = self._tab()
-        at._add_project("70Ge")
+        at._add_project("112Sn")
         cal.refresh_projects()
         listed = [cal._proj_table.item(r, 1).text()
                   for r in range(cal._proj_table.rowCount())]
@@ -173,11 +181,12 @@ class CalibrationTabTests(unittest.TestCase):
         cal._points = _points()
         cal.compute()
         self.assertIsNotNone(cal._result)
-        self.assertAlmostEqual(cal._result.dv, -29.25, delta=0.1)
-        self.assertAlmostEqual(cal._result.scan_lo, -33.46, delta=0.05)
-        self.assertAlmostEqual(cal._result.scan_hi, -14.00, delta=0.05)
+        self.assertAlmostEqual(cal._result.dv, CROSSING, delta=0.1)
+        self.assertAlmostEqual(cal._result.scan_lo, ZERO_171, delta=0.05)
+        self.assertAlmostEqual(cal._result.scan_hi, ZERO_173, delta=0.05)
         # ...and it reaches the screen.
-        self.assertIn("-29.2", cal._result_label.text().replace("−", "-"))
+        self.assertIn(f"{CROSSING:+.2f}",
+                      cal._result_label.text().replace("−", "-"))
         self.assertEqual(cal._run_table.rowCount(), 3)   # 2 + 1 runs
         self.assertEqual(cal._sum_table.rowCount(), 2)   # 2 isotopes
         self.assertTrue(cal._apply_btn.isEnabled())
@@ -189,7 +198,7 @@ class CalibrationTabTests(unittest.TestCase):
         d = cal.plot_data()
         self.assertEqual([i["label"] for i in d["isotopes"]],
                          ["171Yb", "173Yb"])
-        self.assertAlmostEqual(d["dv"], -29.25, delta=0.1)
+        self.assertAlmostEqual(d["dv"], CROSSING, delta=0.1)
         self.assertEqual(len(d["isotopes"][0]["band"]), len(d["grid"]))
 
     def test_the_figure_renders(self):
@@ -217,8 +226,8 @@ class ApplyTests(unittest.TestCase):
         self.addCleanup(at.deleteLater)
         at._add_project("Yb171_cal", is_calibration=True)
         at._add_project("Yb173_cal", is_calibration=True)
-        sample = at._add_project("70Ge")
-        ref = at._add_project("74Ge", is_reference=True)
+        sample = at._add_project("112Sn")
+        ref = at._add_project("116Sn", is_reference=True)
         cal = at._cal_tab
         cal.refresh_projects()
         cal._points = _points()
@@ -238,8 +247,8 @@ class ApplyTests(unittest.TestCase):
         n = cal.apply_offset(cal._result.dv, [sample, ref])
         self.assertEqual(n, 2)
         # The field keeps millivolts. On a 30 kV beam that is a 3e-8
-        # relative effect, far below the ~1.7 V the calibration itself
-        # is uncertain by.
+        # relative effect, far below the volt-level uncertainty of the
+        # calibration itself.
         for p in (sample, ref):
             self.assertAlmostEqual(self._offset(p), cal._result.dv,
                                    places=3)
@@ -248,14 +257,14 @@ class ApplyTests(unittest.TestCase):
         """Enough that rounding never matters next to the
         calibration's own uncertainty."""
         _at, cal, sample, _ref = self._setup()
-        cal.apply_offset(-29.2485074626, [sample])
-        self.assertAlmostEqual(self._offset(sample), -29.249, places=6)
+        cal.apply_offset(-25.1234567891, [sample])
+        self.assertAlmostEqual(self._offset(sample), -25.123, places=6)
 
     def test_the_offset_then_travels_with_the_project(self):
         """It has to survive a save, or the analysis silently reverts
         to the uncalibrated frame."""
         _at, cal, sample, _ref = self._setup()
-        cal.apply_offset(-29.25, [sample])
+        cal.apply_offset(-25.25, [sample])
         cfg = sample.to_dict()
         from gui.analysis.blocks import SourceBlock
         src = next(b for b in sample._blocks
@@ -263,7 +272,7 @@ class ApplyTests(unittest.TestCase):
         blocks = cfg.get("blocks") or []
         saved = next(b for b in blocks
                      if b.get("type") == src.BLOCK_TYPE)
-        self.assertAlmostEqual(saved["cooler_offset_v"], -29.25,
+        self.assertAlmostEqual(saved["cooler_offset_v"], -25.25,
                                places=6)
 
     def test_the_calibration_projects_are_not_targets(self):
@@ -272,16 +281,16 @@ class ApplyTests(unittest.TestCase):
         _at, cal, _s, _r = self._setup()
         names = [p.project_name for p in cal._apply_targets()]
         self.assertNotIn("Yb171_cal", names)
-        self.assertIn("70Ge", names)
+        self.assertIn("112Sn", names)
 
     def test_applying_announces_itself(self):
         _at, cal, sample, _ref = self._setup()
         seen = []
         cal.calibration_applied.connect(
             lambda v, s: seen.append((v, s)))
-        cal.apply_offset(-29.25, [sample])
+        cal.apply_offset(-25.25, [sample])
         self.assertEqual(len(seen), 1)
-        self.assertAlmostEqual(seen[0][0], -29.25)
+        self.assertAlmostEqual(seen[0][0], -25.25)
 
 
 class PersistenceTests(unittest.TestCase):
@@ -297,7 +306,7 @@ class PersistenceTests(unittest.TestCase):
         return at, cal
 
     def test_a_round_trip_keeps_the_calibration(self):
-        """The scan is the expensive part -- 75 fits. Reopening a
+        """The scan is the expensive part -- runs x offsets fits. Reopening a
         session must not mean running it again."""
         _at, cal = self._tab()
         cal._dv_min.setValue(-40.0)

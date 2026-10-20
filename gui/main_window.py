@@ -17,7 +17,7 @@ gui.results_tab, and lazily gui.split_editor, gui.scan_filter,
 gui.missing_files, gui.manual.viewer, cls_estimations.plotting.
 """
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 import sys
 import os
@@ -749,10 +749,10 @@ class MainWindow(QMainWindow):
         pyarrow loads some 60 MB of native libraries -- arrow.dll
         alone is 22 MB. Left to the lazy import, that happens deep
         inside a session restore, after a dozen run files are already
-        in memory, and on Arda's machine it died there with an access
-        violation during the DLL load, taking DENIS with it
-        (2026-09-25; the stack is in his session log, pyarrow/__init__
-        called from _load_file). Here the window is already up and
+        in memory, and on a machine with a clashing arrow.dll it can
+        die there with an access violation during the DLL load, taking
+        DENIS with it (pyarrow/__init__ called from _load_file). Here
+        the window is already up and
         nothing has been read, so a failure costs a log line instead
         of a half-restored session.
 
@@ -1135,7 +1135,7 @@ class MainWindow(QMainWindow):
         # paths -- NOT the pruned dict the tabs are about to load. Until
         # 2026-10-05 the pruned dict was written: locating one file and
         # stopping wiped every other missing file from the session file
-        # for good (T01.yaml lost all its run lists that way).
+        # for good (a session could lose all its run lists that way).
         on_disk = copy.deepcopy(raw) if remap else None
         n_replaced = remap_paths_inplace(raw, remap)
         prune_missing_paths_inplace(raw, unresolved)
@@ -2486,8 +2486,8 @@ class SettingsDialog(QDialog):
 #: Library\bin, that directory is on the machine PATH, and a DLL base
 #: name is process-global on Windows -- whoever loads it first wins.
 #: With Anaconda's copy in first, `import pyarrow` dies at
-#: pyarrow/__init__.py line 71, which is where Arda's DENIS died every
-#: time he opened a session from the desktop shortcut (2026-09-25).
+#: pyarrow/__init__.py line 71, which is where DENIS died every time a
+#: session was opened from the desktop shortcut on such a machine.
 SHADOWING_DLLS = ("arrow.dll",)
 
 

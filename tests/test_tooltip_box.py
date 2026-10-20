@@ -1,11 +1,10 @@
 """Tooltips sit as a compact box by the pointer -- headers included.
 
-Arda (2026-09-27), on the ASDF viewer's column-header tooltip that ran
-across the screen: "make it square, do not make the single row and span
-wider area in the screen, confine them in a rectangular or square boxes
-around the mouse pointer". Column headers had bypassed the app's tooltip
-wrapper entirely (a header has no cells, so the item lookup found
-nothing); and wrapped tooltips had no width target.
+The ASDF viewer's column-header tooltip once ran across the screen
+as a single row; tooltips should instead be confined to a rectangular
+or square box around the mouse pointer. Column headers had bypassed
+the app's tooltip wrapper entirely (a header has no cells, so the item
+lookup found nothing); and wrapped tooltips had no width target.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_tooltip_box.py -q

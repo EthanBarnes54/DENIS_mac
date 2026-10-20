@@ -346,8 +346,8 @@ def _run_one_fit(sources_data, model_configs, perturbed_values,
         # Rank by what the fit minimised. Under a likelihood that is the
         # SUM of the per-point -ln L terms (priors included); lmfit's
         # chisqr is the sum of their SQUARES, which for counts above e
-        # puts a better Poisson fit below a worse one (review
-        # 2026-10-08: true optimum 5.76e7, a local one 4.19e7).
+        # can rank a better Poisson fit below a worse one: the true
+        # optimum may have a LARGER sum of squares than a local one.
         if fcfg.get("llh"):
             objective = float(_np.sum(fitter.result.residual))
             objective_name = "-ln L"

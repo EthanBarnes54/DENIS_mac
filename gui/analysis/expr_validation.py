@@ -161,8 +161,8 @@ def lower_model_expression(
 
     Example::
 
-        lower_model_expression('Al*0.5', 'Run_7164', 'HFS_1', {'Al', 'Au'})
-        -> 'Run_7164___HFS_1___Al * 0.5'
+        lower_model_expression('Al*0.5', 'Run_1001', 'HFS_1', {'Al', 'Au'})
+        -> 'Run_1001___HFS_1___Al * 0.5'
     """
     tree = ast.parse(expr, mode="eval")
     for node in ast.walk(tree):

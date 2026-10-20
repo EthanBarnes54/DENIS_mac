@@ -218,7 +218,7 @@ class BinningDialogTests(unittest.TestCase):
         self.assertTrue(t.item(2, 1).text().startswith("ERROR"))
 
     def test_detail_is_single_spectrum_panel(self):
-        """Per Arda: only the spectrum plot — occupancy and width
+        """Only the spectrum plot — occupancy and width
         health live in the title/warning strips, not extra panels."""
         dlg = self._cls(self.infos, [])
         dlg._tabs.setCurrentIndex(1)

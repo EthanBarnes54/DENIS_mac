@@ -24,13 +24,13 @@ from gui.csv_table_view import (  # noqa: E402
 
 
 def _params():
-    """Three runs of a parameters.csv, the shape Arda's are."""
+    """Three runs of a parameters.csv, in the shape DENIS writes them."""
     rows = []
-    for run, c, ce in ((7986, -265.5975, 3.690030056),
-                       (7996, -254.4764951, 3.757566601),
-                       (8004, -270.1, 2.5)):
+    for run, c, ce in ((1001, -250.1234567, 3.123456789),
+                       (1002, -240.9876543, 4.123456789),
+                       (1003, -260.5, 2.5)):
         for par, val, err in (("centroid", c, ce), ("Al", 0.0, 0.0),
-                              ("FWHMG", 110.5, 29.6), ("p0", 12.2, 0.61)):
+                              ("FWHMG", 100.0, 20.0), ("p0", 10.0, 0.5)):
             rows.append({"run_number": run, "Parameter": par,
                          "Value": val, "Error": err, "Vary": par != "Al",
                          "Model": "Model_1_bkg" if par == "p0"
@@ -48,10 +48,10 @@ def _shown(tv, col):
 class SortKeyTests(unittest.TestCase):
 
     def test_numbers_sort_as_numbers(self):
-        """A text sort puts '-265' after '10'."""
-        vals = ["10", "-265.5975", "3.69", "100000000"]
+        """A text sort puts '-250' after '10'."""
+        vals = ["10", "-250.5", "3.5", "100000000"]
         self.assertEqual(sorted(vals, key=sort_key),
-                         ["-265.5975", "3.69", "10", "100000000"])
+                         ["-250.5", "3.5", "10", "100000000"])
 
     def test_blanks_and_nan_go_last(self):
         vals = [float("nan"), 2.0, "nan", "", "abc", 1.0]
@@ -103,15 +103,15 @@ class FilterTests(unittest.TestCase):
     def test_the_checklist_filter(self):
         tv = self._view()
         c = tv.model.column_names().index("run_number")
-        tv.proxy.set_allowed(c, {"7996"})
-        self.assertEqual(set(_shown(tv, "run_number")), {"7996"})
+        tv.proxy.set_allowed(c, {"1002"})
+        self.assertEqual(set(_shown(tv, "run_number")), {"1002"})
         tv.proxy.set_allowed(c, None)
         self.assertEqual(tv.proxy.rowCount(), 12)
 
     def test_filters_combine(self):
         tv = self._view()
         c = tv.model.column_names().index("run_number")
-        tv.proxy.set_allowed(c, {"7986", "8004"})
+        tv.proxy.set_allowed(c, {"1001", "1003"})
         tv._quick.setText("centroid")
         self.assertEqual(tv.proxy.rowCount(), 2)
 
@@ -135,7 +135,7 @@ class SortTests(unittest.TestCase):
         tv._quick.setText("centroid")
         err = tv.model.column_names().index("Error")
         tv.view.sortByColumn(err, Qt.SortOrder.DescendingOrder)
-        self.assertEqual(_shown(tv, "run_number"), ["7996", "7986", "8004"])
+        self.assertEqual(_shown(tv, "run_number"), ["1002", "1001", "1003"])
 
     def test_a_negative_value_sorts_numerically(self):
         tv = CsvTableView()
@@ -145,7 +145,7 @@ class SortTests(unittest.TestCase):
         val = tv.model.column_names().index("Value")
         tv.view.sortByColumn(val, Qt.SortOrder.AscendingOrder)
         self.assertEqual(_shown(tv, "Value"),
-                         ["-270.1", "-265.5975", "-254.4764951"])
+                         ["-260.5", "-250.1234567", "-240.9876543"])
 
     def test_a_new_file_opens_in_file_order(self):
         tv = CsvTableView()
@@ -154,7 +154,7 @@ class SortTests(unittest.TestCase):
         tv.view.sortByColumn(3, Qt.SortOrder.DescendingOrder)
         tv.load(_params())
         self.assertEqual(tv.proxy.sortColumn(), -1)
-        self.assertEqual(_shown(tv, "run_number")[:4], ["7986"] * 4)
+        self.assertEqual(_shown(tv, "run_number")[:4], ["1001"] * 4)
 
 
 class ShadingTests(unittest.TestCase):
@@ -254,9 +254,9 @@ class ResultsTabWiringTests(unittest.TestCase):
         (code review 2026-06-02) -- what is copied matches the file."""
         tv = CsvTableView()
         self.addCleanup(tv.deleteLater)
-        tv.load(pd.DataFrame({"Error": [3.690030056123456]}))
+        tv.load(pd.DataFrame({"Error": [3.123456789123456]}))
         self.assertEqual(tv.proxy.data(tv.proxy.index(0, 0)),
-                         "3.690030056")
+                         "3.123456789")
 
 
 if __name__ == "__main__":

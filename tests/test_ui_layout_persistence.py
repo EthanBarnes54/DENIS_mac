@@ -306,25 +306,25 @@ class AnalysisPermanentTabsTests(unittest.TestCase):
     def test_both_appear_once_a_project_exists(self):
         t = self._tab()
         self.assertEqual(self._titles(t), [])
-        t._add_project("74Ge")
+        t._add_project("116Sn")
         self.assertEqual(self._titles(t)[-3:],
                          ["Isotope Shifts", "Reference Correction (GP)",
                           "Systematics"])
 
     def test_they_stay_to_the_right_of_new_projects(self):
         t = self._tab()
-        t._add_project("74Ge")
-        t._add_project("70Ge")
-        t._add_project("72Ge")
+        t._add_project("116Sn")
+        t._add_project("112Sn")
+        t._add_project("114Sn")
         titles = self._titles(t)
-        self.assertEqual(titles[:3], ["74Ge", "70Ge", "72Ge"])
+        self.assertEqual(titles[:3], ["116Sn", "112Sn", "114Sn"])
         self.assertEqual(titles[-3:],
                          ["Isotope Shifts", "Reference Correction (GP)",
                           "Systematics"])
 
     def test_neither_is_treated_as_a_project(self):
         t = self._tab()
-        proj = t._add_project("74Ge")
+        proj = t._add_project("116Sn")
         self.assertTrue(t._is_special_tab(t._is_tab))
         self.assertTrue(t._is_special_tab(t._gp_tab))
         self.assertFalse(t._is_special_tab(proj))
@@ -353,7 +353,7 @@ class AnalysisPermanentTabsTests(unittest.TestCase):
         from PySide6.QtWidgets import QMessageBox
 
         t = self._tab()
-        t._add_project("74Ge")
+        t._add_project("116Sn")
         self.assertEqual(len(self._titles(t)), 4)
 
         original = tabmod.QMessageBox.question

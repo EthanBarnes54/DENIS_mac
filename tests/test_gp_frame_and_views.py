@@ -1,8 +1,8 @@
 """Drift-free frame, GP-mode isotope shifts, GP plot views, IS layout.
 
-2026-09-22. Arda's T02 fits were never corrected at fit time -- all 29
-runs carry centroid_correction_applied = False -- and three readers
-assumed they had been:
+2026-09-22. Fits made without the fit-time correction carry
+centroid_correction_applied = False on every run, and three readers
+assumed they had been corrected:
 
 * the GP panel's "Corrected centroid" plot, which showed raw values;
 * Isotope Shifts in GP mode, which set the reference to 0 and took
@@ -75,9 +75,9 @@ def _real_gp():
             ReferenceCorrector, ReferenceObservation)
         obs = [ReferenceObservation(
             t=float(i), centroid=-150.0 + 2.0 * i, sigma=3.0,
-            label=f"74Ge/{7900 + i}") for i in range(8)]
+            label=f"116Sn/{1100 + i}") for i in range(8)]
         obs.insert(4, ReferenceObservation(
-            t=3.5, centroid=85.0, sigma=3.5, label="74Ge/7961",
+            t=3.5, centroid=100.0, sigma=3.5, label="116Sn/1199",
             include=False))
         rc = ReferenceCorrector(kernel="rbf", random_seed=0)
         rc.fit(obs)
@@ -160,17 +160,17 @@ class FrameCentroidTests(unittest.TestCase):
         self.assertEqual(rm, r["run_metadata"])
 
     def test_a_saved_exclusion_survives_reopening_the_file(self):
-        """The T02 case: saved as '74Ge_T02/run_7961.asdf' from an
-        in-session fit, matched against '74Ge_T02/7961' after the
-        results came back from disk."""
+        """Saved as '116Sn_A/run_1001.asdf' from an in-session fit,
+        matched against '116Sn_A/1001' after the results came back
+        from disk."""
         from gui.analysis.gp_frame import canonical_obs_key
-        for old in ("74Ge_T02/run_7961.asdf", "74Ge_T02/run_7961",
-                    "74Ge_T02/7961", "74Ge_T02/RUN-7961.ASDF"):
+        for old in ("116Sn_A/run_1001.asdf", "116Sn_A/run_1001",
+                    "116Sn_A/1001", "116Sn_A/RUN-1001.ASDF"):
             with self.subTest(old=old):
-                self.assertEqual(canonical_obs_key(old), "74Ge_T02/7961")
+                self.assertEqual(canonical_obs_key(old), "116Sn_A/1001")
         # A merged name is not a run file and is left alone.
-        self.assertEqual(canonical_obs_key("74Ge_T02/merged_1_2"),
-                         "74Ge_T02/merged_1_2")
+        self.assertEqual(canonical_obs_key("116Sn_A/merged_1_2"),
+                         "116Sn_A/merged_1_2")
 
     def test_the_exclusion_key_is_built_one_way_everywhere(self):
         """The GP panel keys exclusions on '<project>/<label>'. The
@@ -182,15 +182,15 @@ class FrameCentroidTests(unittest.TestCase):
         # fitted in session has one, the same run reloaded from disk
         # does not, and a file-based label changed across the reload.
         self.assertEqual(observation_label(
-            {"run_file": "C:/d/run_7961.asdf", "run_number": "7961"}),
-            "7961")
+            {"run_file": "C:/d/run_1001.asdf", "run_number": "1001"}),
+            "1001")
         self.assertEqual(observation_label(
-            {"run_file": "", "run_number": "7961"}), "7961")
+            {"run_file": "", "run_number": "1001"}), "1001")
 
         class _P:
-            project_name = "74Ge_T02"
-        self.assertEqual(observation_key(_P(), {"run_number": "7961"}),
-                         "74Ge_T02/7961")
+            project_name = "116Sn_A"
+        self.assertEqual(observation_key(_P(), {"run_number": "1001"}),
+                         "116Sn_A/1001")
         self.assertIn("observation_label", inspect.getsource(
             project.AnalysisProject.get_reference_observations))
 
@@ -213,7 +213,7 @@ class PostBinningShiftTests(unittest.TestCase):
 
         rng = np.random.default_rng(3)
         x = np.linspace(-600, 200, 161)
-        y = model(x, -181.1, 140.0, 60.0, 8.0)
+        y = model(x, -175.0, 140.0, 60.0, 8.0)
         y = y + rng.normal(0, np.sqrt(y))
         err = np.sqrt(np.maximum(y, 1.0))
         g = -150.0
@@ -238,25 +238,25 @@ class _ISFixture(unittest.TestCase):
         from gui.analysis.isotope_shift_tab import GP_REFERENCE
         at = AnalysisTab()
         self.addCleanup(at.deleteLater)
-        ref = at._add_project("74Ge", is_reference=True)
-        smp = at._add_project("70Ge")
+        ref = at._add_project("116Sn", is_reference=True)
+        smp = at._add_project("112Sn")
         ref._last_results = ref_results or [
-            _result(-150.0 + 2.0 * i, 3600.0 * i, run=str(7900 + i),
+            _result(-150.0 + 2.0 * i, 3600.0 * i, run=str(1100 + i),
                     err=2.0 + 0.1 * i) for i in range(8)]
         smp._last_results = sample_results
         ist = at._is_tab
         ist._ref_corr_panel._corrector = _real_gp()
         ist._refresh_projects()
         rows = {e.project_combo.currentText(): e for e in ist._entries}
-        for name, a in (("74Ge", 74), ("70Ge", 70)):
+        for name, a in (("116Sn", 116), ("112Sn", 112)):
             if name not in rows:
                 ist._add_row(project_name=name, label=name, A=a)
         rows = {e.project_combo.currentText(): e for e in ist._entries}
-        rows["74Ge"].ref_radio.setChecked(True)
-        rows["74Ge"].run_combo.setCurrentText(GP_REFERENCE)
+        rows["116Sn"].ref_radio.setChecked(True)
+        rows["116Sn"].run_combo.setCurrentText(GP_REFERENCE)
         for e in ist._entries:
             e.select_cb.setChecked(
-                e.project_combo.currentText() in ("74Ge", "70Ge"))
+                e.project_combo.currentText() in ("116Sn", "112Sn"))
         return ist, rows
 
 
@@ -270,31 +270,31 @@ class GPModeTests(_ISFixture):
         """A raw centroid beside a reference of 0 is how a 150 MHz
         error stayed invisible."""
         g = self._level(2.0)
-        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="7947")])
+        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="1001")])
         ist._update_centroids()
         self.assertAlmostEqual(
-            float(rows["70Ge"].centroid_item.text()), -85.0, places=3)
-        self.assertEqual(rows["74Ge"].centroid_item.text(), "0.0000")
+            float(rows["112Sn"].centroid_item.text()), -85.0, places=3)
+        self.assertEqual(rows["116Sn"].centroid_item.text(), "0.0000")
 
     def test_the_shift_is_taken_in_the_drift_free_frame(self):
         g = self._level(2.0)
-        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="7947")])
+        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="1001")])
         from unittest import mock
         with mock.patch("gui.analysis.isotope_shift_tab.QMessageBox"):
             ist._compute_shifts()
         by = {row["label"]: row for row in ist._last_shift_data}
-        self.assertAlmostEqual(by["70Ge"]["delta_nu"], -85.0, places=3)
+        self.assertAlmostEqual(by["112Sn"]["delta_nu"], -85.0, places=3)
 
     def test_the_shift_carries_the_gp_uncertainty(self):
         """On-the-fly runs join the propagation pools, so the shift's
         error is more than the fit error alone."""
         g = self._level(2.0)
-        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="7947",
+        ist, rows = self._tab([_result(g - 85.0, 3600.0 * 2.0, run="1001",
                                        err=3.0)])
         from unittest import mock
         with mock.patch("gui.analysis.isotope_shift_tab.QMessageBox"):
             ist._compute_shifts()
-        row = {r["label"]: r for r in ist._last_shift_data}["70Ge"]
+        row = {r["label"]: r for r in ist._last_shift_data}["112Sn"]
         # The GP term is kept out of the pure-statistics column by
         # design; it lands in sigma_correction and the total.
         self.assertGreater(row["sigma_correction"], 0.0)
@@ -303,17 +303,17 @@ class GPModeTests(_ISFixture):
         self.assertIn("GP applied here", ist._last_log)
 
     def test_a_run_corrected_at_fit_time_is_left_alone(self):
-        ist, rows = self._tab([_result(-85.0, 3600.0 * 2.0, run="7947",
+        ist, rows = self._tab([_result(-85.0, 3600.0 * 2.0, run="1001",
                                        applied=self._level(2.0))])
         ist._update_centroids()
         self.assertAlmostEqual(
-            float(rows["70Ge"].centroid_item.text()), -85.0, places=3)
+            float(rows["112Sn"].centroid_item.text()), -85.0, places=3)
 
     def test_without_a_fitted_gp_gp_mode_refuses(self):
         ist, rows = self._tab([_result(-230.0, 3600.0 * 2.0)])
         ist._ref_corr_panel._corrector = None
         ist._update_centroids()
-        self.assertEqual(rows["70Ge"].centroid_item.text(), "fit GP")
+        self.assertEqual(rows["112Sn"].centroid_item.text(), "fit GP")
         from unittest import mock
         with mock.patch(
                 "gui.analysis.isotope_shift_tab.QMessageBox") as mb:
@@ -325,27 +325,27 @@ class GPModeTests(_ISFixture):
         inflates the Birge ratio by exactly what the correction is
         there to remove."""
         runs = [_result(self._level(t) - 85.0 + d, 3600.0 * t,
-                        run=str(8000 + i), err=2.0)
+                        run=str(1000 + i), err=2.0)
                 for i, (t, d) in enumerate(((1.0, 0.5), (5.0, -0.5)))]
         ist, rows = self._tab(runs)
         ist._update_centroids()
         self.assertAlmostEqual(
-            float(rows["70Ge"].centroid_item.text()), -85.0, places=2)
+            float(rows["112Sn"].centroid_item.text()), -85.0, places=2)
 
     def test_changing_the_run_updates_the_cells_at_once(self):
         """Stepping through runs with the arrow keys showed each run's
         preview next to the previous run's numbers until Compute."""
-        runs = [_result(self._level(1.0) - 80.0, 3600.0 * 1.0, run="8001"),
-                _result(self._level(5.0) - 90.0, 3600.0 * 5.0, run="8002")]
+        runs = [_result(self._level(1.0) - 80.0, 3600.0 * 1.0, run="1001"),
+                _result(self._level(5.0) - 90.0, 3600.0 * 5.0, run="1002")]
         ist, rows = self._tab(runs)
-        combo = rows["70Ge"].run_combo
-        for run in ("8001", "8002"):
+        combo = rows["112Sn"].run_combo
+        for run in ("1001", "1002"):
             if combo.findText(run) < 0:
                 combo.addItem(run)
-        combo.setCurrentText("8001")
-        a = rows["70Ge"].centroid_item.text()
-        combo.setCurrentText("8002")
-        b = rows["70Ge"].centroid_item.text()
+        combo.setCurrentText("1001")
+        a = rows["112Sn"].centroid_item.text()
+        combo.setCurrentText("1002")
+        b = rows["112Sn"].centroid_item.text()
         self.assertAlmostEqual(float(a), -80.0, places=2)
         self.assertAlmostEqual(float(b), -90.0, places=2)
 
@@ -372,10 +372,10 @@ class GPModePlotTests(_ISFixture):
         and skip the axis -- an empty panel with 0..1 ticks."""
         g = float(_real_gp().predict_interval(2.0, 2.0)[0])
         ref = self._with_spectra([
-            _result(-150.0 + 2.0 * i, 3600.0 * i, run=str(7900 + i),
+            _result(-150.0 + 2.0 * i, 3600.0 * i, run=str(1100 + i),
                     err=2.0 + 0.1 * i) for i in range(8)])
         smp = self._with_spectra([_result(g - 85.0, 3600.0 * 2.0,
-                                          run="7947")])
+                                          run="1001")])
         ist, rows = self._tab(smp, ref_results=ref)
         fig = self._plot(ist)
         drawn = [ax for ax in fig.axes if ax.lines or ax.collections]
@@ -385,22 +385,22 @@ class GPModePlotTests(_ISFixture):
 
     def test_the_most_precise_reference_run_is_shown(self):
         from gui.analysis.isotope_shift_tab import IsotopeShiftTab
-        ref = [_result(-150.0, 3600.0 * i, run=str(7900 + i),
+        ref = [_result(-150.0, 3600.0 * i, run=str(1100 + i),
                        err=e) for i, e in enumerate((3.0, 1.5, 2.0))]
         ist, rows = self._tab([_result(-230.0, 3600.0)], ref_results=ref)
-        proj = ist._find_project("74Ge")
+        proj = ist._find_project("116Sn")
         best = IsotopeShiftTab._best_reference_run(ist, proj, ref)
-        self.assertEqual(best["run_number"], "7901")
+        self.assertEqual(best["run_number"], "1101")
 
     def test_an_excluded_run_is_never_the_one_shown(self):
         from gui.analysis.isotope_shift_tab import IsotopeShiftTab
-        ref = [_result(-150.0, 3600.0 * i, run=str(7900 + i), err=e)
+        ref = [_result(-150.0, 3600.0 * i, run=str(1100 + i), err=e)
                for i, e in enumerate((3.0, 1.5))]
         ist, rows = self._tab([_result(-230.0, 3600.0)], ref_results=ref)
-        ist._ref_corr_panel._excluded_obs = {"74Ge/7901"}
+        ist._ref_corr_panel._excluded_obs = {"116Sn/1101"}
         best = IsotopeShiftTab._best_reference_run(
-            ist, ist._find_project("74Ge"), ref)
-        self.assertEqual(best["run_number"], "7900")
+            ist, ist._find_project("116Sn"), ref)
+        self.assertEqual(best["run_number"], "1100")
 
 
 # ── GP panel views ────────────────────────────────────────────
@@ -417,14 +417,14 @@ class _PanelFixture(unittest.TestCase):
         from gui.analysis.reference_correction_panel import (
             ReferenceCorrectionPanel)
         rc = _real_gp()
-        ref = [_result(-150.0 + 2.0 * i, 3600.0 * i, run=str(7900 + i))
+        ref = [_result(-150.0 + 2.0 * i, 3600.0 * i, run=str(1100 + i))
                for i in range(8)]
-        ref.append(_result(85.0, 3600.0 * 3.5, run="7961", err=3.5))
+        ref.append(_result(100.0, 3600.0 * 3.5, run="1199", err=3.5))
         g = float(rc.predict_interval(2.0, 2.0)[0])
         stub = QWidget()
-        stub._projects = [self._P("74Ge", ref, is_ref=True),
-                          self._P("70Ge", [_result(g - 85, 3600.0 * 2.0,
-                                                   run="7947")])]
+        stub._projects = [self._P("116Sn", ref, is_ref=True),
+                          self._P("112Sn", [_result(g - 85, 3600.0 * 2.0,
+                                                    run="1001")])]
         panel = ReferenceCorrectionPanel(stub)
         self.addCleanup(panel.deleteLater)
         self.addCleanup(stub.deleteLater)
@@ -444,19 +444,19 @@ class CorrectedPanelViewTests(_PanelFixture):
         self.assertEqual(flat_zero, [])
 
     def test_the_reference_average_line(self):
-        panel = self._panel(excluded={"74Ge/7961"})
+        panel = self._panel(excluded={"116Sn/1199"})
         panel._show_ref_avg.setChecked(True)
         ax = panel._figure.axes[-1]
         labels = ax.get_legend_handles_labels()[1]
         avg = [lbl for lbl in labels if "weighted avg" in lbl]
         self.assertEqual(len(avg), 1)
-        self.assertIn("74Ge", avg[0])
+        self.assertIn("116Sn", avg[0])
 
     def test_an_excluded_run_stays_out_of_the_average(self):
-        """run 7961 sits ~230 MHz off. In the average it would drag the
-        line far from the reference's real level."""
+        """The excluded run sits ~240 MHz off. In the average it would
+        drag the line far from the reference's real level."""
         d_in = self._panel()._plot_data()
-        d_out = self._panel(excluded={"74Ge/7961"})._plot_data()
+        d_out = self._panel(excluded={"116Sn/1199"})._plot_data()
         self.assertGreater(abs(float(d_in["ref_avg"][0])
                                - float(d_out["ref_avg"][0])), 5.0)
 
@@ -475,16 +475,16 @@ class CorrectedPanelViewTests(_PanelFixture):
         return n
 
     def test_excluded_points_follow_the_toggle_in_the_corrected_panel(self):
-        panel = self._panel(excluded={"74Ge/7961"})
+        panel = self._panel(excluded={"116Sn/1199"})
         panel._render_diagnostic_plot()
         self.assertEqual(self._n_excluded_marks(panel._figure.axes[-1]), 1)
         panel._show_excluded.setChecked(False)
         self.assertEqual(self._n_excluded_marks(panel._figure.axes[-1]), 0)
         tips = [t for *_, t in panel._hover_points]
-        self.assertFalse(any("7961" in t for t in tips))
+        self.assertFalse(any("1199" in t for t in tips))
 
     def test_excluded_points_follow_the_toggle_in_the_residual_panel(self):
-        panel = self._panel(excluded={"74Ge/7961"})
+        panel = self._panel(excluded={"116Sn/1199"})
         panel._show_corrected.setChecked(False)
         panel._show_residuals.setChecked(True)
         self.assertEqual(self._n_excluded_marks(panel._figure.axes[1]), 1)
@@ -492,14 +492,15 @@ class CorrectedPanelViewTests(_PanelFixture):
         self.assertEqual(self._n_excluded_marks(panel._figure.axes[1]), 0)
 
     def test_an_excluded_outlier_does_not_set_the_scale(self):
-        """run_7961 is ~75 sigma off. Drawn as-is it put the residual
-        axis at +/-50 sigma and flattened every fitted point onto 0."""
-        panel = self._panel(excluded={"74Ge/7961"})
+        """The excluded run is tens of sigma off. Drawn as-is it put the
+        residual axis at +/-50 sigma and flattened every fitted point
+        onto 0."""
+        panel = self._panel(excluded={"116Sn/1199"})
         panel._show_corrected.setChecked(False)
         panel._show_residuals.setChecked(True)
         lo, hi = panel._figure.axes[1].get_ylim()
         self.assertLess(hi, 10.0)
-        tips = [t for *_, t in panel._hover_points if "7961" in t
+        tips = [t for *_, t in panel._hover_points if "1199" in t
                 and "residual" in t]
         self.assertTrue(tips and "off scale" in tips[0])
 
@@ -508,7 +509,7 @@ class CorrectedPanelViewTests(_PanelFixture):
         panel._render_diagnostic_plot()
         corr_ax = panel._figure.axes[-1]
         tips = [t for ax, _x, _y, t in panel._hover_points
-                if ax is corr_ax and "7947" in t]
+                if ax is corr_ax and "1001" in t]
         self.assertEqual(len(tips), 1)
         for word in ("original", "GP", "corrected"):
             self.assertIn(word, tips[0])
@@ -539,7 +540,7 @@ class SentFigureMatchesScreenTests(_PanelFixture):
         import tempfile
         from matplotlib.figure import Figure
         from gui.analysis import gp_figure
-        panel = self._panel(excluded={"74Ge/7961"})
+        panel = self._panel(excluded={"116Sn/1199"})
         panel._t_unit.setCurrentIndex(1)            # minutes
         panel._show_residuals.setChecked(True)
         d = panel._plot_data()
@@ -561,7 +562,7 @@ class SentFigureMatchesScreenTests(_PanelFixture):
         old = {"t_train": np.arange(3.0), "y_train": np.zeros(3),
                "yerr_train": np.ones(3), "t_grid": np.linspace(0, 2, 5),
                "mu": np.zeros(5), "sigma": np.ones(5),
-               "corr_labels": np.array(["74Ge"], dtype=object),
+               "corr_labels": np.array(["116Sn"], dtype=object),
                "corr_index": np.zeros(3, int), "corr_t": np.arange(3.0),
                "corr_y": np.zeros(3), "corr_yerr": np.ones(3),
                "xlabel": np.array("Timestamp [h] (since first measurement)")}
@@ -599,7 +600,7 @@ class ISLayoutTests(unittest.TestCase):
         self.assertGreater(ist._main_splitter.sizes()[1], 1000)
 
     def test_a_layout_restored_while_hidden_keeps_the_plot(self):
-        """The T02 case: [858, 1674] restored before the tab was ever
+        """A saved [858, 1674] restored before the tab was ever
         shown."""
         ist = self._tab()
         ist.apply_ui_layout({"main": [858, 1674]})

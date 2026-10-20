@@ -123,7 +123,7 @@ def type_text(value):
 
 def number_text(v):
     """15 significant figures: enough for a Unix timestamp's fraction of
-    a second (1778236192.93), without float noise (0.1, not
+    a second (1700000000.25), without float noise (0.1, not
     0.10000000000000001)."""
     if v is None:
         return ""

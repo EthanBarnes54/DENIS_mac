@@ -44,7 +44,7 @@ def _stub_source_config(**overrides):
         "pmt_gate": [3, 4],
         "v_gate": None,
         "f_gate": None,
-        "mass": 47.95,
+        "mass": 100.0,
         "ref_freq": 7.514e14,
         "harmonic": 2,
         "ref_shift": 0.0,
@@ -62,8 +62,8 @@ def _stub_source_config(**overrides):
 
 def _stub_file_entries(n=2):
     return [
-        {"path": f"/data/run_{7735 + i}.asdf",
-         "run_number": f"{7735 + i}",
+        {"path": f"/data/run_{1001 + i}.asdf",
+         "run_number": f"{1001 + i}",
          "binning_override": {}}
         for i in range(n)
     ]
@@ -105,7 +105,7 @@ class MergeDialogDomainTests(unittest.TestCase):
         dlg = MergeDialog(
             _stub_file_entries(),
             _stub_source_config(bin_mode="Frequency",
-                                 mass=47.95, ref_freq=7.5e14))
+                                 mass=100.0, ref_freq=7.5e14))
         self.assertEqual(dlg._domain_combo.currentText(), "frequency")
 
     def test_default_domain_auto_picks_voltage_when_physics_zero(self):
@@ -145,14 +145,14 @@ class MergeDialogMetadataTests(unittest.TestCase):
             _stub_file_entries(), _stub_source_config(),
             default_domain="voltage",
             default_merge_metadata={
-                "cooler_v": 29895.4,
-                "laser_sp": 15975.4150,
-                "mass_amu": 47.95,
+                "cooler_v": 30000.0,
+                "laser_sp": 20000.0,
+                "mass_amu": 100.0,
                 "harmonic": 2,
             })
-        self.assertAlmostEqual(dlg._merge_cooler.value(), 29895.4)
-        self.assertAlmostEqual(dlg._merge_laser.value(), 15975.4150)
-        self.assertAlmostEqual(dlg._merge_mass.value(), 47.95)
+        self.assertAlmostEqual(dlg._merge_cooler.value(), 30000.0)
+        self.assertAlmostEqual(dlg._merge_laser.value(), 20000.0)
+        self.assertAlmostEqual(dlg._merge_mass.value(), 100.0)
         self.assertEqual(dlg._merge_harmonic.value(), 2)
 
     def test_get_merge_params_returns_domain_and_metadata(self):
@@ -161,15 +161,15 @@ class MergeDialogMetadataTests(unittest.TestCase):
         dlg = MergeDialog(
             _stub_file_entries(), _stub_source_config(),
             default_domain="voltage",
-            default_merge_metadata={"cooler_v": 29895.4,
-                                      "laser_sp": 15975.4150,
-                                      "mass_amu": 47.95,
+            default_merge_metadata={"cooler_v": 30000.0,
+                                      "laser_sp": 20000.0,
+                                      "mass_amu": 100.0,
                                       "harmonic": 2})
         params = dlg._get_merge_params()
         self.assertEqual(params["domain"], "voltage")
         mm = params["merge_metadata"]
-        self.assertAlmostEqual(mm["cooler_v"], 29895.4)
-        self.assertAlmostEqual(mm["laser_sp"], 15975.4150)
+        self.assertAlmostEqual(mm["cooler_v"], 30000.0)
+        self.assertAlmostEqual(mm["laser_sp"], 20000.0)
         self.assertEqual(mm["harmonic"], 2)
 
     def test_zero_spin_becomes_none_in_merge_metadata(self):
@@ -211,9 +211,9 @@ class PopulateFromExistingTests(unittest.TestCase):
                 "cooler_correction": "pbp",
                 "centroid_correction": False,
                 "domain": "voltage",
-                "merge_metadata": {"cooler_v": 29895.4,
-                                    "laser_sp": 15975.4150,
-                                    "mass_amu": 47.95,
+                "merge_metadata": {"cooler_v": 30000.0,
+                                    "laser_sp": 20000.0,
+                                    "mass_amu": 100.0,
                                     "harmonic": 2},
             },
         }
@@ -221,7 +221,7 @@ class PopulateFromExistingTests(unittest.TestCase):
             _stub_file_entries(), _stub_source_config(),
             existing_result=existing)
         self.assertEqual(dlg._domain_combo.currentText(), "voltage")
-        self.assertAlmostEqual(dlg._merge_cooler.value(), 29895.4)
+        self.assertAlmostEqual(dlg._merge_cooler.value(), 30000.0)
         self.assertEqual(dlg._merge_harmonic.value(), 2)
 
     def test_pre_phase3_existing_merge_falls_back_to_x_unit(self):
@@ -304,14 +304,14 @@ class ComputeMergedSpectrumDomainTests(unittest.TestCase):
             data.Frequency_stepsize = 1.0
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             result = compute_merged_spectrum(
                 ["/data/run_a.asdf"],
                 _stub_source_config(bin_mode="Raw Voltage",
-                                     mass=47.95, ref_freq=7.5e14),
+                                     mass=100.0, ref_freq=7.5e14),
                 {"domain": "frequency"})
             # compute_binned must have been called with bin_mode
             # forced to "Frequency" -- otherwise we'd bin against
@@ -341,21 +341,21 @@ class ComputeMergedSpectrumDomainTests(unittest.TestCase):
             data.ToF_binned.values = np.array([[0]])
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             result = compute_merged_spectrum(
                 ["/data/run_a.asdf"],
                 _stub_source_config(bin_mode="Raw Voltage"),
                 {"domain": "voltage",
-                 "merge_metadata": {"cooler_v": 29895.4,
-                                     "laser_sp": 15975.4150,
-                                     "mass_amu": 47.95,
+                 "merge_metadata": {"cooler_v": 30000.0,
+                                     "laser_sp": 20000.0,
+                                     "mass_amu": 100.0,
                                      "harmonic": 2}})
             self.assertIn("merge_metadata", result)
             self.assertAlmostEqual(
-                result["merge_metadata"]["cooler_v"], 29895.4)
+                result["merge_metadata"]["cooler_v"], 30000.0)
             self.assertEqual(
                 result["merge_metadata"]["harmonic"], 2)
 

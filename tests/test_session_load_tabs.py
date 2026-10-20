@@ -83,9 +83,9 @@ class SessionLoadTabTests(unittest.TestCase):
 
     def test_loading_over_an_open_session_does_not_crash(self):
         w = self._window()
-        w._restore_analysis(_analysis(["74Ge", "70Ge"]))
+        w._restore_analysis(_analysis(["116Sn", "112Sn"]))
         _settle()
-        w._restore_analysis(_analysis(["74Ge", "70Ge"]))
+        w._restore_analysis(_analysis(["116Sn", "112Sn"]))
         self.assertEqual(self._titles(w.analysis_tab)[-3:],
                          ["Isotope Shifts", "Reference Correction (GP)",
                           "Systematics"])
@@ -96,9 +96,9 @@ class SessionLoadTabTests(unittest.TestCase):
         w = self._window()
         at = w.analysis_tab
         before = (at._is_tab, at._gp_tab, at._cal_tab, at._sys_tab)
-        w._restore_analysis(_analysis(["74Ge"]))
+        w._restore_analysis(_analysis(["116Sn"]))
         _settle()
-        w._restore_analysis(_analysis(["70Ge"]))
+        w._restore_analysis(_analysis(["112Sn"]))
         _settle()
         self.assertEqual((at._is_tab, at._gp_tab, at._cal_tab,
                           at._sys_tab), before)
@@ -107,9 +107,9 @@ class SessionLoadTabTests(unittest.TestCase):
         """The crash was re-adding a deleted C++ object, so touching
         the widget is the real check."""
         w = self._window()
-        w._restore_analysis(_analysis(["74Ge"]))
+        w._restore_analysis(_analysis(["116Sn"]))
         _settle()
-        w._restore_analysis(_analysis(["74Ge", "70Ge"]))
+        w._restore_analysis(_analysis(["116Sn", "112Sn"]))
         _settle()
         st = w.analysis_tab._sys_tab
         st.refresh_projects()
@@ -118,7 +118,7 @@ class SessionLoadTabTests(unittest.TestCase):
     def test_three_loads_in_a_row(self):
         w = self._window()
         for _ in range(3):
-            w._restore_analysis(_analysis(["74Ge", "70Ge"]))
+            w._restore_analysis(_analysis(["116Sn", "112Sn"]))
             _settle()
         self.assertEqual(len(w.analysis_tab._projects), 2)
 
@@ -140,20 +140,20 @@ class SessionLoadTabTests(unittest.TestCase):
         at = w.analysis_tab
         at._add_project("Yb171", is_calibration=True)
         _settle()
-        w._restore_analysis(_analysis(["70Ge"]))
+        w._restore_analysis(_analysis(["112Sn"]))
         _settle()
         self.assertFalse(at._cal_tab_visible)
         self.assertNotIn("Cooler Calibration", self._titles(at))
 
     def test_the_projects_themselves_are_replaced(self):
         w = self._window()
-        w._restore_analysis(_analysis(["74Ge", "70Ge"]))
+        w._restore_analysis(_analysis(["116Sn", "112Sn"]))
         _settle()
-        w._restore_analysis(_analysis(["72Ge"]))
+        w._restore_analysis(_analysis(["114Sn"]))
         _settle()
         self.assertEqual(
-            [p.project_name for p in w.analysis_tab._projects], ["72Ge"])
-        self.assertEqual(self._titles(w.analysis_tab)[0], "72Ge")
+            [p.project_name for p in w.analysis_tab._projects], ["114Sn"])
+        self.assertEqual(self._titles(w.analysis_tab)[0], "114Sn")
 
 
 if __name__ == "__main__":

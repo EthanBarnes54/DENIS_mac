@@ -105,20 +105,20 @@ class PreAnalysisCloseTests(unittest.TestCase):
         from gui.preanalysis_container import PreAnalysisContainer
         c = PreAnalysisContainer()
         self.addCleanup(c.deleteLater)
-        c._add_project("73Ge_T04")
-        c._add_project("76Ge_T04")
+        c._add_project("115Sn_b")
+        c._add_project("118Sn_b")
         before = c._project_tabs.count()
         with _yes():
             _close_button(c._project_tabs, before - 1).click()
         self.assertEqual(c._project_tabs.count(), before - 1)
-        self.assertNotIn("76Ge_T04", [c._project_tabs.tabText(i)
+        self.assertNotIn("118Sn_b", [c._project_tabs.tabText(i)
                                       for i in range(c._project_tabs.count())])
 
     def test_answering_no_keeps_it(self):
         from gui.preanalysis_container import PreAnalysisContainer
         c = PreAnalysisContainer()
         self.addCleanup(c.deleteLater)
-        c._add_project("73Ge_T04")
+        c._add_project("115Sn_b")
         before = c._project_tabs.count()
         with mock.patch.object(
                 QMessageBox, "question",
@@ -133,21 +133,21 @@ class AnalysisCloseTests(unittest.TestCase):
         from gui.analysis.tab import AnalysisTab
         at = AnalysisTab()
         self.addCleanup(at.deleteLater)
-        at._add_project("70Ge_T04")
-        at._add_project("72Ge_T04")
+        at._add_project("112Sn_b")
+        at._add_project("114Sn_b")
         tabs = at._project_tabs
         idx = next(i for i in range(tabs.count())
-                   if tabs.tabText(i).startswith("72Ge_T04"))
+                   if tabs.tabText(i).startswith("114Sn_b"))
         with _yes():
             _close_button(tabs, idx).click()
         names = [p.project_name for p in at._projects]
-        self.assertEqual(names, ["70Ge_T04"])
+        self.assertEqual(names, ["112Sn_b"])
 
     def test_the_permanent_tabs_still_have_no_x(self):
         from gui.analysis.tab import AnalysisTab
         at = AnalysisTab()
         self.addCleanup(at.deleteLater)
-        at._add_project("70Ge_T04")
+        at._add_project("112Sn_b")
         tabs = at._project_tabs
         for w in at._special_tabs():
             self.assertIsNone(_close_button(tabs, tabs.indexOf(w)))

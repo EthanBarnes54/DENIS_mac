@@ -6,8 +6,8 @@ are data (METHODS, STATISTICS) so a test can check that every entry of
 the Fitter block's combos is explained here -- a method added to the
 combo without a line in this guide fails that test.
 
-The advice comes from checks run on real DENIS fits (2026-09-25):
-Poisson + leastsq silently running SLSQP, the bias of data-based
+The advice comes from checks of DENIS fits: Poisson + leastsq
+silently running SLSQP, the bias of data-based
 errors at low counts, reported errors against the true scatter, and
 the effect of burn-in on emcee's error bars.
 """
@@ -68,9 +68,9 @@ METHODS = (
      "Sequential least-squares programming.",
      "Numerical estimate (see below).",
      "Medium",
-     "Not recommended for spectra: fitting a Yb hyperfine spectrum "
-     "with a likelihood, it reported success at a centroid of "
-     "10<sup>12</sup> MHz."),
+     "Not recommended for spectra: fitting a hyperfine spectrum with "
+     "a likelihood, it can report success with the centroid run off "
+     "to an absurd value."),
     ("emcee",
      "MCMC sampler: maps the whole posterior with an ensemble of "
      "walkers.",

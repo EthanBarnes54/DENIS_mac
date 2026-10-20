@@ -6,7 +6,7 @@ every frequency is slightly wrong -- including a hyperfine A constant,
 which is a frequency difference inside one spectrum. Two Yb isotopes
 whose A constants are known to sub-Hz therefore measure that offset.
 
-What this tab does, following the Yb II 369.42 nm calibration report:
+What this tab does (Yb II 369.42 nm line):
 
 * scans each Cooler Calibration project's own fit across a grid of
   assumed offsets (gui/analysis/cooler_scan.py), collecting A at each;
@@ -44,7 +44,7 @@ from cls_estimations.cooler_calibration import (
 )
 from gui.analysis.cooler_scan import CoolerScan
 
-#: Parameters worth calibrating on. A_l is the report's choice: the
+#: Parameters worth calibrating on. A_l is the default: the
 #: ground-state constant is the precisely known one.
 TRACKED = ("Al", "Au")
 
@@ -190,8 +190,8 @@ class CoolerCalibrationTab(QGroupBox):
         self._dv_steps.setValue(15)
         self._dv_steps.setToolTip(_wrap(
             "How many offsets to fit at. Every run is fitted once per "
-            "offset, so this multiplies the fitting time: 15 points "
-            "over 5 runs is 75 fits."))
+            "offset, so this multiplies the fitting time: 10 points "
+            "over 4 runs is 40 fits."))
         gl.addWidget(self._dv_steps)
         gl.addWidget(QLabel("points"))
         gl.addStretch()
@@ -201,7 +201,7 @@ class CoolerCalibrationTab(QGroupBox):
         self._param.setToolTip(_wrap(
             "Which fitted parameter is compared with literature. A_l "
             "(the lower/ground state constant) is the precisely known "
-            "one and what the calibration report uses."))
+            "one and the usual choice."))
         gl.addWidget(self._param)
         col.addWidget(grid_box)
 
@@ -245,7 +245,7 @@ class CoolerCalibrationTab(QGroupBox):
         self._common.setToolTip(_wrap(
             "The one offset every run is analysed at -- the numbers you "
             "quote. Intersection: where the two isotope lines cross "
-            "(the calibration report's choice). Middle: halfway "
+            "(the default). Middle: halfway "
             "between the two zero crossings. Weighted mean: the two "
             "zero crossings averaged by their errors; when they "
             "disagree its chi-square says by how much. Manual: type "
@@ -256,7 +256,7 @@ class CoolerCalibrationTab(QGroupBox):
         rl.addLayout(crow)
         mrow = QHBoxLayout()
         mrow.addWidget(QLabel("Manual value:"))
-        self._manual = self._spin(-25.0, -5000.0, 5000.0)
+        self._manual = self._spin(0.0, -5000.0, 5000.0)
         self._manual.setDecimals(3)
         self._manual.setSingleStep(0.5)
         self._manual.setSuffix(" V")
@@ -271,10 +271,9 @@ class CoolerCalibrationTab(QGroupBox):
             "Widen the range by each zero crossing's 1σ")
         self._widen.setToolTip(_wrap(
             "Move each end of the systematic range outward by its own "
-            "zero crossing's error -- the conservative envelope the Ge "
-            "analysis used (its -24.42 V is the middle of that "
-            "widened range). Off: the range is the two zero crossings "
-            "themselves."))
+            "zero crossing's error -- a conservative envelope whose "
+            "middle is a natural choice for the common offset. Off: "
+            "the range is the two zero crossings themselves."))
         self._widen.toggled.connect(self._on_common_changed)
         rl.addWidget(self._widen)
         self._result_label = QLabel("—")
@@ -1043,7 +1042,7 @@ class CoolerCalibrationTab(QGroupBox):
         self._common.setCurrentIndex(max(0, self._common.findData(
             str(d.get("common_method", DEFAULT_COMMON)))))
         try:
-            self._manual.setValue(float(d.get("manual_offset", -25.0)))
+            self._manual.setValue(float(d.get("manual_offset", 0.0)))
         except (TypeError, ValueError):
             pass
         self._widen.setChecked(bool(d.get("widen", False)))

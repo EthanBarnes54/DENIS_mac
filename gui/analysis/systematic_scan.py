@@ -622,7 +622,7 @@ class SystematicScan(QObject):
     def _restore_snapshot(self):
         """Put the analysis back as it was before the scan. Left at the
         farthest offset, the next normal fit of a sample was corrected
-        by that offset's GP (90 MHz for 100; at Ge scale +198 MHz), and
+        by that offset's GP (90 MHz for 100), and
         a save stored that GP as the session's (review 2, 2026-10-08)."""
         snap = getattr(self, "_snapshot", None)
         self._snapshot = None

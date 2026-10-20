@@ -124,8 +124,8 @@ _FITTER_EXPR_TOOLTIP_OK = (
     "Reference other parameters by their full lmfit name:\n"
     "    Run_<id>___<Model>___<param>\n\n"
     "Examples:\n"
-    "    Run_7164___HFS_1___centroid + 1250\n"
-    "    2 * Run_7164___HFS_1___FWHMG\n\n"
+    "    Run_1001___HFS_1___centroid + 1250\n"
+    "    2 * Run_1001___HFS_1___FWHMG\n\n"
     "Leave blank for no constraint on this target.\n"
     "Filled rows override Parameter Sharing and ModelBlock\n"
     "expressions for the same target."
@@ -151,9 +151,9 @@ _CONSTRAINTS_GRP_TOOLTIP = (
     "param triple in your fit). Type a full-name expression in\n"
     "a row's Expression cell to constrain that target. Empty\n"
     "rows are ignored.\n\n"
-    "Example: '2 * Run_7164___HFS_1___FWHMG' on the row for\n"
-    "Run_7191's HFS_1 / FWHMG makes 7191's gaussian width\n"
-    "twice 7164's at fit time.\n\n"
+    "Example: '2 * Run_1001___HFS_1___FWHMG' on the row for\n"
+    "Run_1002's HFS_1 / FWHMG makes 1002's gaussian width\n"
+    "twice 1001's at fit time.\n\n"
     "Constraints set here take precedence over Parameter\n"
     "Sharing and ModelBlock expressions for the same target."
 )
@@ -1163,7 +1163,7 @@ class BinningDialog(QDialog):
 
         # Plot: spectrum with bin edges (+ optional raw-event rug).
         # Occupancy and width health show as numbers/warnings above —
-        # per Arda, no extra panels.
+        # no extra panels.
         self._diag_fig.clear()
         if rug_on:
             axs = self._diag_fig.subplots(
@@ -2451,7 +2451,7 @@ class SourceBlock(AnalysisBlock):
             self._open_calibration_overview()
 
     def _edit_file_binning_override(self, entry):
-        # Splits show their source_id directly (e.g. "7509_A");
+        # Splits show their source_id directly (e.g. "1001_A");
         # plain runs get the conventional "run_" prefix.
         rn = entry.get("run_number", "?")
         run_label = (str(rn) if entry.get("is_split")
@@ -3121,7 +3121,7 @@ class SourceBlock(AnalysisBlock):
         This used to rebuild the dict by hand: it subtracted
         ``transition_mhz`` from a frequency merge that was already a
         detuning (~1.1e9 MHz off), dropped a voltage merge's calibrated
-        axis (tens of MHz on Ge data) and its calibration spread, and
+        axis (tens of MHz on real data) and its calibration spread, and
         used sqrt(y) errors (review 3, 2026-10-08). ``transition_mhz``
         now only converts a legacy absolute-x merge.
 
@@ -3875,7 +3875,7 @@ class SourceBlock(AnalysisBlock):
         for e in self._file_entries:
             # Merged entries round-trip through "merged_entries" below;
             # writing them here too caused a duplicate phantom file on
-            # reload (the loader parsed "merged://merged_7735_7740" as
+            # reload (the loader parsed "merged://merged_1001_1002" as
             # a run path and extracted the leading int).
             if e.get("is_merged"):
                 continue
@@ -5216,7 +5216,7 @@ class ModelBlock(AnalysisBlock):
         # above rebuilds them -- the params loop sets the spins with
         # signals blocked -- so the table still described the spin the
         # block was CREATED with: a saved 171Yb model (I=1/2, three
-        # lines) reloaded showing the default 21 Ge-like rows, and
+        # lines) reloaded showing the default 21 rows, and
         # every saved intensity was dropped because no label matched
         # (2026-09-25). Rebuilt only when the labels actually differ,
         # since rebuilding imports satlas2.
@@ -5344,7 +5344,7 @@ class FitterBlock(AnalysisBlock):
         # residual vector, so the combination is not a fit anyone asked
         # for -- satlas2 takes it and quietly runs SLSQP, which on a
         # hyperfine spectrum diverges to a nonsense centroid and draws
-        # the model off the data (Arda, 2026-09-25).
+        # the model off the data.
         # fitting.resolve_llh_method substitutes a scalar minimiser and
         # notes it in the report; this says so before the fit runs.
         self._llh_method_hint = QLabel()
@@ -5528,7 +5528,7 @@ class FitterBlock(AnalysisBlock):
         if _param_hdr is not None:
             _param_hdr.setToolTip(
                 "Full parameter name: Run_<id>___<Model>___<param>\n"
-                "Example: Run_7164___HFS_1___centroid")
+                "Example: Run_1001___HFS_1___centroid")
         self._priors_table.horizontalHeader().setStretchLastSection(True)
         self._priors_table.verticalHeader().setVisible(False)
         priors_lay.addWidget(self._priors_table)
@@ -5652,7 +5652,7 @@ class FitterBlock(AnalysisBlock):
         name_item = QTableWidgetItem("")
         name_item.setToolTip(
             "Full parameter name: Run_<id>___<Model>___<param>\n"
-            "Example: Run_7164___HFS_1___centroid\n"
+            "Example: Run_1001___HFS_1___centroid\n"
             "Names that don't match an existing parameter exactly are ignored.")
         self._priors_table.setItem(row, 0, name_item)
         val_spin = _make_analysis_spin(0.0, -1e12, 1e12, 4, 1.0)

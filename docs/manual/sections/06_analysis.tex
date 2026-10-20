@@ -199,8 +199,7 @@ constraints are ignored, with a pre-fit warning, in Separate mode).
 The walkers start in a tight ball at the Model block's values and
 need a while to spread over the posterior. \app{Burn-in} discards
 those first steps of every walker; keeping them widens the error
-bars --- by 10--40\,\% on a Yb spectrum, where the walkers settled
-after about 300 steps. Set it where the traces of the walk plot have
+bars, often by tens of per cent. Set it where the traces of the walk plot have
 settled (the plot marks it with a dashed line), typically 5--10
 autocorrelation times $\tau$, which the report lists under
 \code{[[Burn-in]]} once a burn-in is set; run enough steps for about

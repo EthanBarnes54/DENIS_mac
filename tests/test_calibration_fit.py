@@ -303,7 +303,7 @@ class ZeroInterceptTests(unittest.TestCase):
         try:
             set_v = np.linspace(10.0, 400.0, 21)
             read_v = 1.0007 * set_v + 5.0
-            path = os.path.join(tmp, "run_3003.asdf")
+            path = os.path.join(tmp, "run_1033.asdf")
             asdf.AsdfFile({"CalSet": set_v,
                            "CalReadback": read_v / VACC}).write_to(path)
             clear_points_cache()
@@ -699,7 +699,7 @@ class ApplyTests(unittest.TestCase):
         import asdf
         cls.tmp = tempfile.mkdtemp(prefix="cal_apply_")
         cls.set_v, cls.read_raw = make_table(seed=3)
-        cls.path = os.path.join(cls.tmp, "run_2002.asdf")
+        cls.path = os.path.join(cls.tmp, "run_1022.asdf")
         asdf.AsdfFile({"CalSet": cls.set_v,
                        "CalReadback": cls.read_raw}).write_to(cls.path)
 

@@ -23,8 +23,8 @@ import numpy as np
 from gui.analysis.binning import compute_binned
 from gui.analysis.pipeline import prepare_run_data
 
-MASS = 51.0
-LASER = 15975.02
+MASS = 100.0
+LASER = 20000.0
 HARMONIC = 2
 COOLER_KV = 3.0          # * VCoolDiv (10000) = 30 kV
 VCOOL_DIV = 10000.0
@@ -61,9 +61,9 @@ class CoolerOffsetTests(unittest.TestCase):
         # cooler voltage, so the divider chain must add nothing of its
         # own. (Readbacks are stored in monitor units, set/1000.)
         cal_set = np.linspace(0.0, 400.0, 21)
-        cls.path = os.path.join(cls.tmp, "run_9100.asdf")
+        cls.path = os.path.join(cls.tmp, "run_1100.asdf")
         asdf.AsdfFile({
-            "Run": 9100, "CoolerVoltage": COOLER_KV,
+            "Run": 1100, "CoolerVoltage": COOLER_KV,
             "LaserSetpoint": LASER, "DwellTime": 0.1, "Experiment": "Yb",
             "Date": "2026-09-24", "StepSize": 5.0,
             "ScanningRanges": [[0.0, 400.0]],
@@ -96,11 +96,11 @@ class CoolerOffsetTests(unittest.TestCase):
                                meta["cooler_v"], places=6)
 
     def test_the_offset_is_added_to_the_run_s_own_voltage(self):
-        _d, _cfg, meta = self._run(cooler_offset_v=-29.27)
+        _d, _cfg, meta = self._run(cooler_offset_v=-25.25)
         self.assertAlmostEqual(meta["cooler_v"], 30000.0, places=6)
         self.assertAlmostEqual(meta["cooler_v_effective"],
-                               30000.0 - 29.27, places=6)
-        self.assertEqual(meta["cooler_offset_v"], -29.27)
+                               30000.0 - 25.25, places=6)
+        self.assertEqual(meta["cooler_offset_v"], -25.25)
 
     def test_the_run_s_own_value_is_still_recorded_unchanged(self):
         """The audit trail has to say what the FILE held, not what the
@@ -182,16 +182,16 @@ class SourceBlockFieldTests(unittest.TestCase):
 
     def test_it_reaches_the_source_config(self):
         b = self._block()
-        b._cooler_offset.setValue(-29.27)
+        b._cooler_offset.setValue(-25.25)
         self.assertAlmostEqual(
-            b.get_source_config()["cooler_offset_v"], -29.27)
+            b.get_source_config()["cooler_offset_v"], -25.25)
 
     def test_it_round_trips_through_a_save(self):
         a = self._block()
-        a._cooler_offset.setValue(-29.27)
+        a._cooler_offset.setValue(-25.25)
         b = self._block()
         b.from_dict(a.to_dict())
-        self.assertAlmostEqual(b._cooler_offset.value(), -29.27)
+        self.assertAlmostEqual(b._cooler_offset.value(), -25.25)
 
     def test_an_older_save_loads_as_zero(self):
         b = self._block()
@@ -205,7 +205,7 @@ class SourceBlockFieldTests(unittest.TestCase):
         """Separate controls: the override REPLACES the voltage for
         every file, the offset MOVES each file's own."""
         b = self._block()
-        b._cooler_offset.setValue(-29.27)
+        b._cooler_offset.setValue(-25.25)
         cfg = b.get_source_config()
         self.assertFalse(cfg["override_enabled"])
         self.assertEqual(cfg["cooler_override"], 0.0)
@@ -238,8 +238,8 @@ class OffsetTagTests(unittest.TestCase):
         self.assertEqual(self.tag(-30.000), "_-30V_CO")
 
     def test_a_fractional_offset_survives(self):
-        """The calibration lands on -29.25, not a round number."""
-        self.assertEqual(self.tag(-29.25), "_-29.25V_CO")
+        """A calibration rarely lands on a round number."""
+        self.assertEqual(self.tag(-25.25), "_-25.25V_CO")
 
     def test_a_numeric_string_is_accepted(self):
         self.assertEqual(self.tag("-30"), "_-30V_CO")
@@ -252,7 +252,7 @@ class OffsetTagTests(unittest.TestCase):
 
     def test_it_is_a_legal_folder_name(self):
         bad = set(chr(c) for c in range(32)) | set('<>:"/|?*' + chr(92))
-        self.assertFalse(bad & set(self.tag(-29.25)))
+        self.assertFalse(bad & set(self.tag(-25.25)))
 
 
 class ResultsTagFromRunsTests(unittest.TestCase):
@@ -302,7 +302,7 @@ class IterationLabelTests(unittest.TestCase):
         sw.get_analysis_dir = lambda: self.dir
         self.addCleanup(setattr, sw, "get_analysis_dir", real)
 
-    def _project(self, name="70Ge"):
+    def _project(self, name="112Sn"):
         from gui.analysis.project import AnalysisProject
         p = AnalysisProject(name)
         self.addCleanup(p.deleteLater)
@@ -313,7 +313,7 @@ class IterationLabelTests(unittest.TestCase):
                    metadata_csv=False, fit_plots=False, tof_plots=False)
         cfg.update(out)
         project._save_results(
-            [{"success": True, "run_number": "7947", "run_file": "",
+            [{"success": True, "run_number": "1001", "run_file": "",
               "params_df": {}, "metadata_df": {}, "report": "r",
               "run_metadata": {"cooler_offset_v": offset}}], cfg)
         return sorted(os.listdir(os.path.join(self.dir, project._project_name)))
@@ -345,7 +345,7 @@ class IterationLabelTests(unittest.TestCase):
         p = self._project()
         for dv in (-30.0, -25.0, 0.0):
             self._save(p, dv)
-        iters = sorted(os.listdir(os.path.join(self.dir, "70Ge")))
+        iters = sorted(os.listdir(os.path.join(self.dir, "112Sn")))
         self.assertEqual(iters[-1], "iter_003")
 
 
@@ -382,13 +382,13 @@ class IterationAttributionTests(unittest.TestCase):
 
     def _make(self, *names):
         for n in names:
-            os.makedirs(os.path.join(self.dir, "70Ge", n), exist_ok=True)
+            os.makedirs(os.path.join(self.dir, "112Sn", n), exist_ok=True)
 
     def test_the_writer_names_the_iteration(self):
         self._make("sys_001_+12.5V_CO", "sys_001_-30V_CO")
         tab = self._results_tab()
         _p, name = tab.add_results(
-            "70Ge", [], {"iter_name": "sys_001_+12.5V_CO"})
+            "112Sn", [], {"iter_name": "sys_001_+12.5V_CO"})
         self.assertEqual(name, "sys_001_+12.5V_CO")
 
     def test_the_sign_trap(self):
@@ -396,34 +396,34 @@ class IterationAttributionTests(unittest.TestCase):
         filed this under the -30 V folder."""
         self._make("sys_001_+12.5V_CO", "sys_001_-30V_CO")
         tab = self._results_tab()
-        _p, guessed = tab.add_results("70Ge", [], {})
+        _p, guessed = tab.add_results("112Sn", [], {})
         _p, told = tab.add_results(
-            "70Ge", [], {"iter_name": "sys_001_+12.5V_CO"})
+            "112Sn", [], {"iter_name": "sys_001_+12.5V_CO"})
         self.assertEqual(guessed, "sys_001_-30V_CO")
         self.assertEqual(told, "sys_001_+12.5V_CO")
 
     def test_a_caller_that_says_nothing_still_works(self):
         self._make("iter_001", "iter_002")
         tab = self._results_tab()
-        _p, name = tab.add_results("70Ge", [], {})
+        _p, name = tab.add_results("112Sn", [], {})
         self.assertEqual(name, "iter_002")
 
     def test_the_directory_is_the_named_one(self):
         self._make("sys_001_+12.5V_CO", "sys_001_-30V_CO")
         tab = self._results_tab()
-        tab.add_results("70Ge", [], {"iter_name": "sys_001_+12.5V_CO"})
-        entry = tab._results_data["70Ge"]["sys_001_+12.5V_CO"]
+        tab.add_results("112Sn", [], {"iter_name": "sys_001_+12.5V_CO"})
+        entry = tab._results_data["112Sn"]["sys_001_+12.5V_CO"]
         self.assertTrue(entry["directory"].endswith("sys_001_+12.5V_CO"))
 
     def test_a_saved_fit_stamps_its_own_folder(self):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("70Ge")
+        p = AnalysisProject("112Sn")
         self.addCleanup(p.deleteLater)
         out = dict(iter_mode="Manual", iter_label="sys_001",
                    report=False, params_csv=False, metadata_csv=False,
                    fit_plots=False, tof_plots=False)
         p._save_results(
-            [{"success": True, "run_number": "7947", "run_file": "",
+            [{"success": True, "run_number": "1001", "run_file": "",
               "params_df": {}, "metadata_df": {}, "report": "r",
               "run_metadata": {"cooler_offset_v": 12.5}}], out)
         self.assertEqual(out["iter_name"], "sys_001_+12.5V_CO")

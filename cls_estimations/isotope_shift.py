@@ -366,9 +366,10 @@ def _correction_cov(corrector, t_a, t_b):
     Each argument holds either times (1-D; the GP at that instant) or
     (start, stop) spans (shape (n, 2); the GP averaged over the run,
     which is the correction a run actually gets). The isotope-shift tab
-    passes spans since 2026-10-08: propagating the GP at the run's start
-    gave 0.0014 MHz where the applied correction's sd was 4.53 MHz on a
-    run starting at a nearly noiseless reference point (review).
+    passes spans since 2026-10-08: for a run starting at a nearly
+    noiseless reference point, propagating the GP at the run's start
+    gives a negligible uncertainty where the applied correction's sd is
+    several MHz.
     """
     ta = np.asarray(t_a, dtype=float)
     tb = np.asarray(t_b, dtype=float)

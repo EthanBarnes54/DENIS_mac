@@ -45,9 +45,9 @@ class VoltageToFrequencyArrayTests(unittest.TestCase):
         from cls_estimations.constants import C_LIGHT
 
         v = np.array([-50.0, 0.0, 50.0])
-        cooler = 29895.4
-        laser = 15975.4150
-        mass = 47.95
+        cooler = 30000.0
+        laser = 20000.0
+        mass = 100.0
         harmonic = 2
         beam_v = np.clip(cooler - v, 1.0, None)
         nu_laser_mhz = laser * harmonic * C_LIGHT * 100.0 / 1e6
@@ -65,10 +65,10 @@ class VoltageToFrequencyArrayTests(unittest.TestCase):
 
         v = np.array([0.0])
         no_shift = voltage_to_frequency_array(
-            v, 29895.4, 15975.4150, 47.95, 2, ref_freq_hz=0.0)
-        ref_hz = 9.583e14
+            v, 30000.0, 20000.0, 100.0, 2, ref_freq_hz=0.0)
+        ref_hz = 1.2e15
         with_shift = voltage_to_frequency_array(
-            v, 29895.4, 15975.4150, 47.95, 2, ref_freq_hz=ref_hz)
+            v, 30000.0, 20000.0, 100.0, 2, ref_freq_hz=ref_hz)
         np.testing.assert_allclose(
             with_shift, no_shift - ref_hz / 1e6, rtol=1e-12)
 
@@ -83,9 +83,9 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
             "y": np.array([1.0, 5.0, 2.0]),
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [],
         }
@@ -117,11 +117,11 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
             "merge_metadata": {"cooler_v": None, "laser_sp": None,
                                 "mass_amu": None, "harmonic": None},
             "per_run": [
-                {"run_num": "a", "cooler_v": 29895.3,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "a", "cooler_v": 29999.9,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
-                {"run_num": "b", "cooler_v": 29895.5,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "b", "cooler_v": 30000.1,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
             ],
         }
@@ -160,16 +160,16 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
             "y": np.array([1.0]),
             "yerr": np.array([1.0]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [
-                {"run_num": "a", "cooler_v": 29893.0,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "a", "cooler_v": 29998.0,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
-                {"run_num": "b", "cooler_v": 29897.0,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "b", "cooler_v": 30002.0,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
             ],
         }
@@ -189,16 +189,16 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
             "y": np.array([1.0]),
             "yerr": np.array([1.0]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [
-                {"run_num": "a", "cooler_v": 29895.4,
-                 "laser_set": 15975.4140, "mass_amu": 47.95,
+                {"run_num": "a", "cooler_v": 30000.0,
+                 "laser_set": 19999.9990, "mass_amu": 100.0,
                  "harmonic": 2},
-                {"run_num": "b", "cooler_v": 29895.4,
-                 "laser_set": 15975.4160, "mass_amu": 47.95,
+                {"run_num": "b", "cooler_v": 30000.0,
+                 "laser_set": 20000.0010, "mass_amu": 100.0,
                  "harmonic": 2},
             ],
         }
@@ -208,7 +208,7 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
         self.assertIn("MERGE_LASER_SPREAD", codes)
 
     def test_close_sources_dont_warn(self):
-        """Reproduces the user's actual case: cooler 29895.3 vs 29895.5
+        """A typical merge: cooler 29999.9 vs 30000.1
         (0.2 V spread, below the 0.5 V tolerance) must NOT trigger a
         warning -- otherwise every normal merge gets noise."""
         from gui.analysis.merge import project_voltage_merge_to_frequency
@@ -219,16 +219,16 @@ class ProjectVoltageMergeToFrequencyTests(unittest.TestCase):
             "y": np.array([1.0]),
             "yerr": np.array([1.0]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [
-                {"run_num": "7735", "cooler_v": 29895.3,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "1001", "cooler_v": 29999.9,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
-                {"run_num": "7740", "cooler_v": 29895.5,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "1002", "cooler_v": 30000.1,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
             ],
         }
@@ -251,16 +251,16 @@ class AbsoluteDopplerReferenceTests(unittest.TestCase):
             C_LIGHT, AMU_TO_KG, E_CHARGE)
         import math
 
-        # Hand-computed: V=0, cooler=29895.4 V, laser=15975.4150 cm^-1,
-        # mass=47.95 amu, harmonic=2, anti-collinear.
-        cooler = 29895.4
-        laser_cm = 15975.4150
-        mass = 47.95
+        # Hand-computed: V=0, cooler=30000.0 V, laser=20000.0 cm^-1,
+        # mass=100.0 amu, harmonic=2, anti-collinear.
+        cooler = 30000.0
+        laser_cm = 20000.0
+        mass = 100.0
         harmonic = 2
 
         # nu_laser_seen_at_ion = harmonic * laser * c (in MHz)
         nu_laser_mhz = laser_cm * harmonic * C_LIGHT * 100.0 / 1e6
-        # beta from V=cooler-0=29895.4 V acceleration
+        # beta from V=cooler-0=30000.0 V acceleration
         beam_v = cooler  # because scan V = 0
         m = mass * AMU_TO_KG
         E0 = m * C_LIGHT ** 2
@@ -332,13 +332,13 @@ class ZeroPerRunValuesIgnoredTests(unittest.TestCase):
             "y": np.array([1.0]),
             "yerr": np.array([1.0]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [
-                {"run_num": "good", "cooler_v": 29895.3,
-                 "laser_set": 15975.4150, "mass_amu": 47.95,
+                {"run_num": "good", "cooler_v": 29999.9,
+                 "laser_set": 20000.0, "mass_amu": 100.0,
                  "harmonic": 2},
                 # Pathological entry from a missing-MassAMU ASDF:
                 {"run_num": "missing", "cooler_v": 0,
@@ -372,9 +372,9 @@ class AutoFitProjectionTests(unittest.TestCase):
             "y": np.array([1.0, 5.0, 2.0]),
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [],
         }
@@ -466,16 +466,16 @@ class MergeViewDialogPaImportedTests(unittest.TestCase):
             "y": np.array([1.0, 5.0, 2.0]),
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
-            "source_runs": ["7735", "7740"],
-            "source_files": ["/data/run_7735.asdf",
-                              "/data/run_7740.asdf"],
+            "source_runs": ["1001", "1002"],
+            "source_files": ["/data/run_1001.asdf",
+                              "/data/run_1002.asdf"],
             "per_run": [
-                {"run_num": "7735", "path": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_set": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
-                {"run_num": "7740", "path": "/data/run_7740.asdf",
-                 "cooler_v": 29895.5, "laser_set": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_num": "1001", "path": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_set": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
+                {"run_num": "1002", "path": "/data/run_1002.asdf",
+                 "cooler_v": 30000.1, "laser_set": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
             "bin_step_mhz": 0,
             "metadata": {"imported_from": "preanalysis",
@@ -512,9 +512,9 @@ class MergeViewDialogPaImportedTests(unittest.TestCase):
             "y": np.array([1.0, 5.0, 2.0]),
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [],
             "source_runs": ["a", "b"],
@@ -539,9 +539,9 @@ class MergeViewDialogPaImportedTests(unittest.TestCase):
             "y": np.array([1.0, 5.0, 2.0]),
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "per_run": [],
             "source_runs": ["a", "b"],

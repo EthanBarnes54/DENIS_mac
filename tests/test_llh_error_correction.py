@@ -4,8 +4,8 @@ For every minimiser except leastsq, least_squares and emcee, lmfit
 estimates the covariance as 2 x inverse(Hessian) of the minimised
 value -- exact for a chi-square (chi2 = -2 ln L). Under a likelihood
 satlas2 minimises -ln L, half a chi-square, so the error bars come out
-sqrt(2) too large. Arda's decision (2026-09-26): warn, and let the user
-correct it knowingly -- off by default, the report says which was done.
+sqrt(2) too large. DENIS warns, and lets the user correct it
+knowingly -- off by default, the report says which was done.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_llh_error_correction.py -q
@@ -102,7 +102,7 @@ class CorrectionTests(unittest.TestCase):
 # ── end to end, through DENIS's own worker ──────────────────────────
 def _source_config():
     return {
-        "Z": 32, "A": 73, "mass": 72.923459, "harmonic": 2,
+        "Z": 50, "A": 115, "mass": 114.903345, "harmonic": 2,
         "e_lower": 0, "e_upper": 0, "tof_gate": [38.0, 44.0],
         "pmt_gate": [3, 4], "v_gate": None, "f_gate": None,
         "noise_filter": 0, "cooler_correction": "pbp",

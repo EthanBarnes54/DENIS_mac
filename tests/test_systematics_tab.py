@@ -31,9 +31,9 @@ from gui.analysis.systematics_tab import (  # noqa: E402
     MODE_RANGE, SeedDialog, SystematicsTab, draw_systematics,
 )
 
-PROJECT = "70Ge_T02"
+PROJECT = "sample_A"
 MODEL = "HFS_1"
-SOURCES = ("Run_7947", "Run_7948")
+SOURCES = ("Run_1001", "Run_1002")
 
 
 class _StubProject:
@@ -63,7 +63,7 @@ def _baseline(value=-100.0, sigma=0.4):
         params[src] = {(MODEL, "centroid"): {
             "value": value + i, "sigma": sigma, "vary": True,
             "min": float("-inf"), "max": float("inf")}}
-        run_of_source[src] = f"794{7 + i}"
+        run_of_source[src] = f"100{1 + i}"
     return Baseline(params=params, run_of_source=run_of_source)
 
 
@@ -79,7 +79,7 @@ def _records(slope=-13.0, base=-100.0, offsets=(-30.0, -20.0, -10.0),
         out[float(dv)] = {
             "dv": float(dv), "status": "ok", "message": "",
             "values": values, "redchi": {}, "shifts": [],
-            "labels": {f"{PROJECT}|{src}": f"794{7 + i}"
+            "labels": {f"{PROJECT}|{src}": f"100{1 + i}"
                        for i, src in enumerate(SOURCES)},
             "iterations": {PROJECT: f"sys_001_{dv:+g}V_CO"}}
     return out
@@ -104,8 +104,8 @@ class TabSetupTests(unittest.TestCase):
         return tab
 
     def test_it_lists_the_projects(self):
-        tab = self._tab([_StubProject("74Ge", reference=True),
-                         _StubProject("70Ge")])
+        tab = self._tab([_StubProject("116Sn", reference=True),
+                         _StubProject("112Sn")])
         self.assertEqual(tab._proj_table.rowCount(), 2)
         self.assertEqual(tab._proj_table.item(0, 2).text(), "reference")
         self.assertEqual(tab._proj_table.item(1, 2).text(), "sample")
@@ -113,40 +113,40 @@ class TabSetupTests(unittest.TestCase):
     def test_calibration_projects_are_not_scanned(self):
         """They measure the offset; they are not corrected by it."""
         tab = self._tab([_StubProject("Yb171", calibration=True),
-                         _StubProject("70Ge")])
+                         _StubProject("112Sn")])
         self.assertEqual(
             [tab._proj_table.item(r, 1).text()
-             for r in range(tab._proj_table.rowCount())], ["70Ge"])
+             for r in range(tab._proj_table.rowCount())], ["112Sn"])
 
     def test_the_offsets_come_from_the_range(self):
-        tab = self._tab([_StubProject("70Ge")])
+        tab = self._tab([_StubProject("112Sn")])
         tab._dv_min.setValue(-30.0)
         tab._dv_max.setValue(-10.0)
         tab._steps.setValue(5)
         self.assertEqual(tab.offsets(), [-30.0, -25.0, -20.0, -15.0, -10.0])
 
     def test_the_range_is_shown_before_it_is_run(self):
-        tab = self._tab([_StubProject("70Ge")])
+        tab = self._tab([_StubProject("112Sn")])
         tab._dv_min.setValue(-30.0)
         tab._dv_max.setValue(-10.0)
         tab._steps.setValue(3)
         self.assertIn("-30.00", tab._offsets_label.text())
 
     def test_only_ticked_projects_are_targets(self):
-        tab = self._tab([_StubProject("74Ge", reference=True),
-                         _StubProject("70Ge")])
+        tab = self._tab([_StubProject("116Sn", reference=True),
+                         _StubProject("112Sn")])
         tab._proj_table.cellWidget(0, 0).setChecked(False)
         self.assertEqual([t.name for t in tab._selected_targets()],
-                         ["70Ge"])
+                         ["112Sn"])
 
     def test_the_reference_keeps_its_role(self):
-        tab = self._tab([_StubProject("74Ge", reference=True)])
+        tab = self._tab([_StubProject("116Sn", reference=True)])
         self.assertTrue(tab._selected_targets()[0].is_reference)
 
     def test_refreshing_does_not_pile_up_cell_widgets(self):
         """Replacing a cell widget leaves the old one parented to the
         viewport, painting at its old geometry."""
-        tab = self._tab([_StubProject("70Ge"), _StubProject("72Ge")])
+        tab = self._tab([_StubProject("112Sn"), _StubProject("114Sn")])
         for _ in range(4):
             tab.refresh_projects()
         from PySide6.QtWidgets import QCheckBox, QComboBox
@@ -367,10 +367,10 @@ class SeedDialogTests(unittest.TestCase):
     def test_it_can_target_one_run(self):
         """Usually only one run misbehaves at the end of the range."""
         dlg = self._dlg()
-        dlg._src.setCurrentText("Run_7948")
+        dlg._src.setCurrentText("Run_1002")
         dlg._table.item(0, 3).setText("390")
         dlg._harvest()
-        self.assertIn(value_key(PROJECT, "Run_7948", MODEL, "centroid"),
+        self.assertIn(value_key(PROJECT, "Run_1002", MODEL, "centroid"),
                       dlg.overrides)
 
     def test_bounds_can_be_widened_for_one_step(self):
@@ -392,7 +392,7 @@ class SeedDialogTests(unittest.TestCase):
     def test_it_shows_what_the_baseline_fitted(self):
         """So the user can see what they are overriding."""
         dlg = self._dlg()
-        dlg._src.setCurrentText("Run_7947")
+        dlg._src.setCurrentText("Run_1001")
         self.assertEqual(dlg._table.item(0, 2).text(), "-100")
 
     def test_runs_that_disagree_say_so(self):
@@ -431,7 +431,7 @@ class PersistenceTests(unittest.TestCase):
         a._seed_overrides = {-30.0: {
             value_key(PROJECT, "", MODEL, "centroid"): {"value": 390.0}}}
         a._step_methods = {-30.0: "nelder"}
-        a._dv_min.setValue(-33.46)
+        a._dv_min.setValue(-35.0)
         a._definition.setCurrentText(STD_DEV)
         b = self._tab()
         b._baselines[PROJECT] = _baseline()
@@ -459,7 +459,7 @@ class PersistenceTests(unittest.TestCase):
 
     def test_the_settings_come_back(self):
         _a, b = self._loaded()
-        self.assertAlmostEqual(b._dv_min.value(), -33.46)
+        self.assertAlmostEqual(b._dv_min.value(), -35.0)
         self.assertEqual(b._definition.currentText(), STD_DEV)
 
     def test_an_empty_save_changes_nothing(self):
@@ -608,18 +608,18 @@ class EndToEndTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.p = _LiveProject("70Ge", slope=-13.0, base=100.0)
+        self.p = _LiveProject("112Sn", slope=-13.0, base=100.0)
         self.addCleanup(self.p.deleteLater)
         self.tab = _range_tab(_StubAnalysisTab([self.p]))
         self.addCleanup(self.tab.deleteLater)
-        self.tab._baselines["70Ge"] = _baseline(value=100.0 + 13.0 * 20.0)
-        self.tab._plot_project.addItem("70Ge")
-        self.tab._plot_project.setCurrentText("70Ge")
+        self.tab._baselines["112Sn"] = _baseline(value=100.0 + 13.0 * 20.0)
+        self.tab._plot_project.addItem("112Sn")
+        self.tab._plot_project.setCurrentText("112Sn")
 
     def _run(self, offsets=(-30.0, -25.0, -20.0, -15.0, -10.0)):
         from gui.analysis.systematic_scan import ScanTarget
         targets = [ScanTarget(project=self.p, role="sample",
-                              baseline=self.tab._baselines["70Ge"])]
+                              baseline=self.tab._baselines["112Sn"])]
         loop = QEventLoop()
         self.tab._scan.finished.connect(lambda *_a: loop.quit())
         self.tab._scan.failed.connect(lambda *_a: loop.quit())
@@ -666,8 +666,8 @@ class EndToEndTests(unittest.TestCase):
         self.tab._scan.progress.connect(
             lambda d, t, what: seen.append(what))
         self._run()
-        offsets = [w for w in seen if w.startswith("70Ge @")]
-        self.assertEqual(offsets[0], "70Ge @ -20.00 V")
+        offsets = [w for w in seen if w.startswith("112Sn @")]
+        self.assertEqual(offsets[0], "112Sn @ -20.00 V")
 
 
 if __name__ == "__main__":

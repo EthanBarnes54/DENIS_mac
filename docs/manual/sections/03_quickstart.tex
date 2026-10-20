@@ -42,18 +42,6 @@ spectroscopic efficiency. Mark one isotope as the
 MHz) are used to scale the constants of the others via
 nuclear-moment ratios.
 
-\begin{figure}[hbtp]
-    \centering
-    \includegraphics[width=0.95\textwidth]{fig_quickstart_estimate_tab.png}
-    \caption{\app{Estimate} tab with the global parameters
-        (\app{Element \& Transition}, \app{Beam}, \app{Laser},
-        \app{Linewidth}, \app{Scan}) filled in for a vanadium chain,
-        and the first isotope panel (\textsuperscript{51}V, marked
-        \app{Reference}) expanded to show the per-isotope inputs and
-        an explicit $A$/$B$ override.}
-    \label{fig:quickstart_estimate_tab}
-\end{figure}
-
 When the form is complete, click \app{Run Estimation} (right
 column). The calculation streams into the log at the bottom of that
 column: per-peak signal rates, the on-peak time needed for the
@@ -63,26 +51,6 @@ shows the simulated spectrum for each isotope on the requested scan
 range; its \app{View} drop-down includes a sortable \app{Peak List}
 of every hyperfine component, and the log prints the peaks sorted
 both by intensity and by voltage.
-
-\begin{figure}[hbtp]
-    \centering
-    \begin{subfigure}{0.95\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{fig_quickstart_estimate_run.png}
-        \caption{The run log. The header summarises the
-            inputs; the body lists each hyperfine peak with offset,
-            voltage, and intensity.}
-    \end{subfigure}\\[8pt]
-    \begin{subfigure}{0.95\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{fig_quickstart_estimate_plots.png}
-        \caption{The plot panel. Each isotope gets its own
-            simulated voltage spectrum on the requested scan range;
-            dashed lines mark the individual hyperfine peaks.}
-    \end{subfigure}
-    \caption{\app{Estimate} output after a successful run.}
-    \label{fig:quickstart_estimate_output}
-\end{figure}
 
 \subsection{Pre-analysing measured data}
 
@@ -106,19 +74,6 @@ column and set the centroid, linewidths, and $A$ / $B$ constants;
 the model curve updates live on top of the data. Iterate until the
 trial line positions sit close to the visible peaks --- this gives a
 clean seed for the fitter.
-
-\begin{figure}[hbtp]
-    \centering
-    \includegraphics[width=0.98\textwidth]{fig_quickstart_preanalysis.png}
-    \caption{\app{Pre-Analysis} tab with one rhodium run loaded.
-        Top centre: the time-of-flight spectrum with the gate
-        highlighted in orange. Centre: the binned spectrum (blue
-        data) with two HFS models overlaid (green ground state,
-        purple isomer) on the right-panel parameters. Left: file
-        list and binning controls; right: the HFS model parameter
-        editor.}
-    \label{fig:quickstart_preanalysis}
-\end{figure}
 
 \subsection{Building an analysis project}
 
@@ -146,19 +101,6 @@ the left of each block to reorder):
         correlations, $\chi^2$ map).
 \end{enumerate}
 
-\begin{figure}[hbtp]
-    \centering
-    \includegraphics[width=0.98\textwidth]{fig_quickstart_analysis_pipeline.png}
-    \caption{An \app{Analysis} project (here, an \textsuperscript{209}Bi
-        fit) showing the four-block pipeline from left to right:
-        \app{Source} (file selection, physics parameters, ToF and
-        binning), \app{Model} (HFS settings, parameter table with
-        per-parameter modes, peak amplitudes), \app{Fitter} (method,
-        statistics, execution controls), and \app{Output} (which
-        reports, plots, and diagnostics to produce).}
-    \label{fig:quickstart_analysis_pipeline}
-\end{figure}
-
 If the initial parameter guess is too far from the global minimum,
 click \app{Find Parameters} on the \app{Fitter} block. The
 Auto-Fitter runs a multi-start parallel \code{leastsq} sweep, lets
@@ -179,19 +121,6 @@ styling (line widths, fonts, colours, axis limits); \app{Export}
 saves the plot in PNG, PDF, or SVG. Style adjustments are written
 next to the plot data as a \code{.style.json} so they survive
 re-loading the project.
-
-\begin{figure}[hbtp]
-    \centering
-    \includegraphics[width=0.98\textwidth]{fig_quickstart_results_fit.png}
-    \caption{\app{Results} tab after a completed
-        \textsuperscript{209}Bi fit. Left: the project tree, with
-        per-iteration sub-folders containing the fit report,
-        parameters, metadata, and plot data. Right: the selected
-        plot (data, model, residuals in $\sigma$) with the
-        matplotlib navigation toolbar above and \app{Edit Plot} /
-        \app{Export} controls along the bottom (not shown).}
-    \label{fig:quickstart_results_fit}
-\end{figure}
 
 \subsection{Combining isotopes (isotope shifts)}
 

@@ -549,8 +549,8 @@ QLabel#sectionNote { color: %(text_dim)s; }
 
 
 # ── "Classic 98 (dark)" theme ────────────────────────────────────────────
-# Windows-98 STRUCTURE, dark COLORS (per Arda: "classic dark look like
-# 98 look but dark, sharp corners, pixelated fonts"). Charcoal chrome
+# Windows-98 STRUCTURE, dark COLORS (the classic 98 look but dark, sharp
+# corners, pixelated fonts). Charcoal chrome
 # with explicit two-tone 3D bevels (light top-left / near-black
 # bottom-right, inverted for sunken fields), navy #000080 selection,
 # the iconic buttermilk #ffffe1 tooltip, no rounded corner anywhere,

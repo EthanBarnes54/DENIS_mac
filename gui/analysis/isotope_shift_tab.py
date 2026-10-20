@@ -520,8 +520,8 @@ class IsotopeShiftTab(QWidget):
             "isotopes.",
             "How long the run acquired for. The reference estimate "
             "is the GP averaged over this whole window, not its "
-            "value at the start: on a 33-minute run those differ by "
-            "4.4 MHz.",
+            "value at the start: on a run of tens of minutes they can "
+            "differ by several MHz.",
             "Share this run carries in the combination. For a merged "
             "spectrum it is the run's fraction of the total counts, "
             "because the merged peak position is itself a "
@@ -1234,7 +1234,7 @@ class IsotopeShiftTab(QWidget):
 
         # A sample row in GP mode is shown corrected, because that is
         # the number the shift is taken from. A raw centroid beside a
-        # reference of 0 is how a 150 MHz error stayed invisible.
+        # reference of 0 would hide a large error from the reader.
         rc = self._gp_corrector() if gp_mode else None
         if gp_mode and rc is None:
             return "fit GP", "--", (
@@ -2476,7 +2476,7 @@ class IsotopeShiftTab(QWidget):
                     mid = tuple(saved_label)
                 # Label the arrow with the isotope shift, its total
                 # uncertainty in concise value(err) notation, AND the
-                # unit \u2014 e.g. "\u03b4\u03bd = -136.5(14) MHz".
+                # unit \u2014 e.g. "\u03b4\u03bd = -123.4(12) MHz".
                 if f"istext:{aid}" not in _removed:
                     from gui.analysis.helpers import format_value_error
                     _dnu_err = sd.get("sigma_delta_nu")
@@ -2627,7 +2627,7 @@ class IsotopeShiftTab(QWidget):
             """A combo / spin box column is as wide as a real one of
             its kind needs, in this font and this stylesheet -- the
             drop-down arrow and frame differ per theme, and a fixed
-            pad under-sized them in the Win98 theme ('74Ge_T0')."""
+            pad under-sized them in the Win98 theme ('116Sn_A1')."""
             widget.setFont(self._iso_table.font())
             w = widget.sizeHint().width() + 6
             widget.deleteLater()
@@ -2643,7 +2643,7 @@ class IsotopeShiftTab(QWidget):
 
         at = getattr(self, "_analysis_tab", None)
         names = [p.project_name for p in
-                 (getattr(at, "_projects", []) or [])] or ["76Ge_T02"]
+                 (getattr(at, "_projects", []) or [])] or ["118Sn_A1"]
         spin = QSpinBox()
         spin.setRange(1, 300)
         spin.setValue(299)
@@ -2651,7 +2651,7 @@ class IsotopeShiftTab(QWidget):
         _widths = [
             _col_w("Use", "", pad=14),
             _widget_w(_combo(names), "Project"),
-            _col_w("Isotope", max(names + ["76Ge"], key=len)),
+            _col_w("Isotope", max(names + ["118Sn"], key=len)),
             _widget_w(spin, "A"),
             # Wide enough to READ the selection: a combo showing
             # "Weighte" is its own kind of confusing, and this is the

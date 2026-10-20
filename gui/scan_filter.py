@@ -23,8 +23,8 @@ the number of bunches per scan is::
     steps_per_range  = round((V_hi - V_lo) / StepSize) + 1
 
 so the per-event scan index is ``bunch // bunches_per_scan``. This
-recovers exact integer scan numbers for files like the example
-``run_7740.asdf`` (500 scans of 371 steps), and generalizes to
+recovers exact integer scan numbers for a single-range file (e.g.
+100 scans of 200 steps), and generalizes to
 multi-range experiments (sum the per-range step counts).
 
 Filter sync
@@ -160,9 +160,8 @@ def summarize_scans(bunch, timestamp, channel, *, pmt_gate,
         return out
 
     # Group by scan via sorted indices -- much faster than per-scan
-    # boolean masks when there are hundreds of scans (e.g. 500 in the
-    # example file). Each contiguous run of equal scan_idx values is
-    # one group.
+    # boolean masks when a run holds hundreds of scans. Each contiguous
+    # run of equal scan_idx values is one group.
     order = np.argsort(scan_idx, kind="stable")
     s_sorted = scan_idx[order]
     ts_sorted = ts_arr[order]

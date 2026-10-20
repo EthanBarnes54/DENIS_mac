@@ -1,10 +1,9 @@
 """Picking a minimiser that can actually minimise a likelihood.
 
-"I tried to fit Yb171 with leastsquare with chi square and poisson, chi
-square fits but poisson cannot. The counts on the plots looks weird."
-(Arda, 2026-09-25)
+A spectrum fitted with least squares fits under chi-square but not
+under Poisson, and the plotted counts look wrong.
 
-Nothing was wrong with the data. Least squares minimises a residual
+Nothing is wrong with the data. Least squares minimises a residual
 *vector*; a likelihood is a single number, so the two cannot be
 combined. satlas2 does not say so -- `core.py` swaps in SLSQP behind
 the user's back:
@@ -14,11 +13,11 @@ the user's back:
         if method.lower() in ['leastsq', 'least_squares']:
             method = 'slsqp'
 
-and on run 7507 SLSQP walked off to centroid 1.0e12 MHz, A_l -9659,
-redchi 1.1e8, reporting success. The model was then drawn hundreds of
-GHz away from the spectrum, which is what "the counts look weird" was.
-Nelder-Mead on the same run gives A_l 12637.36 against the 12637.23 of
-Arda's own emcee pipeline.
+and SLSQP can walk off to a centroid of ~1e12 MHz with a nonsense A
+factor and a huge reduced chi-square, while reporting success. The
+model is then drawn hundreds of GHz away from the spectrum, which is
+what makes the counts look wrong. Nelder-Mead on the same spectrum
+agrees with an emcee fit.
 
 So DENIS substitutes a working minimiser instead of a broken one, and
 puts a line in the fit report saying it did.

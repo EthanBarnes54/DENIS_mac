@@ -50,7 +50,7 @@ class _StubProject(QObject):
     """A project whose 'fit' evaluates a straight line in the offset."""
     results_ready = Signal(str, list, dict)
 
-    def __init__(self, name, runs=("7947",), slope=-13.0, base=100.0,
+    def __init__(self, name, runs=("1001",), slope=-10.0, base=100.0,
                  *, worker=True, fail_at=(), sigma=0.5):
         super().__init__()
         self.project_name = name
@@ -127,7 +127,7 @@ class _StubIS:
     def __init__(self, rows=None):
         # `rows or default` would swallow a deliberate empty list.
         self.rows = (list(rows) if rows is not None
-                     else [{"label": "70Ge", "delta_nu": 1.0}])
+                     else [{"label": "112Sn", "delta_nu": 1.0}])
         self.calls = 0
 
     def shifts_for_scan(self):
@@ -156,12 +156,12 @@ class KeyTests(unittest.TestCase):
     """Flat keys, because these get saved with the session."""
 
     def test_a_key_round_trips(self):
-        k = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        k = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.assertEqual(split_key(k),
-                         ("70Ge", "Run_7947", "HFS_1", "centroid"))
+                         ("112Sn", "Run_1001", "HFS_1", "centroid"))
 
     def test_a_short_key_does_not_crash(self):
-        self.assertEqual(split_key("70Ge"), ("70Ge", "", "", ""))
+        self.assertEqual(split_key("112Sn"), ("112Sn", "", "", ""))
 
 
 class ReadBaselineTests(unittest.TestCase):
@@ -180,12 +180,12 @@ class ReadBaselineTests(unittest.TestCase):
         self._write("parameters.csv",
                     "run_number,Parameter,Value,Error,Vary,Min,Max,"
                     "Source,Model\n"
-                    "7947,centroid,-123.5,0.4,True,-inf,inf,"
-                    "Run_7947,HFS_1\n"
-                    "7947,FWHMG,80.0,2.0,True,0.0,500.0,"
-                    "Run_7947,HFS_1\n"
-                    "7948,centroid,-125.0,0.5,False,-inf,inf,"
-                    "Run_7948,HFS_1\n")
+                    "1001,centroid,-120.0,0.4,True,-inf,inf,"
+                    "Run_1001,HFS_1\n"
+                    "1001,FWHMG,80.0,2.0,True,0.0,500.0,"
+                    "Run_1001,HFS_1\n"
+                    "1002,centroid,-125.0,0.5,False,-inf,inf,"
+                    "Run_1002,HFS_1\n")
 
     def test_an_empty_directory_is_not_an_error(self):
         b = read_baseline(os.path.join(self.dir, "nope"))
@@ -195,10 +195,10 @@ class ReadBaselineTests(unittest.TestCase):
     def test_it_reads_the_fitted_values(self):
         self._params()
         b = read_baseline(self.dir)
-        self.assertEqual(b.sources, ["Run_7947", "Run_7948"])
-        self.assertAlmostEqual(b.value("Run_7947", "HFS_1", "centroid"),
-                               -123.5)
-        self.assertAlmostEqual(b.sigma("Run_7947", "HFS_1", "centroid"),
+        self.assertEqual(b.sources, ["Run_1001", "Run_1002"])
+        self.assertAlmostEqual(b.value("Run_1001", "HFS_1", "centroid"),
+                               -120.0)
+        self.assertAlmostEqual(b.sigma("Run_1001", "HFS_1", "centroid"),
                                0.4)
 
     def test_it_is_keyed_by_source_not_run(self):
@@ -206,21 +206,21 @@ class ReadBaselineTests(unittest.TestCase):
         their own, but they always have a source name."""
         self._params()
         b = read_baseline(self.dir)
-        self.assertIn("Run_7947", b.params)
-        self.assertEqual(b.run_of_source["Run_7947"], "7947")
+        self.assertIn("Run_1001", b.params)
+        self.assertEqual(b.run_of_source["Run_1001"], "1001")
 
     def test_it_keeps_the_bounds_and_the_vary_flag(self):
         self._params()
-        row = read_baseline(self.dir).params["Run_7947"][("HFS_1", "FWHMG")]
+        row = read_baseline(self.dir).params["Run_1001"][("HFS_1", "FWHMG")]
         self.assertEqual((row["min"], row["max"]), (0.0, 500.0))
         self.assertTrue(row["vary"])
         self.assertFalse(
-            read_baseline(self.dir).params["Run_7948"][
+            read_baseline(self.dir).params["Run_1002"][
                 ("HFS_1", "centroid")]["vary"])
 
     def test_open_bounds_read_as_infinite(self):
         self._params()
-        row = read_baseline(self.dir).params["Run_7947"][
+        row = read_baseline(self.dir).params["Run_1001"][
             ("HFS_1", "centroid")]
         self.assertEqual(row["min"], float("-inf"))
         self.assertEqual(row["max"], float("inf"))
@@ -232,14 +232,14 @@ class ReadBaselineTests(unittest.TestCase):
 
     def test_it_reads_the_config_snapshot(self):
         self._write("config_snapshot.yaml",
-                    "project_name: 70Ge\nblocks:\n  - type: Source\n")
+                    "project_name: 112Sn\nblocks:\n  - type: Source\n")
         b = read_baseline(self.dir)
-        self.assertEqual(b.config["project_name"], "70Ge")
+        self.assertEqual(b.config["project_name"], "112Sn")
 
     def test_it_reads_the_per_run_chi_square(self):
         self._write("metadata.csv",
-                    "run_number,Reduced Chi-sq\n7947,1.23\n")
-        self.assertAlmostEqual(read_baseline(self.dir).redchi["7947"], 1.23)
+                    "run_number,Reduced Chi-sq\n1001,1.23\n")
+        self.assertAlmostEqual(read_baseline(self.dir).redchi["1001"], 1.23)
 
     def test_a_corrupt_csv_does_not_bring_the_tab_down(self):
         self._write("parameters.csv", "not,a,parameters,file\n1,2\n")
@@ -364,7 +364,7 @@ class ProjectReadingTests(unittest.TestCase):
     project, so a stub in a test harness cannot crash a scan."""
 
     def test_a_stub_has_no_blocks(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self.assertEqual(model_configs_of(p), [])
         self.assertEqual(checked_entries_of(p), [])
@@ -379,7 +379,7 @@ class ScanWalkTests(unittest.TestCase):
         return scan, _spin(scan)
 
     def test_it_fits_every_offset(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -20.0, -10.0])
         self.assertEqual(sorted(dv for dv, _ov in p.seen),
@@ -388,14 +388,14 @@ class ScanWalkTests(unittest.TestCase):
 
     def test_it_walks_outward_from_the_baseline(self):
         """So every step has a neighbour, closer in, already fitted."""
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -20.0, -10.0], baseline_dv=-20.0)
         self.assertEqual([dv for dv, _ov in p.seen],
                          [-20.0, -30.0, -10.0])
 
     def test_the_offset_reaches_the_fit_as_a_source_override(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0])
         _dv, ov = p.seen[0]
@@ -406,7 +406,7 @@ class ScanWalkTests(unittest.TestCase):
     def test_each_step_writes_its_own_labelled_folder(self):
         """Manual mode plus the offset tag gives sys_001_-30V_CO, so a
         re-run overwrites its own folder instead of piling up."""
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0], label="sys_007")
         _dv, ov = p.seen[0]
@@ -416,7 +416,7 @@ class ScanWalkTests(unittest.TestCase):
     def test_plot_output_is_off_by_default(self):
         """Ten offsets over five projects would otherwise write fifty
         plot sets nobody asked for."""
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0])
         _dv, ov = p.seen[0]
@@ -424,7 +424,7 @@ class ScanWalkTests(unittest.TestCase):
             self.assertFalse(ov["output"][key], key)
 
     def test_full_output_can_be_asked_for(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0], light_output=False)
         _dv, ov = p.seen[0]
@@ -432,36 +432,36 @@ class ScanWalkTests(unittest.TestCase):
 
     def test_the_override_is_removed_afterwards(self):
         """A leftover offset would silently move every later fit."""
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0])
         self.assertEqual(p._config_overrides, {})
 
     def test_it_collects_the_fitted_values(self):
-        p = _StubProject("70Ge", runs=("7947",), slope=-13.0, base=100.0)
+        p = _StubProject("112Sn", runs=("1001",), slope=-10.0, base=100.0)
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -10.0])
         rec = {r["dv"]: r for r in out["records"]}[-30.0]
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.assertAlmostEqual(rec["values"][key]["value"],
-                               100.0 + 390.0)
+                               100.0 + 300.0)
         self.assertAlmostEqual(rec["values"][key]["sigma"], 0.5)
 
     def test_it_records_which_run_each_source_is(self):
-        p = _StubProject("70Ge", runs=("7947",))
+        p = _StubProject("112Sn", runs=("1001",))
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -10.0])
-        self.assertEqual(out["records"][0]["labels"]["70Ge|Run_7947"],
-                         "7947")
+        self.assertEqual(out["records"][0]["labels"]["112Sn|Run_1001"],
+                         "1001")
 
     def test_it_records_the_folder_each_step_wrote(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -10.0], label="sys_001")
-        self.assertIn("sys_001", out["records"][0]["iterations"]["70Ge"])
+        self.assertIn("sys_001", out["records"][0]["iterations"]["112Sn"])
 
     def test_stop_ends_the_scan_after_the_step_in_flight(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         scan = SystematicScan()
         self.addCleanup(scan.deleteLater)
@@ -472,7 +472,7 @@ class ScanWalkTests(unittest.TestCase):
 
     def test_a_project_that_cannot_fit_aborts_the_scan(self):
         """Rather than waiting for a signal that is never coming."""
-        p = _StubProject("70Ge", worker=False)
+        p = _StubProject("112Sn", worker=False)
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -10.0])
         self.assertIn("did not start a fit", out["error"])
@@ -483,7 +483,7 @@ class ScanWalkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scan.start([], [-30.0])
         with self.assertRaises(ValueError):
-            scan.start([_target(_StubProject("70Ge"))], [])
+            scan.start([_target(_StubProject("112Sn"))], [])
 
 
 class StepFailureTests(unittest.TestCase):
@@ -499,7 +499,7 @@ class StepFailureTests(unittest.TestCase):
         return scan, _spin(scan)
 
     def test_a_failed_step_does_not_stop_the_scan(self):
-        p = _StubProject("70Ge", fail_at=(-30.0,))
+        p = _StubProject("112Sn", fail_at=(-30.0,))
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -20.0, -10.0])
         self.assertEqual(len(out["records"]), 3)
@@ -507,13 +507,13 @@ class StepFailureTests(unittest.TestCase):
                          ["failed", "ok", "ok"])
 
     def test_the_failure_is_reported_with_its_offset(self):
-        p = _StubProject("70Ge", fail_at=(-30.0,))
+        p = _StubProject("112Sn", fail_at=(-30.0,))
         self.addCleanup(p.deleteLater)
         self._run([_target(p)], [-30.0, -10.0])
         self.assertEqual(self.failures[0][0], -30.0)
 
     def test_a_failed_step_contributes_no_numbers(self):
-        p = _StubProject("70Ge", fail_at=(-30.0,))
+        p = _StubProject("112Sn", fail_at=(-30.0,))
         self.addCleanup(p.deleteLater)
         _s, out = self._run([_target(p)], [-30.0, -10.0])
         self.assertEqual(out["records"][0]["values"], {})
@@ -521,8 +521,8 @@ class StepFailureTests(unittest.TestCase):
     def test_a_failed_reference_skips_that_step_s_samples(self):
         """Fitting them against a GP trained on a frame that never
         arrived would report a number that means nothing."""
-        ref = _StubProject("74Ge", fail_at=(-30.0,))
-        sample = _StubProject("70Ge")
+        ref = _StubProject("116Sn", fail_at=(-30.0,))
+        sample = _StubProject("112Sn")
         self.addCleanup(ref.deleteLater)
         self.addCleanup(sample.deleteLater)
         self._run([_target(ref, "reference"), _target(sample)],
@@ -543,8 +543,8 @@ class ChainTests(unittest.TestCase):
         return scan, _spin(scan)
 
     def _setup(self, **kw):
-        ref = _StubProject("74Ge")
-        sample = _StubProject("70Ge")
+        ref = _StubProject("116Sn")
+        sample = _StubProject("112Sn")
         self.addCleanup(ref.deleteLater)
         self.addCleanup(sample.deleteLater)
         gp = _StubGP(**kw)
@@ -600,7 +600,7 @@ class ChainTests(unittest.TestCase):
 
     def test_the_shifts_are_stored_with_the_step(self):
         ref, sample, gp = self._setup()
-        is_tab = _StubIS([{"label": "70Ge", "delta_nu": 42.0}])
+        is_tab = _StubIS([{"label": "112Sn", "delta_nu": 42.0}])
         _s, out = self._run([_target(sample)], [-30.0, -10.0],
                             is_tab=is_tab)
         self.assertEqual(out["records"][0]["shifts"][0]["delta_nu"], 42.0)
@@ -617,16 +617,16 @@ class SeedingTests(unittest.TestCase):
     def setUp(self):
         self.scan = SystematicScan()
         self.addCleanup(self.scan.deleteLater)
-        self.p = _StubProject("70Ge")
+        self.p = _StubProject("112Sn")
         self.addCleanup(self.p.deleteLater)
-        base = Baseline(params={"Run_7947": {
+        base = Baseline(params={"Run_1001": {
             ("HFS_1", "centroid"): {"value": -100.0, "sigma": 0.4,
                                     "vary": True, "min": float("-inf"),
                                     "max": float("inf")}}})
         self.t = _target(self.p, baseline=base)
 
     def _seed(self, dv):
-        return self.scan._seeds_for(self.t, "Run_7947", dv)
+        return self.scan._seeds_for(self.t, "Run_1001", dv)
 
     def test_the_first_step_starts_from_the_baseline(self):
         self.scan._seed_mode = SEED_CONTINUATION
@@ -635,26 +635,26 @@ class SeedingTests(unittest.TestCase):
 
     def test_a_later_step_starts_from_its_neighbour(self):
         self.scan._seed_mode = SEED_CONTINUATION
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.scan._remember({"dv": -20.0, "status": "ok", "values": {
             key: {"value": 160.0, "sigma": 0.4}}})
         self.assertAlmostEqual(self._seed(-30.0)[("HFS_1", "centroid")],
                                160.0)
 
     def test_two_neighbours_carry_the_trend(self):
-        """The centroid moves about 13 MHz per volt; at the far end of
+        """The centroid moves about 10 MHz per volt; at the far end of
         the scan the baseline value is hundreds of MHz away."""
         self.scan._seed_mode = SEED_CONTINUATION
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
-        for dv, v in ((-20.0, 160.0), (-15.0, 95.0)):
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
+        for dv, v in ((-20.0, 160.0), (-15.0, 110.0)):
             self.scan._remember({"dv": dv, "status": "ok", "values": {
                 key: {"value": v, "sigma": 0.4}}})
         self.assertAlmostEqual(self._seed(-30.0)[("HFS_1", "centroid")],
-                               290.0)
+                               260.0)
 
     def test_a_failed_step_teaches_nothing(self):
         self.scan._seed_mode = SEED_CONTINUATION
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.scan._remember({"dv": -20.0, "status": "failed", "values": {
             key: {"value": 1e9, "sigma": 0.4}}})
         self.assertAlmostEqual(self._seed(-30.0)[("HFS_1", "centroid")],
@@ -663,7 +663,7 @@ class SeedingTests(unittest.TestCase):
     def test_re_running_a_step_forgets_what_it_had_found(self):
         """Otherwise the fit being thrown away seeds its own re-run."""
         self.scan._seed_mode = SEED_CONTINUATION
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.scan._remember({"dv": -30.0, "status": "ok", "values": {
             key: {"value": 1e9, "sigma": 0.4}}})
         self.scan._forget(-30.0)
@@ -672,7 +672,7 @@ class SeedingTests(unittest.TestCase):
 
     def test_baseline_mode_ignores_the_neighbours(self):
         self.scan._seed_mode = SEED_BASELINE
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         self.scan._remember({"dv": -20.0, "status": "ok", "values": {
             key: {"value": 160.0, "sigma": 0.4}}})
         self.assertAlmostEqual(self._seed(-30.0)[("HFS_1", "centroid")],
@@ -692,11 +692,11 @@ class ResumeTests(unittest.TestCase):
     """Re-running one bad step must not re-run the whole scan."""
 
     def test_records_handed_in_are_kept(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         scan = SystematicScan()
         self.addCleanup(scan.deleteLater)
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         old = {-10.0: {"dv": -10.0, "status": "ok", "message": "",
                        "values": {key: {"value": 7.0, "sigma": 0.4}},
                        "redchi": {}, "shifts": [], "labels": {},
@@ -708,7 +708,7 @@ class ResumeTests(unittest.TestCase):
         self.assertAlmostEqual(got[-10.0]["values"][key]["value"], 7.0)
 
     def test_only_the_named_offsets_are_fitted_again(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         scan = SystematicScan()
         self.addCleanup(scan.deleteLater)
@@ -720,11 +720,11 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual([dv for dv, _ov in p.seen], [-30.0])
 
     def test_a_kept_step_still_seeds_the_one_being_re_run(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         scan = SystematicScan()
         self.addCleanup(scan.deleteLater)
-        key = value_key("70Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("112Sn", "Run_1001", "HFS_1", "centroid")
         scan.start([_target(p)], [-30.0], records={
             -20.0: {"dv": -20.0, "status": "ok", "values": {
                 key: {"value": 160.0, "sigma": 0.4}}, "message": "",
@@ -811,14 +811,14 @@ class PerRunSeedPlumbingTests(unittest.TestCase):
 
     def test_a_seeded_run_gets_its_own_starting_values(self):
         seeded = [{"type": "HFS", "name": "HFS_1",
-                   "params": {"centroid": {"value": 390.0}}}]
+                   "params": {"centroid": {"value": 300.0}}}]
         got = self._run({"a.asdf": seeded})
         self.assertAlmostEqual(
-            got["a.asdf"][0]["params"]["centroid"]["value"], 390.0)
+            got["a.asdf"][0]["params"]["centroid"]["value"], 300.0)
 
     def test_the_other_runs_keep_the_shared_values(self):
         seeded = [{"type": "HFS", "name": "HFS_1",
-                   "params": {"centroid": {"value": 390.0}}}]
+                   "params": {"centroid": {"value": 300.0}}}]
         got = self._run({"a.asdf": seeded})
         self.assertAlmostEqual(
             got["b.asdf"][0]["params"]["centroid"]["value"], -100.0)
@@ -931,7 +931,7 @@ class QuietProjectTests(unittest.TestCase):
 
     def _project(self):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("70Ge")
+        p = AnalysisProject("112Sn")
         self.addCleanup(p.deleteLater)
         return p
 
@@ -957,7 +957,7 @@ class QuietProjectTests(unittest.TestCase):
         seen = []
         p.results_ready.connect(lambda n, r, o: seen.append((n, r)))
         p._on_fit_error("pool blew up", _FitterBlockStub())
-        self.assertEqual(seen, [("70Ge", [])])
+        self.assertEqual(seen, [("112Sn", [])])
         self.assertEqual(self.boxes, [])
 
     def test_a_worker_failure_still_reaches_a_user(self):
@@ -977,8 +977,8 @@ class PartialStepTests(unittest.TestCase):
         return scan, _spin(scan)
 
     def _pair(self, fail_at=()):
-        a = _StubProject("70Ge", base=100.0, fail_at=fail_at)
-        b = _StubProject("72Ge", base=200.0)
+        a = _StubProject("112Sn", base=100.0, fail_at=fail_at)
+        b = _StubProject("114Sn", base=200.0)
         self.addCleanup(a.deleteLater)
         self.addCleanup(b.deleteLater)
         return a, b
@@ -994,19 +994,19 @@ class PartialStepTests(unittest.TestCase):
         a, b = self._pair(fail_at=(-30.0,))
         _s, out = self._run([_target(a), _target(b)], [-30.0, -10.0])
         got = {r["dv"]: r for r in out["records"]}
-        self.assertEqual(got[-30.0]["failed_projects"], ["70Ge"])
+        self.assertEqual(got[-30.0]["failed_projects"], ["112Sn"])
 
     def test_what_did_fit_is_kept(self):
         a, b = self._pair(fail_at=(-30.0,))
         _s, out = self._run([_target(a), _target(b)], [-30.0, -10.0])
         got = {r["dv"]: r for r in out["records"]}
-        key = value_key("72Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("114Sn", "Run_1001", "HFS_1", "centroid")
         self.assertIn(key, got[-30.0]["values"])
 
     def test_a_partial_step_still_seeds_the_next_one(self):
         a, b = self._pair(fail_at=(-30.0,))
         scan, _out = self._run([_target(a), _target(b)], [-30.0, -10.0])
-        key = value_key("72Ge", "Run_7947", "HFS_1", "centroid")
+        key = value_key("114Sn", "Run_1001", "HFS_1", "centroid")
         self.assertEqual(len(scan._history_for(key)), 2)
 
     def test_the_project_is_released_when_the_scan_ends(self):
@@ -1028,14 +1028,14 @@ class ShiftBandingTests(unittest.TestCase):
     """
 
     def _rows(self, dv):
-        return [{"label": "70Ge", "A": 70,
-                 "centroid": 1500.0 - 13.0 * dv,
+        return [{"label": "112Sn", "A": 112,
+                 "centroid": 1500.0 - 10.0 * dv,
                  "sigma_fit": 0.4,
                  "delta_nu": 400.0 - 0.02 * dv,
                  "sigma_delta_nu_stat": 0.6}]
 
     def _run(self, offsets=(-30.0, -10.0)):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         is_tab = _StubIS()
         is_tab.shifts_for_scan = lambda: self._rows(
@@ -1047,7 +1047,7 @@ class ShiftBandingTests(unittest.TestCase):
 
     def test_the_shift_is_stored_as_a_banded_value(self):
         _s, out = self._run()
-        key = value_key("Isotope shifts", "70Ge", "IS", "delta_nu")
+        key = value_key("Isotope shifts", "112Sn", "IS", "delta_nu")
         rec = {r["dv"]: r for r in out["records"]}[-30.0]
         self.assertAlmostEqual(rec["values"][key]["value"], 400.6)
         self.assertAlmostEqual(rec["values"][key]["sigma"], 0.6)
@@ -1056,22 +1056,22 @@ class ShiftBandingTests(unittest.TestCase):
         """It is not the same number as the fitted centroid: this one
         has the GP correction in it."""
         _s, out = self._run()
-        key = value_key("Isotope shifts", "70Ge", "IS",
+        key = value_key("Isotope shifts", "112Sn", "IS",
                         "centroid_corrected")
         rec = {r["dv"]: r for r in out["records"]}[-30.0]
-        self.assertAlmostEqual(rec["values"][key]["value"], 1890.0)
+        self.assertAlmostEqual(rec["values"][key]["value"], 1800.0)
 
     def test_the_rows_are_kept_whole_as_well(self):
         _s, out = self._run()
-        self.assertEqual(out["records"][0]["shifts"][0]["label"], "70Ge")
+        self.assertEqual(out["records"][0]["shifts"][0]["label"], "112Sn")
 
     def test_the_isotope_is_labelled(self):
         _s, out = self._run()
         self.assertEqual(
-            out["records"][0]["labels"]["Isotope shifts|70Ge"], "70Ge")
+            out["records"][0]["labels"]["Isotope shifts|112Sn"], "112Sn")
 
     def test_a_tab_that_gives_nothing_back_adds_nothing(self):
-        p = _StubProject("70Ge")
+        p = _StubProject("112Sn")
         self.addCleanup(p.deleteLater)
         is_tab = _StubIS([])
         scan = SystematicScan()

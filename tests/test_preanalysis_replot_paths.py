@@ -1,14 +1,14 @@
 """Which redraw a Pre-Analysis input asks for.
 
-Typing in the Z / A boxes was seconds of lag per keystroke (Arda,
-2026-09-24). Two reasons, both fixed here:
+Typing in the Z / A boxes was seconds of lag per keystroke. Two
+reasons, both fixed here:
 
 * every change asked for a FULL replot, which redraws the calibration
-  and cooler panels -- 1.3 s of a 2.0 s replot, measured on his T04
-  session -- and those are drawn from the recorded VOLTAGES, upstream
+  and cooler panels -- most of the time of a full replot on a
+  large session -- and those are drawn from the recorded VOLTAGES, upstream
   of the Doppler conversion, so a change of isotope cannot move a
   pixel of them;
-* the spin boxes tracked every keystroke, so "70" was two changes.
+* the spin boxes tracked every keystroke, so "114" was three changes.
 
 The frequency-axis inputs (Z, A, mass, harmonic, energy levels) now
 schedule a spectrum recompute instead. Not the gate-drag blit: that
@@ -57,24 +57,24 @@ class ReplotPathTests(unittest.TestCase):
 
     # -- what each input asks for -----------------------------------
     def test_changing_A_asks_for_a_spectrum_recompute(self):
-        self.p._on_a_changed(72)
+        self.p._on_a_changed(114)
         self._fire()
         self.assertEqual(self.rec.calls, ["spectrum"])
 
     def test_changing_Z_asks_for_a_spectrum_recompute(self):
-        self.p._on_z_changed(32)
+        self.p._on_z_changed(50)
         self._fire()
         self.assertEqual(self.rec.calls, ["spectrum"])
 
     def test_the_calibration_panels_are_not_redrawn(self):
         """They are drawn from the recorded voltages, upstream of the
         Doppler conversion: a change of isotope cannot move them."""
-        self.p._on_a_changed(72)
+        self.p._on_a_changed(114)
         self._fire()
         self.assertNotIn("calibrations", self.rec.calls)
 
     def test_the_mass_the_harmonic_and_the_levels_go_the_same_way(self):
-        for spin, value in ((self.p._mass_spin, 71.92),
+        for spin, value in ((self.p._mass_spin, 113.90),
                             (self.p._harmonic, 3),
                             (self.p._e_lower, 1.5),
                             (self.p._e_upper, 2.5)):
@@ -134,7 +134,7 @@ class ReplotPathTests(unittest.TestCase):
         self.assertEqual(self.rec.calls, ["full"])
 
     def test_many_changes_coalesce_into_one_redraw(self):
-        for a in (70, 71, 72, 73):
+        for a in (112, 113, 114, 115):
             self.p._on_a_changed(a)
         self._fire()
         self.assertEqual(self.rec.calls, ["spectrum"])
@@ -166,7 +166,7 @@ class ReplotsDuringALoadTests(unittest.TestCase):
 
     def test_a_spectrum_replot_stands_down(self):
         self._loading(True)
-        self.p._on_a_changed(72)
+        self.p._on_a_changed(114)
         self.assertFalse(self.p._replot_timer.isActive())
 
     def test_a_gate_drag_replot_stands_down(self):
@@ -190,7 +190,7 @@ class ReplotsDuringALoadTests(unittest.TestCase):
 
 
 class KeyboardTrackingTests(unittest.TestCase):
-    """Typing "70" must be one change, not one per digit."""
+    """Typing "114" must be one change, not one per digit."""
 
     def setUp(self):
         from gui.preanalysis_tab import PreAnalysisTab

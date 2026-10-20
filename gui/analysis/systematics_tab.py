@@ -45,8 +45,8 @@ from gui.analysis.systematic_scan import (
     config_differences, read_baseline, split_key, value_key,
 )
 
-#: Where the offsets come from. The calibration mode is the batch the
-#: Ge analysis ran by hand: every run at the common offset (the numbers
+#: Where the offsets come from. The calibration mode is the usual
+#: three-offset batch: every run at the common offset (the numbers
 #: quoted) and at the two zero crossings (the systematic) -- three fits
 #: per run. The range mode walks an even grid between two offsets.
 MODE_CALIBRATION = "Common offset + the two zero crossings"
@@ -419,8 +419,7 @@ class SystematicsTab(QGroupBox):
             "fitted three times -- at the common offset, whose results "
             "are the values you quote, and at each zero crossing, "
             "whose deviation from them is the cooler-voltage "
-            "systematic. This is the batch the Ge analysis ran by "
-            "hand. Even grid: walk a range in equal steps, to see how "
+            "systematic. Even grid: walk a range in equal steps, to see how "
             "a parameter depends on the offset."))
         self._mode.currentTextChanged.connect(self._on_mode_changed)
         row0.addWidget(self._mode, 1)
@@ -428,11 +427,11 @@ class SystematicsTab(QGroupBox):
         row = QHBoxLayout()
         self._lbl_from = QLabel("from")
         row.addWidget(self._lbl_from)
-        self._dv_min = self._spin(-33.46)
+        self._dv_min = self._spin(-10.0)
         row.addWidget(self._dv_min)
         self._lbl_to = QLabel("to")
         row.addWidget(self._lbl_to)
-        self._dv_max = self._spin(-14.0)
+        self._dv_max = self._spin(10.0)
         row.addWidget(self._dv_max)
         self._lbl_v = QLabel("V,")
         row.addWidget(self._lbl_v)
@@ -459,7 +458,7 @@ class SystematicsTab(QGroupBox):
         row2.addWidget(from_cal)
         self._lbl_base = QLabel("baseline at")
         row2.addWidget(self._lbl_base)
-        self._baseline_dv = self._spin(-29.25)
+        self._baseline_dv = self._spin(0.0)
         self._baseline_dv.setToolTip(_wrap(
             "Common offset: the offset every run is analysed at -- the "
             "fits there give the values you quote, and the scan starts "
@@ -606,7 +605,7 @@ class SystematicsTab(QGroupBox):
         self._birge.setToolTip(_wrap(
             "When the runs scatter more than their own errors allow, "
             "inflate the weighted mean's error by the Birge ratio -- "
-            "what the Ge analysis did for its statistical error. Off: "
+            "a common choice for the statistical error. Off: "
             "the plain inverse-variance error."))
         self._birge.toggled.connect(self.compute)
         rsl.addWidget(self._birge)
@@ -837,7 +836,7 @@ class SystematicsTab(QGroupBox):
         if self._col_width is None:
             probe = QComboBox(self._proj_table)
             probe.setFont(self._proj_table.font())
-            probe.addItem("iter_001_-33.46V_CO")
+            probe.addItem("iter_001_-10.00V_CO")
             self._col_width = probe.sizeHint().width() + 8
             probe.setParent(None)
             probe.deleteLater()
@@ -877,8 +876,8 @@ class SystematicsTab(QGroupBox):
         if self._loading:
             return
         if self.is_calibration_mode():
-            # The Ge analysis's rule: the larger deviation of the two
-            # zero crossings from the common offset, quoted as +/-.
+            # The usual rule: the larger deviation of the two zero
+            # crossings from the common offset, quoted as +/-.
             self._definition.setCurrentText(MAX_DEV)
         if hasattr(self, "_sum_table"):
             self.compute()
@@ -1828,10 +1827,10 @@ class SystematicsTab(QGroupBox):
         for e in d.get("extras") or []:
             if isinstance(e, dict):
                 self._add_extra(ExtraSystematic.from_dict(e))
-        self._dv_min.setValue(float(d.get("dv_min", -33.46)))
-        self._dv_max.setValue(float(d.get("dv_max", -14.0)))
+        self._dv_min.setValue(float(d.get("dv_min", -10.0)))
+        self._dv_max.setValue(float(d.get("dv_max", 10.0)))
         self._steps.setValue(int(d.get("steps", 10)))
-        self._baseline_dv.setValue(float(d.get("baseline_dv", -29.25)))
+        self._baseline_dv.setValue(float(d.get("baseline_dv", 0.0)))
         mode = str(d.get("seed_mode", SEED_CONTINUATION))
         if mode in SEED_MODES:
             self._seed_mode.setCurrentText(mode)

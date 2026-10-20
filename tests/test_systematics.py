@@ -24,7 +24,7 @@ def line_band(slope=2.0, intercept=100.0, sigma=0.5,
     pts = [ScanValue(float(d), intercept + slope * d, sigma) for d in dvs]
     kw.setdefault("baseline", intercept)
     kw.setdefault("baseline_sigma", 0.4)
-    return ParameterBand("70Ge", "7947", "centroid", pts, **kw)
+    return ParameterBand("112Sn", "1001", "centroid", pts, **kw)
 
 
 class BandStatisticsTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class BandStatisticsTests(unittest.TestCase):
         self.assertEqual(b.width, 0.0)
 
     def test_an_empty_band(self):
-        b = ParameterBand("70Ge", "7947", "centroid", [])
+        b = ParameterBand("112Sn", "1001", "centroid", [])
         for v in (b.lo, b.hi, b.width, b.half_width, b.std):
             self.assertTrue(math.isnan(v))
 
@@ -80,15 +80,15 @@ class BandStatisticsTests(unittest.TestCase):
         self.assertAlmostEqual(b.width, 40.0)
 
     def test_the_key_names_the_band(self):
-        self.assertEqual(line_band().key, "70Ge/7947/centroid")
+        self.assertEqual(line_band().key, "112Sn/1001/centroid")
         self.assertEqual(
-            ParameterBand("70Ge", "", "centroid").key,
-            "70Ge/<mean>/centroid")
+            ParameterBand("112Sn", "", "centroid").key,
+            "112Sn/<mean>/centroid")
 
 
 class DefinitionTests(unittest.TestCase):
-    """Which number gets quoted is the user's choice (Arda, 2026-09-24),
-    so every definition has to be available from the same band."""
+    """Which number gets quoted is the user's choice, so every
+    definition has to be available from the same band."""
 
     def setUp(self):
         self.b = line_band(dvs=(-30, -20, -10))   # 40, 60, 80
@@ -214,7 +214,7 @@ class MeanOverRunsTests(unittest.TestCase):
         a = line_band(slope=2.0, intercept=100.0, sigma=1.0,
                       dvs=(-30, -20, -10), baseline_sigma=1.0)
         b = ParameterBand(
-            "70Ge", "7948", "centroid",
+            "112Sn", "1002", "centroid",
             [ScanValue(float(d), 104.0 + 2.0 * d, 1.0)
              for d in (-30, -20, -10)],
             baseline=104.0, baseline_sigma=1.0)
@@ -266,8 +266,8 @@ class SummaryTests(unittest.TestCase):
 
     def test_a_row_carries_what_the_report_quotes(self):
         row = summarise([line_band(dvs=(-30, -20, -10))], HALF_WIDTH)[0]
-        self.assertEqual(row["project"], "70Ge")
-        self.assertEqual(row["run"], "7947")
+        self.assertEqual(row["project"], "112Sn")
+        self.assertEqual(row["run"], "1001")
         self.assertEqual(row["n"], 3)
         self.assertAlmostEqual(row["systematic"], 20.0)
         self.assertAlmostEqual(row["band_width"], 40.0)
@@ -283,14 +283,14 @@ class ScanWalkTests(unittest.TestCase):
     """Which offsets, and in what order they are fitted."""
 
     def test_the_offsets_span_the_range(self):
-        offs = scan_offsets(-33.46, -14.0, 5)
+        offs = scan_offsets(-35.0, -15.0, 5)
         self.assertEqual(len(offs), 5)
-        self.assertAlmostEqual(offs[0], -33.46)
-        self.assertAlmostEqual(offs[-1], -14.0)
+        self.assertAlmostEqual(offs[0], -35.0)
+        self.assertAlmostEqual(offs[-1], -15.0)
 
     def test_a_range_given_backwards_still_works(self):
-        self.assertEqual(scan_offsets(-14.0, -33.46, 5),
-                         scan_offsets(-33.46, -14.0, 5))
+        self.assertEqual(scan_offsets(-15.0, -35.0, 5),
+                         scan_offsets(-35.0, -15.0, 5))
 
     def test_a_range_needs_two_points_and_some_width(self):
         with self.assertRaises(ValueError):
@@ -301,9 +301,9 @@ class ScanWalkTests(unittest.TestCase):
     def test_the_walk_starts_at_the_baseline_and_works_outward(self):
         """Every step then has a neighbour, closer to the baseline,
         that has already been fitted."""
-        order = order_outward([-33.46, -29.25, -25, -20, -14], -29.25)
-        self.assertEqual(order[0], -29.25)
-        self.assertEqual(order[-1], -14.0)
+        order = order_outward([-35, -30, -25, -20, -15], -30)
+        self.assertEqual(order[0], -30.0)
+        self.assertEqual(order[-1], -15.0)
 
     def test_the_walk_alternates_sides(self):
         order = order_outward([-4, -2, 0, 2, 4], 0)

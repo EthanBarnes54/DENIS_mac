@@ -23,8 +23,8 @@ so higher orders cost nothing in the model. Pinned here:
 * changing the background shape keeps the parameters the user
   already typed;
 * the shape and its coefficients survive Pre-Analysis -> Analysis
-  with full precision (a slope is ~0.02 counts/MHz, which the
-  panel's default 2 decimals destroyed).
+  with full precision (a slope is small, e.g. 0.01-0.05 counts/MHz,
+  which the panel's default 2 decimals destroyed).
 
 Run from the project root:
 
@@ -74,13 +74,13 @@ class NamingTests(unittest.TestCase):
 
     def test_full_name_reaches_the_summed_polynomial(self):
         self.assertEqual(
-            full_param_name("Run_7904", "Model.1", "Bkg_p1"),
-            "Run_7904___Model_1_bkg___p1")
+            full_param_name("Run_1001", "Model.1", "Bkg_p1"),
+            "Run_1001___Model_1_bkg___p1")
 
     def test_legacy_constant_name_is_unchanged(self):
         self.assertEqual(
-            full_param_name("Run_7904", "Model.1", "Bkg_p0"),
-            "Run_7904___Model_1_bkg___p0")
+            full_param_name("Run_1001", "Model.1", "Bkg_p0"),
+            "Run_1001___Model_1_bkg___p0")
 
     def test_coefficients_come_back_lowest_first(self):
         found = background_coefficients(
@@ -154,15 +154,15 @@ class ModelBlockTests(unittest.TestCase):
         shrinks at the tail -- nothing else should be reset."""
         b = self._block()
         row = {r["name"]: r for r in b._param_rows}["centroid"]
-        row["value"].setValue(-38.44)
+        row["value"].setValue(-42.5)
         b._bkg_combo.setCurrentIndex(2)
         again = {r["name"]: r for r in b._param_rows}["centroid"]
-        self.assertAlmostEqual(again["value"].value(), -38.44)
+        self.assertAlmostEqual(again["value"].value(), -42.5)
 
     def test_shape_and_values_round_trip(self):
         b = self._block()
         b._bkg_combo.setCurrentIndex(1)
-        b._param_rows[-1]["value"].setValue(0.0215)
+        b._param_rows[-1]["value"].setValue(0.0345)
         d = b.to_dict()
         self.assertEqual(d["bkg_order"], 1)
 
@@ -170,7 +170,7 @@ class ModelBlockTests(unittest.TestCase):
         b2.from_dict(d)
         self.assertEqual(b2._bkg_order(), 1)
         self.assertEqual(self._names(b2)[-1], "Bkg_p1")
-        self.assertAlmostEqual(b2._param_rows[-1]["value"].value(), 0.0215)
+        self.assertAlmostEqual(b2._param_rows[-1]["value"].value(), 0.0345)
 
     def test_a_save_without_bkg_order_reloads_as_constant(self):
         b = self._block()
@@ -224,12 +224,12 @@ class PreAnalysisHandoffTests(unittest.TestCase):
 
     def test_slope_keeps_its_precision(self):
         """The panel's spinboxes carry 2 decimals, which rounds a
-        0.0215 counts/MHz slope to 0.02 -- a 7% error on the tilt
+        0.0345 counts/MHz slope to 0.03 -- a 13% error on the tilt
         before the value ever leaves Pre-Analysis."""
         p = self._panel()
         p._bkg_combo.setCurrentIndex(1)
-        p.set_value("bkg_p1", 0.0215)
-        self.assertAlmostEqual(p.get_value("bkg_p1"), 0.0215)
+        p.set_value("bkg_p1", 0.0345)
+        self.assertAlmostEqual(p.get_value("bkg_p1"), 0.0345)
 
     def test_coefficients_stop_at_the_chosen_order(self):
         p = self._panel()
@@ -242,13 +242,13 @@ class PreAnalysisHandoffTests(unittest.TestCase):
     def test_shape_round_trips_through_the_save_file(self):
         p = self._panel()
         p._bkg_combo.setCurrentIndex(1)
-        p.set_value("bkg", 5.02)
-        p.set_value("bkg_p1", 0.0215)
+        p.set_value("bkg", 6.25)
+        p.set_value("bkg_p1", 0.0345)
         d = p.to_dict()
         p2 = self._panel()
         p2.from_dict(d)
         self.assertEqual(p2.bkg_order(), 1)
-        self.assertEqual(p2.bkg_coefficients(), [5.02, 0.0215])
+        self.assertEqual(p2.bkg_coefficients(), [6.25, 0.0345])
 
     def test_import_carries_the_shape_into_the_model_block(self):
         """The whole point: no hand-built second model block."""
@@ -257,8 +257,8 @@ class PreAnalysisHandoffTests(unittest.TestCase):
 
         p = self._panel()
         p._bkg_combo.setCurrentIndex(1)
-        p.set_value("bkg", 5.02)
-        p.set_value("bkg_p1", 0.0215)
+        p.set_value("bkg", 6.25)
+        p.set_value("bkg_p1", 0.0345)
 
         class _Tab:
             _model_panels = [p]
@@ -273,8 +273,8 @@ class PreAnalysisHandoffTests(unittest.TestCase):
 
         self.assertEqual(b._bkg_order(), 1)
         rows = {r["name"]: r for r in b._param_rows}
-        self.assertAlmostEqual(rows["Bkg_p0"]["value"].value(), 5.02)
-        self.assertAlmostEqual(rows["Bkg_p1"]["value"].value(), 0.0215)
+        self.assertAlmostEqual(rows["Bkg_p0"]["value"].value(), 6.25)
+        self.assertAlmostEqual(rows["Bkg_p1"]["value"].value(), 0.0345)
 
 
 if __name__ == "__main__":

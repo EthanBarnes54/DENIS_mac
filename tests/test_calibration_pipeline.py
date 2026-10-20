@@ -117,7 +117,7 @@ def _install_fake_clstools():
 
 
 CFG = {
-    "mass": 51.0,
+    "mass": 100.0,
     "ref_freq": 5.0e14,
     "harmonic": 2,
     "bin_mode": "Frequency",

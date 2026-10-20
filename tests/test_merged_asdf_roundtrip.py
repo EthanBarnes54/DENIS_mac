@@ -44,26 +44,26 @@ class ExportLoadRoundTripTests(unittest.TestCase):
             is_merged_asdf, DENIS_MERGED_SCHEMA)
 
         merged_data = {
-            "merged_name": "merged_7735_7740",
+            "merged_name": "merged_1001_1002",
             "x": np.array([-50.0, 0.0, 50.0, 100.0]),
             "y": np.array([2.0, 5.0, 11.0, 4.0]),
             "yerr": np.array([1.4, 2.2, 3.3, 2.0]),
             "x_unit": "V",
             "bin_step_mhz": 1.0,
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.952251,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
-            "source_runs": ["7735", "7740"],
-            "source_files": ["/data/run_7735.asdf",
-                              "/data/run_7740.asdf"],
+            "source_runs": ["1001", "1002"],
+            "source_files": ["/data/run_1001.asdf",
+                              "/data/run_1002.asdf"],
             "per_run": [
-                {"run_num": "7735", "path": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_set": 15975.4150,
-                 "mass_amu": 47.775, "harmonic": 2},
-                {"run_num": "7740", "path": "/data/run_7740.asdf",
-                 "cooler_v": 29895.5, "laser_set": 15975.4150,
-                 "mass_amu": 47.775, "harmonic": 2},
+                {"run_num": "1001", "path": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_set": 20000.0,
+                 "mass_amu": 99.5, "harmonic": 2},
+                {"run_num": "1002", "path": "/data/run_1002.asdf",
+                 "cooler_v": 30000.1, "laser_set": 20000.0,
+                 "mass_amu": 99.5, "harmonic": 2},
             ],
             "metadata": {"imported_from": "preanalysis",
                           "merge_domain": "voltage"},
@@ -77,18 +77,18 @@ class ExportLoadRoundTripTests(unittest.TestCase):
 
             md2 = load_merged_asdf(out)
             self.assertIsNotNone(md2)
-            self.assertEqual(md2["merged_name"], "merged_7735_7740")
+            self.assertEqual(md2["merged_name"], "merged_1001_1002")
             self.assertEqual(md2["x_unit"], "V")
             np.testing.assert_array_equal(md2["x"], merged_data["x"])
             np.testing.assert_array_equal(md2["y"], merged_data["y"])
             np.testing.assert_array_equal(md2["yerr"], merged_data["yerr"])
             mm = md2["merge_metadata"]
-            self.assertAlmostEqual(mm["cooler_v"], 29895.4)
-            self.assertAlmostEqual(mm["mass_amu"], 47.952251)
+            self.assertAlmostEqual(mm["cooler_v"], 30000.0)
+            self.assertAlmostEqual(mm["mass_amu"], 100.0)
             self.assertEqual(mm["harmonic"], 2)
             # Per-run audit survives, sans x/y arrays.
             self.assertEqual(len(md2["per_run"]), 2)
-            self.assertAlmostEqual(md2["per_run"][0]["cooler_v"], 29895.3)
+            self.assertAlmostEqual(md2["per_run"][0]["cooler_v"], 29999.9)
 
     def test_load_unrelated_asdf_returns_none(self):
         """A regular clstools ASDF (no denis_schema marker) must be
@@ -101,7 +101,7 @@ class ExportLoadRoundTripTests(unittest.TestCase):
             out = os.path.join(tmp, "regular.asdf")
             asdf.AsdfFile({"Run": "1234",
                             "CoolerVoltage": 2.9977,
-                            "LaserSetpoint": 15975.4150,
+                            "LaserSetpoint": 20000.0,
                             "raw": np.zeros((4, 6))}).write_to(out)
             self.assertFalse(is_merged_asdf(out))
             self.assertIsNone(load_merged_asdf(out))
@@ -133,19 +133,19 @@ class PaLoadMergedRoutingTests(unittest.TestCase):
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
             "bin_step_mhz": 0,
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "source_runs": ["a", "b"],
             "source_files": ["/p/a", "/p/b"],
             "per_run": [
                 {"run_num": "a", "path": "/p/a",
-                 "cooler_v": 29895.3, "laser_set": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                 "cooler_v": 29999.9, "laser_set": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
                 {"run_num": "b", "path": "/p/b",
-                 "cooler_v": 29895.5, "laser_set": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                 "cooler_v": 30000.1, "laser_set": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -160,8 +160,8 @@ class PaLoadMergedRoutingTests(unittest.TestCase):
             # "[merged] <name>") so the PA YAML records it correctly.
             self.assertEqual(fe.filepath, out)
             self.assertEqual(fe.merge_domain, "voltage")
-            self.assertAlmostEqual(fe.merge_cooler_v, 29895.4)
-            self.assertAlmostEqual(fe.merge_mass_amu, 47.95)
+            self.assertAlmostEqual(fe.merge_cooler_v, 30000.0)
+            self.assertAlmostEqual(fe.merge_mass_amu, 100.0)
 
 
 class AnalysisSourceBlockLoadMergedRoutingTests(unittest.TestCase):
@@ -182,9 +182,9 @@ class AnalysisSourceBlockLoadMergedRoutingTests(unittest.TestCase):
             "yerr": np.array([1.0, 2.2, 1.4]),
             "x_unit": "V",
             "bin_step_mhz": 0,
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
             "source_runs": ["a", "b"],
             "source_files": ["/p/a", "/p/b"],
@@ -223,16 +223,16 @@ class PerRunArrayMaterialisationTests(unittest.TestCase):
             "yerr": np.ones(10),
             "x_unit": "V",
             "bin_step_mhz": 0,
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
-            "source_runs": ["7735"],
-            "source_files": ["/p/run_7735.asdf"],
+            "source_runs": ["1001"],
+            "source_files": ["/p/run_1001.asdf"],
             "per_run": [
-                {"run_num": "7735", "path": "/p/a",
-                 "cooler_v": 29895.3, "laser_set": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2,
+                {"run_num": "1001", "path": "/p/a",
+                 "cooler_v": 29999.9, "laser_set": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2,
                  # The fields the crash bug surfaced on:
                  "tof_index": np.arange(100, dtype=float),
                  "tof_counts": np.random.poisson(5, 100).astype(float),
@@ -275,14 +275,14 @@ class PaMergedActionsParityTests(unittest.TestCase):
             merged_y=np.array([1.0, 5.0, 2.0]),
             merge_domain="voltage",
             source_info=[
-                {"run_number": "7735",
-                 "filepath": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_number": "1001",
+                 "filepath": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.4,
-            merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95,
+            merge_cooler_v=30000.0,
+            merge_laser_sp=20000.0,
+            merge_mass_amu=100.0,
             merge_harmonic=2,
         )
         md = mfe.to_merged_data()
@@ -291,8 +291,8 @@ class PaMergedActionsParityTests(unittest.TestCase):
                      "per_run", "metadata"):
             self.assertIn(key, md)
         self.assertEqual(md["x_unit"], "V")
-        self.assertEqual(md["source_runs"], ["7735"])
-        self.assertAlmostEqual(md["merge_metadata"]["cooler_v"], 29895.4)
+        self.assertEqual(md["source_runs"], ["1001"])
+        self.assertAlmostEqual(md["merge_metadata"]["cooler_v"], 30000.0)
 
     def test_pa_export_writes_a_loadable_denis_merged_file(self):
         """PA's _export_merged_entry must produce a file the shared
@@ -310,14 +310,14 @@ class PaMergedActionsParityTests(unittest.TestCase):
             merge_domain="voltage",
             source_info=[
                 {"run_number": "a", "filepath": "/p/a",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
                 {"run_number": "b", "filepath": "/p/b",
-                 "cooler_v": 29895.5, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                 "cooler_v": 30000.1, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.4, merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95, merge_harmonic=2,
+            merge_cooler_v=30000.0, merge_laser_sp=20000.0,
+            merge_mass_amu=100.0, merge_harmonic=2,
         )
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "merged.asdf")
@@ -329,7 +329,7 @@ class PaMergedActionsParityTests(unittest.TestCase):
             self.assertIsNotNone(md2)
             self.assertEqual(md2["x_unit"], "V")
             self.assertAlmostEqual(
-                md2["merge_metadata"]["cooler_v"], 29895.4)
+                md2["merge_metadata"]["cooler_v"], 30000.0)
 
     def test_merged_file_entry_has_view_edit_export_signals(self):
         """MergedFileEntry must expose view_requested, edit_requested,
@@ -357,36 +357,36 @@ class AnalysisMergeDialogPrefillTests(unittest.TestCase):
         _ensure_app()
 
     def test_prefill_uses_asdf_means_when_override_off(self):
-        """Reproduce the user's bug: override field set to 29977 V /
+        """Reproduce the bug: override field set to 29977 V /
         10920 cm⁻¹ (residual defaults), checkbox OFF, source ASDFs
-        carry 29895.x V / 15975.x cm⁻¹. The dialog defaults must be
+        carry ~30000 V / ~20000 cm⁻¹. The dialog defaults must be
         the source-ASDF means, not 29977 / 10920."""
         import asdf as _asdf
         from gui.analysis.blocks import SourceBlock
         from gui.analysis.merge import MergeDialog
 
         with tempfile.TemporaryDirectory() as tmp:
-            # Two fake ASDFs with the user's typical header values.
+            # Two fake ASDFs with typical header values.
             paths = []
             for i, (cv, ls) in enumerate(
-                    [(2.98953236, 15975.415002),
-                     (2.98955141, 15975.415003)]):
-                p = os.path.join(tmp, f"run_{7735 + i}.asdf")
+                    [(2.99999, 19999.999999),
+                     (3.00001, 20000.000001)]):
+                p = os.path.join(tmp, f"run_{1001 + i}.asdf")
                 _asdf.AsdfFile({
-                    "Run": str(7735 + i),
+                    "Run": str(1001 + i),
                     "CoolerVoltage": cv,
                     "LaserSetpoint": ls,
-                    "MassAMU": 47.95,
-                    "CalSet": np.array([-70.0, 0.0, 300.0]),
-                    "CalReadback": np.array([-0.07, 0.0, 0.30]),
+                    "MassAMU": 100.0,
+                    "CalSet": np.array([-100.0, 0.0, 200.0]),
+                    "CalReadback": np.array([-0.10, 0.0, 0.20]),
                     "raw": np.zeros((4, 6)),
-                    "ScanningRanges": [[-70, 300]],
+                    "ScanningRanges": [[-100, 200]],
                 }).write_to(p)
                 paths.append(p)
 
             sb = SourceBlock()
             # Override field has residual defaults but checkbox OFF
-            # (the user's actual situation).
+            # (the situation that caused the bug).
             sb._cooler_spin.setValue(29977.0)
             sb._laser_spin.setValue(10920.0)
             sb._ovr_enable.setChecked(False)
@@ -418,10 +418,10 @@ class AnalysisMergeDialogPrefillTests(unittest.TestCase):
                 sb._merge_selected()
 
             mm = captured["default_merge_metadata"]
-            # Means of the source files (29895.4 V, 15975.415 cm⁻¹)
+            # Means of the source files (30000.0 V, 20000.0 cm⁻¹)
             # -- NOT 29977 V / 10920 cm⁻¹ (the override defaults).
-            self.assertAlmostEqual(mm["cooler_v"], 29895.41885, places=2)
-            self.assertAlmostEqual(mm["laser_sp"], 15975.4150025,
+            self.assertAlmostEqual(mm["cooler_v"], 30000.0, places=2)
+            self.assertAlmostEqual(mm["laser_sp"], 20000.0,
                                     places=4)
 
     def test_prefill_uses_override_when_checkbox_on(self):
@@ -435,7 +435,7 @@ class AnalysisMergeDialogPrefillTests(unittest.TestCase):
                 _asdf.AsdfFile({
                     "Run": str(i),
                     "CoolerVoltage": 2.99,
-                    "LaserSetpoint": 15975.0,
+                    "LaserSetpoint": 20000.0,
                     "raw": np.zeros((4, 6)),
                 }).write_to(p)
                 paths.append(p)
@@ -481,11 +481,11 @@ class ConsistencyGuardTests(unittest.TestCase):
         from gui.analysis.merge import export_merged_asdf
 
         with tempfile.TemporaryDirectory() as tmp:
-            # Voltage values (-70..298) mislabelled as MHz -- exactly
+            # Voltage values (-100..198) mislabelled as MHz -- exactly
             # the legacy bug pattern.
             md = {
                 "merged_name": "buggy",
-                "x": np.linspace(-70.0, 298.0, 100),
+                "x": np.linspace(-100.0, 198.0, 100),
                 "y": np.ones(100),
                 "yerr": np.ones(100),
                 "x_unit": "MHz",
@@ -511,7 +511,7 @@ class ConsistencyGuardTests(unittest.TestCase):
             asdf.AsdfFile({
                 "denis_schema": DENIS_MERGED_SCHEMA,
                 "merged_name": "buggy",
-                "x": np.linspace(-70.0, 298.0, 100),
+                "x": np.linspace(-100.0, 198.0, 100),
                 "y": np.ones(100),
                 "yerr": np.ones(100),
                 "x_unit": "MHz",

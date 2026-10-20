@@ -1,7 +1,7 @@
-"""Finding missing session files: folder search, folder moves, and the
-2026-10-05 data loss.
+"""Finding missing session files: folder search, folder moves, and a
+data-loss incident.
 
-On 2026-10-05 T01.yaml lost every run list: the old flow located one
+A session file once lost every run list: the old flow located one
 file (the wrong one), the user cancelled the next prompt, and the loader
 wrote the *pruned* session back to disk. These tests pin the fix (the
 file keeps everything still missing, with a .bak of the original) and
@@ -33,7 +33,7 @@ from gui.missing_files import (  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-OLD = "C:/Users/x/Desktop/Ge Analysis DENIS"
+OLD = "C:/data/old_place/denis_session"
 
 
 def _touch(path):
@@ -44,17 +44,17 @@ def _touch(path):
 
 
 class _TreeCase(unittest.TestCase):
-    """A moved session: <tmp>/Offline/Ge Analysis DENIS/{T01.yaml, Data}."""
+    """A moved session: <tmp>/moved/denis_session/{session.yaml, Data}."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.new = os.path.join(self.tmp, "Offline", "Ge Analysis DENIS")
-        self.runs = [7885, 7886, 7892]
-        self.files = [_touch(os.path.join(self.new, "Data", "13",
+        self.new = os.path.join(self.tmp, "moved", "denis_session")
+        self.runs = [1001, 1002, 1003]
+        self.files = [_touch(os.path.join(self.new, "Data", "01",
                                           f"run_{r}.asdf"))
                       for r in self.runs]
-        _touch(os.path.join(self.new, "Data", "13", "run_7860.asdf"))
-        self.missing = [f"{OLD}/Data/13/run_{r}.asdf" for r in self.runs]
+        _touch(os.path.join(self.new, "Data", "01", "run_1010.asdf"))
+        self.missing = [f"{OLD}/Data/01/run_{r}.asdf" for r in self.runs]
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -64,7 +64,7 @@ class HelperTests(_TreeCase):
 
     def test_suffix_score_counts_shared_tail(self):
         self.assertEqual(suffix_score(
-            "C:/a/Data/13/run_1.asdf", r"D:\x\Data\13\run_1.asdf"), 3)
+            "C:/a/Data/01/run_1.asdf", r"D:\x\Data\01\run_1.asdf"), 3)
         self.assertEqual(suffix_score("C:/a/run_1.asdf", "C:/a/run_2.asdf"),
                          0)
 
@@ -87,7 +87,7 @@ class HelperTests(_TreeCase):
         self.assertFalse(complete)
 
     def test_same_name_resolved_by_path_tail(self):
-        stray = _touch(os.path.join(self.tmp, "copies", "run_7885.asdf"))
+        stray = _touch(os.path.join(self.tmp, "copies", "run_1001.asdf"))
         index, _ = index_folder(self.tmp, self.missing)
         found, amb = match_in_index(self.missing, index)
         self.assertEqual(os.path.normcase(found[self.missing[0]]),
@@ -95,9 +95,9 @@ class HelperTests(_TreeCase):
         self.assertNotEqual(found[self.missing[0]], stray)
 
     def test_equal_ties_are_ambiguous(self):
-        a = _touch(os.path.join(self.tmp, "A", "run_9999.asdf"))
-        b = _touch(os.path.join(self.tmp, "B", "run_9999.asdf"))
-        orig = f"{OLD}/elsewhere/run_9999.asdf"
+        a = _touch(os.path.join(self.tmp, "A", "run_1999.asdf"))
+        b = _touch(os.path.join(self.tmp, "B", "run_1999.asdf"))
+        orig = f"{OLD}/elsewhere/run_1999.asdf"
         index, _ = index_folder(self.tmp, [orig])
         found, amb = match_in_index([orig], index)
         self.assertEqual(found, {})
@@ -114,12 +114,12 @@ class HelperTests(_TreeCase):
 
     def test_no_move_from_a_different_file(self):
         self.assertIsNone(derive_prefix(
-            self.missing[0], os.path.join(self.new, "Data", "13",
-                                          "run_7860.asdf")))
+            self.missing[0], os.path.join(self.new, "Data", "01",
+                                          "run_1010.asdf")))
 
     def test_move_only_maps_files_that_exist(self):
         move = derive_prefix(self.missing[0], self.files[0])
-        gone = f"{OLD}/Data/13/run_1234.asdf"
+        gone = f"{OLD}/Data/01/run_1234.asdf"
         self.assertNotIn(gone, apply_prefix([gone], *move))
 
 
@@ -127,22 +127,22 @@ class DeepRemapTests(unittest.TestCase):
     """Paths outside the file lists follow the move too."""
 
     def test_corrections_keys_and_merge_sources(self):
-        old = f"{OLD}/Data/13/run_7885.asdf"
-        new = "C:/new/Data/13/run_7885.asdf"
+        old = f"{OLD}/Data/01/run_1001.asdf"
+        new = "C:/new/Data/01/run_1001.asdf"
         d = {
             "analysis": {"projects": [{"blocks": [{
                 "type": "Source",
                 "files": [{"path": old}],
                 "merged_entries": [{"source_files": [old]}]}]}],
-                "isotope_shifts": {"corrections": {"74Ge": {
-                    old: {"run_number": "7885"}}}}},
+                "isotope_shifts": {"corrections": {"116Sn": {
+                    old: {"run_number": "1001"}}}}},
         }
         remap_paths_inplace(d, {old: new})
         an = d["analysis"]
         blk = an["projects"][0]["blocks"][0]
         self.assertEqual(blk["files"][0]["path"], new)
         self.assertEqual(blk["merged_entries"][0]["source_files"], [new])
-        self.assertEqual(list(an["isotope_shifts"]["corrections"]["74Ge"]),
+        self.assertEqual(list(an["isotope_shifts"]["corrections"]["116Sn"]),
                          [new])
 
 
@@ -151,7 +151,7 @@ class DialogTests(_TreeCase):
     def _dialog(self, auto=True):
         from gui.missing_files_dialog import MissingFilesDialog
         return MissingFilesDialog(self.missing,
-                                  os.path.join(self.new, "T01.yaml"),
+                                  os.path.join(self.new, "session.yaml"),
                                   auto_search=auto)
 
     def test_moved_session_resolves_without_clicks(self):
@@ -173,7 +173,7 @@ class DialogTests(_TreeCase):
         self.assertEqual(dlg.unresolved(), [])
 
     def test_wrong_name_is_refused_unless_confirmed(self):
-        wrong = os.path.join(self.new, "Data", "13", "run_7860.asdf")
+        wrong = os.path.join(self.new, "Data", "01", "run_1010.asdf")
         dlg = self._dialog(auto=False)
         with mock.patch.object(QFileDialog, "getOpenFileName",
                                side_effect=[(wrong, ""), ("", "")]), \
@@ -183,7 +183,7 @@ class DialogTests(_TreeCase):
         self.assertEqual(dlg.remap(), {})
 
     def test_cancel_keeps_what_was_found(self):
-        other = os.path.join(self.tmp, "elsewhere", "run_7885.asdf")
+        other = os.path.join(self.tmp, "elsewhere", "run_1001.asdf")
         _touch(other)
         dlg = self._dialog(auto=False)
         # A pick whose folder move resolves nothing else, then Cancel.
@@ -219,13 +219,13 @@ class _FakeWindow:
 
 
 class LoadFlowDataLossTests(_TreeCase):
-    """The 2026-10-05 incident, end to end through the load flow."""
+    """The data-loss incident, end to end through the load flow."""
 
     def setUp(self):
         super().setUp()
-        self.yaml_path = os.path.join(self.new, "T01.yaml")
+        self.yaml_path = os.path.join(self.new, "session.yaml")
         self.session = {"preanalysis": {"projects": [{
-            "name": "74Ge_T01",
+            "name": "116Sn_session",
             "files": [{"path": p, "checked": True} for p in self.missing],
         }]}}
         with open(self.yaml_path, "w") as fh:

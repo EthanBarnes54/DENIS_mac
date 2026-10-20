@@ -161,7 +161,7 @@ class GetReferenceObservationsTests(unittest.TestCase):
         (`source_name_for_merged` prefixes another `Run_`), so the
         fitter stamps the real name onto the result. Without that
         stamp the centroid is silently skipped."""
-        merged_name = "run_7164_7165"
+        merged_name = "run_1001_1002"
         fit_src = f"Run_{merged_name}"  # source_name_for_merged result
         global_params = _make_params_df([
             ("Run_111", "m", 100.0, 1.0),
@@ -186,13 +186,13 @@ class GetReferenceObservationsTests(unittest.TestCase):
 
     def test_virtual_split_uses_stamped_source_name(self):
         """A virtual-split's source name is `Run_<source_id>`
-        (e.g. `Run_7509_A`). Path-basename heuristics would yield the
+        (e.g. `Run_1001_A`). Path-basename heuristics would yield the
         wrong token; the stamp is required."""
-        fit_src = "Run_7509_A"
+        fit_src = "Run_1001_A"
         params = _make_params_df([(fit_src, "m", 333.0, 0.5)])
         p = AnalysisProject("P", is_reference=True)
         p._last_results = [
-            _make_result("7509_A", "/x/run_7509.vasdf", params,
+            _make_result("1001_A", "/x/run_1001.vasdf", params,
                          ts_start=1700000000.0,
                          source_name=fit_src),
         ]

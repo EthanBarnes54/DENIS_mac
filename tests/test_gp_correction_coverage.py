@@ -102,21 +102,21 @@ class MergedConstituentsTests(unittest.TestCase):
 
     def test_constituents_get_rows_when_only_the_merge_was_fitted(self):
         entries = [
-            _plain("C:/data/run_7895.asdf", "7895"),
-            _plain("C:/data/run_7899.asdf", "7899"),
-            _merged("merged_7895_7899",
-                    [("C:/data/run_7895.asdf", "7895", 1783957209.22),
-                     ("C:/data/run_7899.asdf", "7899", 1783960239.04)]),
+            _plain("C:/data/run_1001.asdf", "1001"),
+            _plain("C:/data/run_1002.asdf", "1002"),
+            _merged("merged_1001_1002",
+                    [("C:/data/run_1001.asdf", "1001", 1700000600.0),
+                     ("C:/data/run_1002.asdf", "1002", 1700003600.0)]),
         ]
         proj = _FakeProject(
             entries,
-            [_result("merged://merged_7895_7899", "merged_7895_7899", 0)])
+            [_result("merged://merged_1001_1002", "merged_1001_1002", 0)])
         stamps, no_ts = _TS(proj)
         self.assertEqual(
-            sorted(stamps), ["C:/data/run_7895.asdf",
-                             "C:/data/run_7899.asdf"])
-        self.assertEqual(stamps["C:/data/run_7895.asdf"],
-                         (1783957209.22, 0.0, "7895"))
+            sorted(stamps), ["C:/data/run_1001.asdf",
+                             "C:/data/run_1002.asdf"])
+        self.assertEqual(stamps["C:/data/run_1001.asdf"],
+                         (1700000600.0, 0.0, "1001"))
         self.assertEqual(no_ts, [])
 
     def test_merged_pseudo_path_never_gets_its_own_row(self):
@@ -189,8 +189,8 @@ class UnfittedProjectTests(unittest.TestCase):
 class AsdfTimestampReaderTests(unittest.TestCase):
     def test_reads_the_first_event_timestamp(self):
         with tempfile.TemporaryDirectory() as d:
-            path = _write_asdf(d, "run_1.asdf", 1783957209.22)
-            self.assertAlmostEqual(_asdf_ts_start(path), 1783957209.22,
+            path = _write_asdf(d, "run_1.asdf", 1700000600.25)
+            self.assertAlmostEqual(_asdf_ts_start(path), 1700000600.25,
                                    places=2)
 
     def test_degenerate_paths_return_zero(self):
@@ -212,8 +212,9 @@ class IntervalAveragedCorrectionTests(unittest.TestCase):
     drift at the instant the run began, which is the one moment the
     measurement is least representative of.
 
-    On the Ge set this is worth ~2 MHz on a 5-minute run and 4.4 MHz
-    on the 33-minute run 7899, against 4-6 MHz statistical errors.
+    On a drifting reference the difference grows with the run's
+    length, and on a long run it can be as large as the run's own
+    statistical error.
     """
 
     def _corrector(self):
@@ -224,7 +225,7 @@ class IntervalAveragedCorrectionTests(unittest.TestCase):
             ReferenceCorrector, ReferenceObservation)
         rng = np.random.default_rng(0)
         t = np.linspace(0.0, 6.0, 14)
-        y = -100.0 - 14.0 * t + rng.normal(0, 0.4, t.size)
+        y = -100.0 - 20.0 * t + rng.normal(0, 0.4, t.size)
         obs = [ReferenceObservation(t=ti, centroid=yi, sigma=3.0)
                for ti, yi in zip(t, y)]
         rc = ReferenceCorrector(kernel="rbf", random_seed=0)
@@ -243,14 +244,13 @@ class IntervalAveragedCorrectionTests(unittest.TestCase):
         rc = self._corrector()
         start = float(rc.predict(2.0)[0][0])
         avg, _ = rc.predict_interval(2.0, 3.0)
-        # A 1 h window on a ~14 MHz/h ramp: about half the ramp.
+        # A 1 h window on a ~20 MHz/h ramp: about half of it, ~10 MHz.
         self.assertGreater(abs(avg - start), 4.0)
 
     def test_sigma_uses_the_full_covariance_not_iid(self):
         """Values minutes apart are almost perfectly correlated.
         Averaging them must NOT shrink the error like sigma/sqrt(n) --
-        that claimed a 5.4x improvement on real data that does not
-        exist."""
+        that would claim a gain in precision that does not exist."""
         import math
         rc = self._corrector()
         _, sd_point = rc.predict(2.5)
@@ -277,12 +277,12 @@ class IntervalAveragedCorrectionTests(unittest.TestCase):
     def test_the_window_survives_the_save_file(self):
         from gui.analysis.reference_correction_panel import _FileCorrection
         fc = _FileCorrection(
-            project="70Ge", run_number="7891", file_path="C:/d/a.asdf",
+            project="112Sn", run_number="1001", file_path="C:/d/a.asdf",
             ts_start=100.0, t_hours=0.0, ts_stop=1500.0)
         self.assertEqual(fc.ts_stop, 1500.0)
         # ts_stop is LAST in the field list: positional construction
         # (which the older tests use) must keep meaning what it says.
-        pos = _FileCorrection("70Ge", "7891", "C:/d/a.asdf", 100.0, 0.0,
+        pos = _FileCorrection("112Sn", "1001", "C:/d/a.asdf", 100.0, 0.0,
                               "Auto", 1.0, 0.5)
         self.assertEqual(pos.mode, "Auto")
         self.assertEqual(pos.auto_value_mhz, 1.0)
@@ -318,22 +318,22 @@ class ResultsRecoveredFromDiskTests(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, tmp,
                         ignore_errors=True)
-        iter_dir = os.path.join(tmp, "74Ge", "iter_001")
+        iter_dir = os.path.join(tmp, "116Sn", "iter_001")
         os.makedirs(iter_dir)
         with open(os.path.join(iter_dir, "parameters.csv"), "w",
                   newline="", encoding="utf-8") as f:
             wr = csv.writer(f)
             wr.writerow(["run_number", "Parameter", "Value", "Error"])
-            for run, c in (("7935", -152.5), ("7937", -140.9)):
+            for run, c in (("1001", -150.0), ("1002", -140.0)):
                 wr.writerow([run, "centroid", c, 3.0])
         with open(os.path.join(iter_dir, "run_summary.csv"), "w",
                   newline="", encoding="utf-8") as f:
             wr = csv.writer(f)
             wr.writerow(["run_number", "ts_start", "ts_stop"])
-            wr.writerow(["7935", 1784053502.92, 1784053720.60])
-            wr.writerow(["7937", 1784054143.27, 1784054271.36])
+            wr.writerow(["1001", 1700000000.0, 1700000300.0])
+            wr.writerow(["1002", 1700000600.0, 1700000900.0])
 
-        p = AnalysisProject("74Ge", is_reference=True)
+        p = AnalysisProject("116Sn", is_reference=True)
         self.addCleanup(p.deleteLater)
         patcher = mock.patch(
             "gui.shared_widgets.get_analysis_dir", return_value=tmp)
@@ -352,7 +352,7 @@ class ResultsRecoveredFromDiskTests(unittest.TestCase):
         self.assertFalse(p._last_results)           # fresh process
         obs = p.get_reference_observations()
         self.assertEqual(len(obs), 2)
-        self.assertEqual({o["run_number"] for o in obs}, {"7935", "7937"})
+        self.assertEqual({o["run_number"] for o in obs}, {"1001", "1002"})
         # And the load is remembered, not repeated per call.
         self.assertEqual(len(p._last_results), 2)
 
@@ -363,7 +363,7 @@ class ResultsRecoveredFromDiskTests(unittest.TestCase):
         p = self._project_with_results_on_disk()
         obs = p.get_reference_observations()
         by_run = {o["run_number"]: o for o in obs}
-        self.assertAlmostEqual(by_run["7935"]["ts_start"], 1784053502.92)
+        self.assertAlmostEqual(by_run["1001"]["ts_start"], 1700000000.0)
 
     def test_a_sample_project_still_returns_nothing(self):
         """Only reference projects supply observations; the disk read
@@ -386,13 +386,12 @@ class ExcludeReferenceRunTests(unittest.TestCase):
     ReferenceObservation.include and the `included` filter in fit()
     both existed from the start, but no widget ever set the flag, so
     a bad centroid could only be removed by deleting the run from the
-    project entirely. The case that forced it: in Arda's Ge T02 set,
-    run_7961's calibration stream was invalid and its centroid lands
-    at +85 MHz among neighbours near -130. Fitted, it pulls the slow
-    amplitude from 11.9 to 144.9 MHz -- a 12x inflation -- because a
+    project entirely. The typical case: a reference run whose
+    calibration stream was invalid lands far from its neighbours.
+    Fitted, it inflates the slow amplitude many times over, because a
     GP has no notion of an outlier and will bend to reach any point
-    it is given. His own pipeline flags the run "excluded from GP
-    training"; DENIS had no way to agree with it.
+    it is given. An analysis that flags such a run "excluded from GP
+    training" needs DENIS to be able to do the same.
     """
 
     class _RefProject:
@@ -413,14 +412,14 @@ class ExcludeReferenceRunTests(unittest.TestCase):
                 "centroid_mhz": centroid, "sigma_mhz": sigma}
 
     def _panel(self):
-        """A panel over one reference project holding the T02 shape:
-        two sane runs around -130 and one bad one at +85."""
+        """A panel over one reference project holding one outlier:
+        two sane runs around -130 and one bad one at +100."""
         from PySide6.QtWidgets import QWidget
         stub = QWidget()
-        stub._projects = [self._RefProject("74Ge", [
-            self._obs(7958, 100.0, -137.9),
-            self._obs(7961, 100.8, 85.0),
-            self._obs(7964, 101.1, -125.9),
+        stub._projects = [self._RefProject("116Sn", [
+            self._obs(1101, 100.0, -135.0),
+            self._obs(1199, 100.5, 100.0),
+            self._obs(1102, 101.0, -125.0),
         ])]
         panel = ReferenceCorrectionPanel(stub)
         self.addCleanup(panel.deleteLater)
@@ -452,32 +451,32 @@ class ExcludeReferenceRunTests(unittest.TestCase):
         labels = [str(panel._obs_list.item(i).data(
             Qt.ItemDataRole.UserRole))
             for i in range(panel._obs_list.count())]
-        self.assertEqual(labels, ["74Ge/7958", "74Ge/7961",
-                                  "74Ge/7964"])
+        self.assertEqual(labels, ["116Sn/1101", "116Sn/1199",
+                                  "116Sn/1102"])
 
     def test_the_row_shows_the_centroid_so_the_outlier_is_visible(self):
-        """+85 among -130s is the whole reason the user is here; it
+        """+100 among -130s is the whole reason the user is here; it
         should not require hovering each row to find it."""
         panel = self._panel()
-        self.assertIn("+85.0", self._row(panel, "7961").text())
+        self.assertIn("+100.0", self._row(panel, "1199").text())
 
     def test_unticking_a_run_excludes_it_from_the_fit(self):
         from PySide6.QtCore import Qt
         panel = self._panel()
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Unchecked)
-        self.assertEqual(panel._excluded_obs, {"74Ge/7961"})
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Unchecked)
+        self.assertEqual(panel._excluded_obs, {"116Sn/1199"})
         by_label = {o.label: o for o in panel._gather_observations()}
-        self.assertFalse(by_label["74Ge/7961"].include)
-        self.assertTrue(by_label["74Ge/7958"].include)
+        self.assertFalse(by_label["116Sn/1199"].include)
+        self.assertTrue(by_label["116Sn/1101"].include)
         # ...and re-ticking puts it back.
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Checked)
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Checked)
         self.assertEqual(panel._excluded_obs, set())
 
     def test_the_label_reports_how_many_are_excluded(self):
         from PySide6.QtCore import Qt
         panel = self._panel()
         self.assertIn("3 total", panel._obs_lbl.text())
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Unchecked)
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Unchecked)
         self.assertIn("1 excluded", panel._obs_lbl.text())
 
     def test_a_project_refresh_does_not_silently_untick_everything(self):
@@ -486,28 +485,28 @@ class ExcludeReferenceRunTests(unittest.TestCase):
         whole set would exclude itself on every refresh."""
         from PySide6.QtCore import Qt
         panel = self._panel()
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Unchecked)
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Unchecked)
         panel.refresh_projects()
-        self.assertEqual(panel._excluded_obs, {"74Ge/7961"})
+        self.assertEqual(panel._excluded_obs, {"116Sn/1199"})
         self.assertEqual(
-            self._row(panel, "7961").checkState(),
+            self._row(panel, "1199").checkState(),
             Qt.CheckState.Unchecked)
         self.assertEqual(
-            self._row(panel, "7958").checkState(), Qt.CheckState.Checked)
+            self._row(panel, "1101").checkState(), Qt.CheckState.Checked)
 
     def test_exclusions_round_trip_through_the_save_file(self):
         from PySide6.QtCore import Qt
         panel = self._panel()
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Unchecked)
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Unchecked)
         d = panel.to_dict()
-        self.assertEqual(d["excluded_observations"], ["74Ge/7961"])
+        self.assertEqual(d["excluded_observations"], ["116Sn/1199"])
 
         other = self._panel()
         other.from_dict(d)
         other.refresh_projects()
-        self.assertEqual(other._excluded_obs, {"74Ge/7961"})
+        self.assertEqual(other._excluded_obs, {"116Sn/1199"})
         self.assertEqual(
-            self._row(other, "7961").checkState(),
+            self._row(other, "1199").checkState(),
             Qt.CheckState.Unchecked)
 
     def test_exclusions_are_stored_by_label_not_index(self):
@@ -515,9 +514,9 @@ class ExcludeReferenceRunTests(unittest.TestCase):
         re-scan; labels survive reordering and reloading."""
         panel = self._panel()
         from PySide6.QtCore import Qt
-        self._row(panel, "7961").setCheckState(Qt.CheckState.Unchecked)
+        self._row(panel, "1199").setCheckState(Qt.CheckState.Unchecked)
         self.assertEqual(panel.to_dict()["excluded_observations"],
-                         ["74Ge/7961"])
+                         ["116Sn/1199"])
 
     def test_fit_refuses_when_too_few_remain_included(self):
         """The guard fires before PyMC is touched, so the user gets a
@@ -551,11 +550,11 @@ class ExcludedPointsOnThePlotTests(unittest.TestCase):
                 ReferenceCorrector, ReferenceObservation)
             obs = [ReferenceObservation(
                 t=float(i), centroid=-130.0 + 2.0 * i, sigma=3.0,
-                label=f"74Ge/run_{7900 + i}") for i in range(8)]
-            # The T02 shape: one wild point, excluded.
+                label=f"116Sn/run_{1100 + i}") for i in range(8)]
+            # One wild point, excluded.
             obs.insert(4, ReferenceObservation(
-                t=3.5, centroid=85.0, sigma=3.5,
-                label="74Ge/run_7961", include=False))
+                t=3.5, centroid=100.0, sigma=3.5,
+                label="116Sn/run_1199", include=False))
             rc = ReferenceCorrector(kernel="rbf", random_seed=0)
             rc.fit(obs)
             cls._cached = rc
@@ -564,13 +563,13 @@ class ExcludedPointsOnThePlotTests(unittest.TestCase):
     def test_excluded_points_are_carried_into_the_arrays(self):
         d = self._corrector().diagnostic_arrays(n_grid=32)
         self.assertEqual(len(d["t_excluded"]), 1)
-        self.assertAlmostEqual(float(d["y_excluded"][0]), 85.0)
+        self.assertAlmostEqual(float(d["y_excluded"][0]), 100.0)
         self.assertAlmostEqual(float(d["yerr_excluded"][0]), 3.5)
 
     def test_excluded_points_are_not_in_the_training_set(self):
         d = self._corrector().diagnostic_arrays(n_grid=32)
         self.assertEqual(len(d["t_train"]), 8)
-        self.assertNotIn(85.0, list(d["y_train"]))
+        self.assertNotIn(100.0, list(d["y_train"]))
 
     def test_excluded_time_is_on_the_same_axis_as_the_training_times(self):
         """Both are rebased on t0; an absolute epoch hour here would
@@ -582,7 +581,7 @@ class ExcludedPointsOnThePlotTests(unittest.TestCase):
 
     def test_the_curve_does_not_chase_the_excluded_point(self):
         """The whole point of excluding it. Near t=3.5 the MAP should
-        stay on the -130..-116 trend, not detour toward +85."""
+        stay on the -130..-116 trend, not detour toward +100."""
         rc = self._corrector()
         mu, _ = rc.predict(3.5 + rc._t0)
         self.assertLess(float(mu[0]), -100.0)
@@ -607,7 +606,7 @@ class HoverTipsWithExclusionsTests(unittest.TestCase):
     t_train holds only the included points, so zipping against every
     observation pairs each point with the wrong run from the first
     exclusion onward -- and zip() truncating means the last run
-    loses its tip with no error at all. Arda uses these tips to find
+    loses its tip with no error at all. The tips are how a reader finds
     which dot is which; silently mislabelling them is worse than not
     having them.
     """
@@ -642,16 +641,16 @@ class HoverTipsWithExclusionsTests(unittest.TestCase):
                 # Pinned to the frame edge: the tip carries the true
                 # value, the marker does not.
                 y = float(text.split("\n")[1].split(" MHz")[0])
-            if run == 7961:
-                self.assertAlmostEqual(y, 85.0, places=3)
+            if run == 1199:
+                self.assertAlmostEqual(y, 100.0, places=3)
             else:
-                # y = -130 + 2*i for run 7900+i
+                # y = -130 + 2*i for run 1100+i
                 self.assertAlmostEqual(
-                    y, -130.0 + 2.0 * (run - 7900), places=3)
+                    y, -130.0 + 2.0 * (run - 1100), places=3)
 
     def test_the_excluded_point_says_so(self):
         panel = self._panel_with_excluded_fit()
-        tips = [t for *_, t in panel._hover_points if "7961" in t]
+        tips = [t for *_, t in panel._hover_points if "1199" in t]
         self.assertEqual(len(tips), 1)
         self.assertIn("excluded", tips[0])
 
@@ -735,7 +734,7 @@ class PlotViewControlTests(unittest.TestCase):
         with_them = len(panel._hover_points)
         panel._show_excluded.setChecked(False)
         self.assertEqual(len(panel._hover_points), with_them - 1)
-        self.assertFalse(any("7961" in t
+        self.assertFalse(any("1199" in t
                              for *_, t in panel._hover_points))
 
     def test_hiding_them_does_not_change_the_fit(self):
@@ -762,12 +761,10 @@ class PlotViewControlTests(unittest.TestCase):
 
         The GP's PREDICTIVE sd must not appear. Including it shrinks
         every residual by crediting the point with the mean
-        function's uncertainty, which is not what a residual asks --
-        and it is not what the reference pipeline this panel is read
-        against does. Its residual file states the definition
-        outright: "observed minus fitted GP / reference measurement
-        and extra-noise sigma". With the predictive sd in, DENIS read
-        +0.68 where that pipeline read +0.93 on the same run.
+        function's uncertainty, which is not what a residual asks.
+        The definition is "observed minus fitted GP / reference
+        measurement and extra-noise sigma"; with the predictive sd in,
+        every residual comes out visibly smaller than that.
         """
         import numpy as np
         rc = ExcludedPointsOnThePlotTests._corrector()
@@ -805,9 +802,9 @@ class RefitNagTests(unittest.TestCase):
     def _panel(self):
         from PySide6.QtWidgets import QWidget
         stub = QWidget()
-        stub._projects = [ExcludeReferenceRunTests._RefProject("74Ge", [
-            ExcludeReferenceRunTests._obs(7958, 100.0, -137.9),
-            ExcludeReferenceRunTests._obs(7961, 100.8, 85.0),
+        stub._projects = [ExcludeReferenceRunTests._RefProject("116Sn", [
+            ExcludeReferenceRunTests._obs(1101, 100.0, -135.0),
+            ExcludeReferenceRunTests._obs(1199, 100.5, 100.0),
         ])]
         panel = ReferenceCorrectionPanel(stub)
         self.addCleanup(panel.deleteLater)
@@ -839,7 +836,7 @@ class RefitNagTests(unittest.TestCase):
         # would test a state the panel never actually reaches.
         for i in range(panel._obs_list.count()):
             it = panel._obs_list.item(i)
-            if str(it.data(Qt.ItemDataRole.UserRole)).endswith("7961"):
+            if str(it.data(Qt.ItemDataRole.UserRole)).endswith("1199"):
                 it.setCheckState(Qt.CheckState.Unchecked)
         panel._fitted_excluded = set(panel._excluded_obs)
         panel._update_obs_label()
@@ -856,19 +853,18 @@ class GPReferenceOptionTests(unittest.TestCase):
     it sits at zero. Offering only "a specific run" or "weighted
     average" forced the reference to be a measurement, which takes
     the reference level off a second time and makes every shift
-    depend on which run was picked (58.6 MHz of spread across the 13
-    74Ge runs on the Ge set).
+    depend on which run was picked.
     """
 
     def _tab(self):
         from gui.analysis.tab import AnalysisTab
         at = AnalysisTab()
         self.addCleanup(at.deleteLater)
-        at._add_project("74Ge")
+        at._add_project("116Sn")
         ist = at._is_tab
         ist._refresh_projects()
         if not ist._entries:          # no fit results to scan
-            ist._add_row(project_name="74Ge", label="74Ge", A=74)
+            ist._add_row(project_name="116Sn", label="116Sn", A=116)
         return ist
 
     def test_the_option_is_offered(self):
@@ -924,15 +920,15 @@ class CentroidDiagnosticTests(unittest.TestCase):
     hours apart cannot share one reference number.
     """
 
-    T0_H = 1783955109.0 / 3600.0        # first reference measurement
+    T0_H = 1700000000.0 / 3600.0        # first reference measurement
 
     def _gp(self):
-        """A GP on a steep ramp, anchored at the Ge campaign's t0."""
+        """A GP on a steep ramp, anchored at an epoch-sized t0."""
         import numpy as np
         from cls_estimations.reference_correction import (
             ReferenceCorrector, ReferenceObservation)
         t = self.T0_H + np.linspace(0.0, 6.0, 14)
-        y = -104.0 - 13.5 * (t - self.T0_H)
+        y = -100.0 - 20.0 * (t - self.T0_H)
         rc = ReferenceCorrector(kernel="rbf", random_seed=0)
         rc.fit([ReferenceObservation(t=ti, centroid=yi, sigma=3.0)
                 for ti, yi in zip(t, y)])
@@ -971,24 +967,24 @@ class CentroidDiagnosticTests(unittest.TestCase):
         return e
 
     _SINGLE = {
-        "success": True, "run_number": "7897", "run_file": "C:/d/7897.asdf",
-        "run_metadata": {"ts_start": 1783958919.0, "ts_stop": 1783959823.0}}
+        "success": True, "run_number": "1003", "run_file": "C:/d/1003.asdf",
+        "run_metadata": {"ts_start": 1700003600.0, "ts_stop": 1700004500.0}}
 
     _MERGED = {
-        "success": True, "run_number": "merged_7891_7901",
-        "run_file": "merged://merged_7891_7901",
-        "run_metadata": {"ts_start": 1783955946.0,
-                         "ts_stop": 1783963976.0}}
+        "success": True, "run_number": "merged_1001_1002",
+        "run_file": "merged://merged_1001_1002",
+        "run_metadata": {"ts_start": 1700000600.0,
+                         "ts_stop": 1700008400.0}}
 
     _MERGED_ENTRY = {
         "is_merged": True,
         "merged_data": {
-            "merged_name": "merged_7891_7901",
+            "merged_name": "merged_1001_1002",
             "per_run": [
-                {"run_num": "7891", "ts_start": 1783955946.0,
-                 "ts_stop": 1783956247.0, "n_events": 981},
-                {"run_num": "7901", "ts_start": 1783963214.0,
-                 "ts_stop": 1783963976.0, "n_events": 2439}]}}
+                {"run_num": "1001", "ts_start": 1700000600.0,
+                 "ts_stop": 1700000900.0, "n_events": 1000},
+                {"run_num": "1002", "ts_start": 1700007800.0,
+                 "ts_stop": 1700008400.0, "n_events": 3000}]}}
 
     def _build(self, ist, label, results, centroid,
                merged_entries=(), run_sel="Weighted Average"):
@@ -1007,38 +1003,38 @@ class CentroidDiagnosticTests(unittest.TestCase):
     # -- single run ------------------------------------------------
     def test_single_run_shows_its_window_and_reference(self):
         ist = self._tab()
-        rows = self._build(ist, "76Ge", [self._SINGLE], -99.045)
+        rows = self._build(ist, "118Sn", [self._SINGLE], -100.0)
         self.assertEqual(len(rows), 2)              # the run + combined
         label, run, kind, t0, dur, w, mu, sd, applied, corrected = rows[0]
-        self.assertEqual((run, kind), ("7897", "single"))
-        self.assertAlmostEqual(dur, 904.0)          # its acquisition
+        self.assertEqual((run, kind), ("1003", "single"))
+        self.assertAlmostEqual(dur, 900.0)          # its acquisition
         self.assertIsNotNone(mu)
         self.assertGreater(sd, 0.0)
         self.assertIsNone(corrected)                # on the combined row
         self.assertEqual(rows[1][1], "combined")
-        self.assertAlmostEqual(rows[1][9], -99.045)
+        self.assertAlmostEqual(rows[1][9], -100.0)
 
     def test_times_are_relative_to_the_first_reference_measurement(self):
         """Not to the isotope's own first run: every row has to share
         the origin the drift plot uses, or they cannot be compared
         across isotopes."""
         ist = self._tab()
-        rows = self._build(ist, "76Ge", [self._SINGLE], -99.045)
-        expected = (1783958919.0 - 1783955109.0) / 3600.0
+        rows = self._build(ist, "118Sn", [self._SINGLE], -100.0)
+        expected = (1700003600.0 - 1700000000.0) / 3600.0
         self.assertAlmostEqual(rows[0][3], expected, places=4)
 
     # -- merged ----------------------------------------------------
     def test_merged_runs_get_one_reference_estimate_each(self):
         ist = self._tab()
-        rows = self._build(ist, "70Ge", [self._MERGED], -62.674,
+        rows = self._build(ist, "112Sn", [self._MERGED], -60.0,
                            merged_entries=[self._MERGED_ENTRY])
         self.assertEqual([r[1] for r in rows],
-                         ["7891", "7901", "combined"])
+                         ["1001", "1002", "combined"])
         self.assertEqual(rows[0][2], "merged")
-        self.assertAlmostEqual(rows[0][4], 301.0)   # own windows
-        self.assertAlmostEqual(rows[1][4], 762.0)
-        # Two hours apart on a 13.5 MHz/h ramp: the two references
-        # must differ substantially.
+        self.assertAlmostEqual(rows[0][4], 300.0)   # own windows
+        self.assertAlmostEqual(rows[1][4], 600.0)
+        # Two hours apart on a 20 MHz/h ramp: the two references
+        # must differ substantially (~40 MHz).
         self.assertGreater(abs(rows[1][6] - rows[0][6]), 20.0)
 
     def test_a_reloaded_merge_is_still_split(self):
@@ -1050,24 +1046,24 @@ class CentroidDiagnosticTests(unittest.TestCase):
         ist = self._tab()
         from_disk = dict(self._MERGED)
         from_disk["run_file"] = ""          # what a reload looks like
-        rows = self._build(ist, "70Ge", [from_disk], -62.674,
+        rows = self._build(ist, "112Sn", [from_disk], -60.0,
                            merged_entries=[self._MERGED_ENTRY])
         self.assertEqual([r[1] for r in rows],
-                         ["7891", "7901", "combined"])
+                         ["1001", "1002", "combined"])
         self.assertEqual(rows[0][2], "merged")
-        # Not the 8030 s aggregate window of the whole merge.
-        self.assertAlmostEqual(rows[0][4], 301.0)
+        # Not the 2 h 10 min aggregate window of the whole merge.
+        self.assertAlmostEqual(rows[0][4], 300.0)
 
     def test_constituents_are_weighted_by_counts(self):
         ist = self._tab()
-        rows = self._build(ist, "70Ge", [self._MERGED], -62.674,
+        rows = self._build(ist, "112Sn", [self._MERGED], -60.0,
                            merged_entries=[self._MERGED_ENTRY])
-        self.assertAlmostEqual(rows[0][5], 981 / (981 + 2439), places=4)
-        self.assertAlmostEqual(rows[1][5], 2439 / (981 + 2439), places=4)
+        self.assertAlmostEqual(rows[0][5], 1000 / (1000 + 3000), places=4)
+        self.assertAlmostEqual(rows[1][5], 3000 / (1000 + 3000), places=4)
 
     def test_combined_matches_the_weighted_arithmetic(self):
         ist = self._tab()
-        rows = self._build(ist, "70Ge", [self._MERGED], -62.674,
+        rows = self._build(ist, "112Sn", [self._MERGED], -60.0,
                            merged_entries=[self._MERGED_ENTRY])
         w0, w1 = rows[0][5], rows[1][5]
         mu = w0 * rows[0][6] + w1 * rows[1][6]
@@ -1078,7 +1074,7 @@ class CentroidDiagnosticTests(unittest.TestCase):
 
     def test_a_merged_reference_lies_between_its_constituents(self):
         ist = self._tab()
-        rows = self._build(ist, "70Ge", [self._MERGED], -62.674,
+        rows = self._build(ist, "112Sn", [self._MERGED], -60.0,
                            merged_entries=[self._MERGED_ENTRY])
         lo, hi = sorted((rows[0][6], rows[1][6]))
         self.assertGreater(rows[2][6], lo)
@@ -1088,7 +1084,7 @@ class CentroidDiagnosticTests(unittest.TestCase):
     def test_gp_reference_row_says_so(self):
         from gui.analysis.isotope_shift_tab import GP_REFERENCE
         ist = self._tab()
-        rows = self._build(ist, "74Ge", [], 0.0, run_sel=GP_REFERENCE)
+        rows = self._build(ist, "116Sn", [], 0.0, run_sel=GP_REFERENCE)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][1], GP_REFERENCE)
         self.assertEqual(rows[0][2], "reference")
@@ -1096,7 +1092,7 @@ class CentroidDiagnosticTests(unittest.TestCase):
 
     def test_without_a_gp_it_says_so_instead_of_showing_nothing(self):
         ist = self._tab(with_gp=False)
-        rows = self._build(ist, "76Ge", [self._SINGLE], -99.045)
+        rows = self._build(ist, "118Sn", [self._SINGLE], -100.0)
         self.assertEqual(rows[0][1], "(no GP fitted)")
 
     def test_a_stale_fit_is_flagged(self):
@@ -1108,17 +1104,17 @@ class CentroidDiagnosticTests(unittest.TestCase):
         stale["run_metadata"].update({
             "centroid_correction_applied": True,
             "centroid_correction_mhz": -999.0})
-        rows = self._build(ist, "76Ge", [stale], -99.045)
+        rows = self._build(ist, "118Sn", [stale], -100.0)
         self.assertAlmostEqual(rows[0][8], -999.0)
         self.assertNotAlmostEqual(rows[0][6], -999.0, places=1)
 
     def test_the_table_renders_every_row(self):
         ist = self._tab()
-        self._build(ist, "70Ge", [self._MERGED], -62.674,
+        self._build(ist, "112Sn", [self._MERGED], -60.0,
                     merged_entries=[self._MERGED_ENTRY])
         t = ist._centroid_table
         self.assertEqual(t.rowCount(), 3)
-        self.assertEqual(t.item(0, 1).text(), "7891")
+        self.assertEqual(t.item(0, 1).text(), "1001")
         self.assertEqual(t.item(2, 1).text(), "combined")
         self.assertTrue(t.item(2, 1).font().bold())
         self.assertFalse(t.item(0, 1).font().bold())
@@ -1165,10 +1161,9 @@ class ReferenceFrameTests(unittest.TestCase):
     sample's own moment. Leaving the reference project on its raw
     scale made ``compute_all_shifts``' ``dnu = c - ref_c`` take the
     reference level off a second time, and made every isotope shift
-    depend on WHICH reference run was ticked as Ref (~45 MHz across
-    the Ge campaign). It also starved the cross-covariance term,
-    which only fires when the reference has Auto-corrected runs, so
-    every sigma_dnu was overestimated.
+    depend on WHICH reference run was ticked as Ref. It also starved
+    the cross-covariance term, which only fires when the reference
+    has Auto-corrected runs, so every sigma_dnu was overestimated.
     """
 
     def test_gp_trains_on_raw_centroids_after_the_reference_is_corrected(self):
@@ -1177,29 +1172,29 @@ class ReferenceFrameTests(unittest.TestCase):
         would collapse the GP onto a flat zero and silently switch
         the correction off."""
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("74Ge", is_reference=True)
-        p._last_results = [_ref_result(-152.3, corrected_by=-152.803)]
+        p = AnalysisProject("116Sn", is_reference=True)
+        p._last_results = [_ref_result(-150.0, corrected_by=-150.5)]
         obs = p.get_reference_observations()
         self.assertEqual(len(obs), 1)
         # Exactly what the fit subtracted, added back.
-        self.assertAlmostEqual(obs[0]["centroid_mhz"], -305.103, places=3)
+        self.assertAlmostEqual(obs[0]["centroid_mhz"], -300.5, places=3)
 
     def test_uncorrected_reference_run_passes_through_untouched(self):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("74Ge", is_reference=True)
-        p._last_results = [_ref_result(-152.3, corrected_by=None)]
+        p = AnalysisProject("116Sn", is_reference=True)
+        p._last_results = [_ref_result(-150.0, corrected_by=None)]
         self.assertAlmostEqual(
-            p.get_reference_observations()[0]["centroid_mhz"], -152.3)
+            p.get_reference_observations()[0]["centroid_mhz"], -150.0)
 
     def test_a_zero_correction_flag_is_still_honoured(self):
         """applied=True with 0.0 MHz is a real state (the GP predicted
         no drift at that instant); it must not be confused with
         'never corrected'."""
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("74Ge", is_reference=True)
-        p._last_results = [_ref_result(-152.3, corrected_by=0.0)]
+        p = AnalysisProject("116Sn", is_reference=True)
+        p._last_results = [_ref_result(-150.0, corrected_by=0.0)]
         self.assertAlmostEqual(
-            p.get_reference_observations()[0]["centroid_mhz"], -152.3)
+            p.get_reference_observations()[0]["centroid_mhz"], -150.0)
 
     def test_compute_covers_checked_reference_projects(self):
         """Source-level check: _collect_corrections is handed the
@@ -1257,29 +1252,29 @@ class CorrectedCentroidPanelTests(unittest.TestCase):
             self._last_results = results
 
     def test_series_are_grouped_per_project_and_rebased_on_the_gp(self):
-        # Raw centroids that ride on the drift: 74Ge sits 1 above and
-        # 2 below the curve, 70Ge 85 below it.
+        # Raw centroids that ride on the drift: 116Sn sits 1 above and
+        # 2 below the curve, 112Sn 85 below it.
         s = self._panel([
-            self._P("74Ge", [_centroid_result(-139.0, 3600.0 * 101.0),
-                             _centroid_result(-132.0, 3600.0 * 102.0)]),
-            self._P("70Ge", [_centroid_result(-220.0, 3600.0 * 101.5)]),
+            self._P("116Sn", [_centroid_result(-139.0, 3600.0 * 101.0),
+                              _centroid_result(-132.0, 3600.0 * 102.0)]),
+            self._P("112Sn", [_centroid_result(-220.0, 3600.0 * 101.5)]),
         ])._corrected_centroids()
-        self.assertEqual(sorted(s), ["70Ge", "74Ge"])
+        self.assertEqual(sorted(s), ["112Sn", "116Sn"])
         # Times are rebased on the GP's own t0, so every panel shares
         # one axis.
-        self.assertEqual(s["74Ge"]["t"], [1.0, 2.0])
-        self.assertEqual(s["70Ge"]["t"], [1.5])
-        self.assertEqual(s["74Ge"]["y"], [1.0, -2.0])
-        self.assertEqual(s["70Ge"]["y"], [-85.0])
+        self.assertEqual(s["116Sn"]["t"], [1.0, 2.0])
+        self.assertEqual(s["112Sn"]["t"], [1.5])
+        self.assertEqual(s["116Sn"]["y"], [1.0, -2.0])
+        self.assertEqual(s["112Sn"]["y"], [-85.0])
 
     def test_an_uncorrected_fit_is_corrected_not_shown_raw(self):
         """The regression. The panel used to read params_df and call it
-        corrected; on T02 none of the 29 runs had been corrected at
-        fit time, so the 'Corrected centroid' panel plotted raw
-        centroids -- 74Ge at -150 instead of about 0."""
-        s = self._panel([self._P("74Ge", [
+        corrected; for runs that had not been corrected at fit time,
+        the 'Corrected centroid' panel plotted raw centroids -- the
+        reference at -150 instead of about 0."""
+        s = self._panel([self._P("116Sn", [
             _centroid_result(-139.0, 3600.0 * 101.0)])])._corrected_centroids()
-        d = s["74Ge"]
+        d = s["116Sn"]
         self.assertEqual(d["raw"], [-139.0])
         self.assertEqual(d["g"], [-140.0])
         self.assertEqual(d["y"], [1.0])
@@ -1292,20 +1287,21 @@ class CorrectedCentroidPanelTests(unittest.TestCase):
         r = _centroid_result(1.0, 3600.0 * 101.0)
         r["run_metadata"].update({"centroid_correction_applied": True,
                                   "centroid_correction_mhz": -140.0})
-        d = self._panel([self._P("74Ge", [r])])._corrected_centroids()["74Ge"]
+        d = self._panel(
+            [self._P("116Sn", [r])])._corrected_centroids()["116Sn"]
         self.assertEqual(d["y"], [1.0])
         self.assertEqual(d["raw"], [-139.0])
         self.assertEqual(d["fly"], [False])
 
     def test_runs_without_a_timestamp_are_dropped(self):
-        s = self._panel([self._P("74Ge", [
+        s = self._panel([self._P("116Sn", [
             _centroid_result(1.0, 0.0),
             _centroid_result(-128.0, 3600.0 * 102.0)])])._corrected_centroids()
-        self.assertEqual(s["74Ge"]["y"], [2.0])
+        self.assertEqual(s["116Sn"]["y"], [2.0])
 
 
 def _ref_result(centroid, *, corrected_by):
-    meta = {"ts_start": 1783965428.62}
+    meta = {"ts_start": 1700000000.0}
     if corrected_by is not None:
         meta["centroid_correction_applied"] = True
         meta["centroid_correction_mhz"] = corrected_by
@@ -1382,7 +1378,7 @@ def _write_asdf(directory, name, ts_start):
     import asdf
     path = os.path.join(directory, name)
     raw = np.array(
-        [[ts_start + i, -185.0, 15.0, 3.0, 65.0, 2.99] for i in range(4)],
+        [[ts_start + i, -185.0, 15.0, 3.0, 65.0, 3.0] for i in range(4)],
         dtype=float)
     tree = {
         "Run": name.split("_")[-1].split(".")[0],

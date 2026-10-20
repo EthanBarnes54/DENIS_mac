@@ -44,18 +44,18 @@ class FileEntryOffsetTests(unittest.TestCase):
         from gui.preanalysis_tab import FileEntry
 
         fe = FileEntry(
-            filepath="/data/run_7735.asdf",
-            run_number="7735", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            filepath="/data/run_1001.asdf",
+            run_number="1001", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         self.assertEqual(fe.centroid_offset_mhz, 0.0)
 
     def test_set_offset_persists_on_entry(self):
         from gui.preanalysis_tab import FileEntry
 
         fe = FileEntry(
-            filepath="/data/run_7735.asdf",
-            run_number="7735", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            filepath="/data/run_1001.asdf",
+            run_number="1001", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         fe.centroid_offset_mhz = 12.5
         self.assertEqual(fe.centroid_offset_mhz, 12.5)
 
@@ -90,12 +90,12 @@ class ManualOffsetThreadedThroughComputeTests(unittest.TestCase):
             data.Frequency_stepsize = 1.0
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             src_cfg = {
-                "mass": 47.95, "ref_freq": 7.5e14, "harmonic": 2,
+                "mass": 100.0, "ref_freq": 7.5e14, "harmonic": 2,
                 "bin_mode": "Frequency", "cooler_correction": "pbp",
                 "pmt_gate": [3, 4]}
             result = compute_merged_spectrum(
@@ -135,12 +135,12 @@ class ManualOffsetThreadedThroughComputeTests(unittest.TestCase):
             data.Frequency_stepsize = 1.0
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             src_cfg = {
-                "mass": 47.95, "ref_freq": 7.5e14, "harmonic": 2,
+                "mass": 100.0, "ref_freq": 7.5e14, "harmonic": 2,
                 "bin_mode": "Frequency", "cooler_correction": "pbp",
                 "pmt_gate": [3, 4]}
             result = compute_merged_spectrum(
@@ -181,8 +181,8 @@ class ManualOffsetThreadedThroughComputeTests(unittest.TestCase):
             data.ToF_binned.values = np.array([[0]])
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             src_cfg = {
@@ -218,8 +218,8 @@ class ManualOffsetThreadedThroughComputeTests(unittest.TestCase):
             data.ToF_binned.values = np.array([[0]])
             data.Run = ""
             data.Size = 100
-            data.Laser_set = 15975.4150
-            data.Vcool_init = 29895.3
+            data.Laser_set = 20000.0
+            data.Vcool_init = 29999.9
             MockCLS.return_value = data
 
             src_cfg = {
@@ -251,9 +251,9 @@ class YamlRoundTripTests(unittest.TestCase):
         # Inject a FileEntry directly (bypass _load_file's filesystem
         # read).
         fe = FileEntry(
-            filepath="/data/run_7735.asdf",
-            run_number="7735", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            filepath="/data/run_1001.asdf",
+            run_number="1001", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         fe.centroid_offset_mhz = 12.5
         pa._file_entries.append(fe)
 
@@ -277,7 +277,7 @@ class YamlRoundTripTests(unittest.TestCase):
         from gui.preanalysis_tab import PreAnalysisTab, FileEntry
 
         cfg = {
-            "files": [{"path": "/data/run_7735.asdf",
+            "files": [{"path": "/data/run_1001.asdf",
                        "color": "#1f77b4", "alpha": 1.0,
                        "linestyle": "-", "checked": True}],
             "merged_entries": [],
@@ -290,9 +290,9 @@ class YamlRoundTripTests(unittest.TestCase):
 
         def _fake_load_file(filepath):
             fe = FileEntry(
-                filepath=filepath, run_number="7735",
-                cooler_v=29895.3, date="2026-05-13",
-                laser_sp=15975.4150, mass_amu=47.95)
+                filepath=filepath, run_number="1001",
+                cooler_v=29999.9, date="2026-01-01",
+                laser_sp=20000.0, mass_amu=100.0)
             pa._file_entries.append(fe)
 
         with patch("os.path.isfile", return_value=True), \

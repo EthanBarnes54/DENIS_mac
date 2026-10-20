@@ -10,7 +10,7 @@
   },
   {
    "type": "p",
-   "text": "The window title starts as <code>DENIS v1.1.1</code>. After a <b>Save</b>, <b>Save As...</b>, or <b>Load All...</b> it gains the file name, e.g. <code>DENIS v1.1.1 - my_run.yaml</code>, so you can always see which configuration is in play. The icon is the bundled <code>denis.ico</code>, falling back to a generic atom glyph if that file is missing."
+   "text": "The window title starts as <code>DENIS v1.1.2</code>. After a <b>Save</b>, <b>Save As...</b>, or <b>Load All...</b> it gains the file name, e.g. <code>DENIS v1.1.2 - my_run.yaml</code>, so you can always see which configuration is in play. The icon is the bundled <code>denis.ico</code>, falling back to a generic atom glyph if that file is missing."
   },
   {
    "type": "h2",
@@ -562,7 +562,7 @@
   {
    "type": "ul",
    "items": [
-    "The DENIS logo and version, <code>DENIS v1.1.1</code>.",
+    "The DENIS logo and version, <code>DENIS v1.1.2</code>.",
     "The name expansion: <b>D</b>oppler <b>E</b>stimation and <b>N</b>umerical <b>I</b>nference for <b>S</b>pectroscopy.",
     "A one-line scope summary: estimation, pre-analysis, fitting, and results.",
     "Hyperlinked credits: <b>satlas2</b> (fitting and spectrum estimation) and <b>cls_tools</b> (IGISOL-style ASDF file reading).",
@@ -653,7 +653,7 @@
    "rows": [
     [
      "Element",
-     "Chemical symbol (e.g. <code>Co</code>, <code>Ge</code>). Typing a known symbol sets <b>Z</b> automatically."
+     "Chemical symbol (e.g. <code>Co</code>, <code>Sn</code>). Typing a known symbol sets <b>Z</b> automatically."
     ],
     [
      "Z",
@@ -3151,8 +3151,8 @@
    "items": [
     "<b>Cal. order</b> — polynomial order (1–3, default 1 linear) for the LCR-voltage calibration applied at load.",
     "<b>Cooler corr.</b> — <code>pbp</code> (point-by-point, tracks drift) or <code>mean</code> (run-averaged) cooler-voltage subtraction.",
-    "<b>Cooler offset [V]</b> — the calibration constant from the Cooler Calibration tab, added to <i>each event's own</i> cooler readback, so <code>pbp</code> / <code>mean</code> above still apply and the cooler's drift within a run is still corrected. With the Override on, it is added to the override voltage instead, and the sum must stay a beam energy (above 0 V) -- the fit stops with an error rather than falling back to the readback. 0 = the files as recorded. Fits, merges, the Preview and the binning diagnostics all apply it the same way. (Before 2026-10-08 a non-zero offset replaced the per-event readback with one constant voltage, the header value plus the offset. On a Ge test set that moved single-run centroids by ~5 MHz typically and by 10-27 MHz (10-12 sigma) on some runs.)",
-    "The <b>Cooler Calibration</b> tab scans that offset by refitting its projects. It walks each project outward from the offset its blocks were fitted at, every fit seeded from its neighbours' answers. A fit pinned at a parameter bound, without an error bar, whose optimiser did not converge, or more than 5&sigma; off its run's line is left out of the calibration, drawn as &times; in the plot and listed in the Log. Its <b>Common offset</b> is the one offset applied to every run, i.e. the one the quoted values are fitted at. There are four ways to choose it: the <i>intersection</i> of the two isotope lines, the <i>middle</i> of the two zero crossings, their <i>weighted mean</i> (with its &chi;&sup2; for one degree of freedom and the error scaled by it), or a <i>manual</i> value. All three computed candidates are listed side by side. Whichever is chosen, the systematic range is the two zero crossings. Tick <b>Widen the range by each zero crossing's 1&sigma;</b> to move each end outward by its own crossing's error, as the Ge analysis did. <b>Apply offset to projects&hellip;</b> writes the chosen offset into the Source blocks.",
+    "<b>Cooler offset [V]</b> — the calibration constant from the Cooler Calibration tab, added to <i>each event's own</i> cooler readback, so <code>pbp</code> / <code>mean</code> above still apply and the cooler's drift within a run is still corrected. With the Override on, it is added to the override voltage instead, and the sum must stay a beam energy (above 0 V) -- the fit stops with an error rather than falling back to the readback. 0 = the files as recorded. Fits, merges, the Preview and the binning diagnostics all apply it the same way. (Before 2026-10-08 a non-zero offset replaced the per-event readback with one constant voltage, the header value plus the offset, so the cooler's drift within a run was no longer corrected and single-run centroids could move by several MHz.)",
+    "The <b>Cooler Calibration</b> tab scans that offset by refitting its projects. It walks each project outward from the offset its blocks were fitted at, every fit seeded from its neighbours' answers. A fit pinned at a parameter bound, without an error bar, whose optimiser did not converge, or more than 5&sigma; off its run's line is left out of the calibration, drawn as &times; in the plot and listed in the Log. Its <b>Common offset</b> is the one offset applied to every run, i.e. the one the quoted values are fitted at. There are four ways to choose it: the <i>intersection</i> of the two isotope lines, the <i>middle</i> of the two zero crossings, their <i>weighted mean</i> (with its &chi;&sup2; for one degree of freedom and the error scaled by it), or a <i>manual</i> value. All three computed candidates are listed side by side. Whichever is chosen, the systematic range is the two zero crossings. Tick <b>Widen the range by each zero crossing's 1&sigma;</b> to move each end outward by its own crossing's error. <b>Apply offset to projects&hellip;</b> writes the chosen offset into the Source blocks.",
     "The <b>Systematics</b> tab turns that range into a systematic. By default it runs <i>Common offset + the two zero crossings</i>: every run of every ticked project is fitted three times, and the whole chain (reference fit, GP, corrections, samples, isotope shifts) is redone at each offset. The fits at the common offset give the quoted values. How far the results at the two zero crossings move from them is the cooler-offset systematic. By default that is the larger of the two deviations, quoted as &plusmn;, and both signed edge deviations are listed. <b>From calibration</b> takes all three offsets from the Cooler Calibration tab. <i>Even grid over a range</i> is the older scan in equal steps. The <b>Budget</b> tab takes the systematics the scan does not measure (the scan-voltage calibration, a mass, ...). Each has a value in MHz and applies where its project, run/isotope and parameter match ('all' matches everything). <b>Add systematics</b> adds them to the cooler term in quadrature or linearly, and <b>with stat</b> does the same for the total. <b>Scale the run average's error by &radic;&chi;&sup2;/&nu;</b> inflates the weighted mean's statistical error when the runs scatter more than their own errors allow. The Summary, the report and <code>systematics_summary.csv</code> list the value, stat, the cooler term, the other systematics, the total systematic and the total.",
     "<b>Ref. shift [MHz]</b> — additive offset to the reference frequency defining x = 0 (stored in Hz at the backend)."
    ]
@@ -3368,7 +3368,7 @@
     "<b>Parameter Sharing</b> (simultaneous) — tick a bare parameter (e.g. <i>Al</i>) and choose <i>Model</i> (share across same-named models) or <i>All</i> (share across every source).",
     "<b>Advanced Constraints</b> (simultaneous) — full-name expressions on individual cross-run/cross-model targets; see [[an-expressions]].",
     "<b>Show Priors</b> → <b>Gaussian Priors</b> table — each prior adds a penalty term.",
-    "<b>MCMC settings</b> (Method = emcee) &mdash; walkers, steps, burn/thin, and optional auto-convergence on autocorrelation time. <b>Burn-in</b> discards the first steps of every walker: they start in a tight ball at the Model block's values and need a while to reach the posterior, and keeping those steps widens the error bars (10&ndash;40 % on a Yb spectrum). Set it where the traces in the walk plot have settled &mdash; the plot marks it with a dashed line. The values, errors, correlations, corner plot, confidence band and plotted fit all use the steps after it."
+    "<b>MCMC settings</b> (Method = emcee) &mdash; walkers, steps, burn/thin, and optional auto-convergence on autocorrelation time. <b>Burn-in</b> discards the first steps of every walker: they start in a tight ball at the Model block's values and need a while to reach the posterior, and keeping those steps widens the error bars, often by tens of per cent. Set it where the traces in the walk plot have settled &mdash; the plot marks it with a dashed line. The values, errors, correlations, corner plot, confidence band and plotted fit all use the steps after it."
    ]
   },
   {
@@ -3542,7 +3542,7 @@
   },
   {
    "type": "code",
-   "code": "full_param_name = Run_<id>___<safe_model>___<param>\n#   safe_model = block name with non-alphanumerics -> '_'\n#   Bkg_p0 is remapped to  Run_<id>___<safe_model>_bkg___p0\n# example: Al * 0.5  in HFS_1 of run 7164\n#   lowers to  Run_7164___HFS_1___Al * 0.5",
+   "code": "full_param_name = Run_<id>___<safe_model>___<param>\n#   safe_model = block name with non-alphanumerics -> '_'\n#   Bkg_p0 is remapped to  Run_<id>___<safe_model>_bkg___p0\n# example: Al * 0.5  in HFS_1 of run 1001\n#   lowers to  Run_1001___HFS_1___Al * 0.5",
    "caption": "Full lmfit parameter naming (naming.py).",
    "lang": "python"
   },
@@ -5901,8 +5901,8 @@
   },
   {
    "type": "code",
-   "code": "estimate:        # full estimation schema + a 'reference' sub-dict\n  element: V\n  Z: 23\n  ...\npreanalysis:     # {projects: [...]}\n  projects:\n    - files: [...]\n      merged_entries: []\n      plot_options: {...}\n      ...\nanalysis:        # {projects: [...], isotope_shifts: {...}}\n  projects: [...]\n  isotope_shifts: {...}\nscan_filters:    # optional, shared across tabs",
-   "caption": "Top-level shape of a Save All YAML (see configs/V_analysis.yaml).",
+   "code": "estimate:        # full estimation schema + a 'reference' sub-dict\n  element: Co\n  Z: 27\n  ...\npreanalysis:     # {projects: [...]}\n  projects:\n    - files: [...]\n      merged_entries: []\n      plot_options: {...}\n      ...\nanalysis:        # {projects: [...], isotope_shifts: {...}}\n  projects: [...]\n  isotope_shifts: {...}\nscan_filters:    # optional, shared across tabs",
+   "caption": "Top-level shape of a Save All YAML.",
    "lang": "yaml"
   },
   {
@@ -5927,7 +5927,7 @@
   },
   {
    "type": "code",
-   "code": "- path: D:/05/14/run_7775.asdf\n  color: '#000080'      # light-mode colour\n  dark_color: '#00E5FF' # dark-mode colour\n  alpha: 1.0\n  linestyle: '-'\n  checked: true\n  centroid_offset_mhz: 0.0",
+   "code": "- path: C:/data/session/run_1001.asdf\n  color: '#000080'      # light-mode colour\n  dark_color: '#00E5FF' # dark-mode colour\n  alpha: 1.0\n  linestyle: '-'\n  checked: true\n  centroid_offset_mhz: 0.0",
    "caption": ""
   },
   {
@@ -6026,7 +6026,7 @@
   {
    "type": "ul",
    "items": [
-    "<b>Legacy top-level Estimate files.</b> A file with <code>element</code>, <code>Z</code>, <code>transition</code>, or <code>isotopes</code> at the root (no <code>estimate:</code> wrapper) is auto-detected and routed to the Estimate tab on both Load All and Load Tab. <code>configs/silicon_252_4.yaml</code> is exactly this shape.",
+    "<b>Legacy top-level Estimate files.</b> A file with <code>element</code>, <code>Z</code>, <code>transition</code>, or <code>isotopes</code> at the root (no <code>estimate:</code> wrapper) is auto-detected and routed to the Estimate tab on both Load All and Load Tab. <code>configs/example_cobalt.yaml</code> is exactly this shape.",
     "<b>Optional keys default sensibly.</b> Absent schema keys such as <code>step_size_V</code>, <code>dwell_time_ms</code>, or <code>g_s_factor</code> fall back to None or their documented default, so an older minimal file loads without error.",
     "<b>Legacy directory key.</b> An old <code>last_data_dir</code> setting is still honoured as a fallback for the data-file picker (see [[data-directory-memory]]).",
     "<b>Pre-Phase save files.</b> Newer per-file fields like <code>centroid_offset_mhz</code> and merge metadata are optional; files predating them round-trip unchanged.",
@@ -6071,7 +6071,7 @@
     ],
     [
      "<b>Search Folder...</b>",
-     "Searches a folder you choose, with <b>Include subfolders</b> ticked (recursive, the default) or only that folder. When several files share a name, the one whose path ends the same way as the old one (<code>Data/13/run_7885.asdf</code>) wins; a true tie is shown as <i>n candidates</i> for you to pick with Locate. <b>Stop</b> on the progress window ends a long search."
+     "Searches a folder you choose, with <b>Include subfolders</b> ticked (recursive, the default) or only that folder. When several files share a name, the one whose path ends the same way as the old one (<code>Data/02/run_1002.asdf</code>) wins; a true tie is shown as <i>n candidates</i> for you to pick with Locate. <b>Stop</b> on the progress window ends a long search."
     ],
     [
      "<b>Locate...</b>",
@@ -6234,7 +6234,7 @@
    "rows": [
     [
      "<b>Source ID:</b>",
-     "Trailing token of the source name (<code>Run_&lt;id&gt;</code>) and of the <code>.vasdf</code> filename, e.g. <code>7509_A</code>."
+     "Trailing token of the source name (<code>Run_&lt;id&gt;</code>) and of the <code>.vasdf</code> filename, e.g. <code>1001_A</code>."
     ],
     [
      "<b>Cooler:</b>",
@@ -7213,7 +7213,7 @@
   },
   {
    "type": "code",
-   "code": "============================================================\nDENIS v1.1.1\n============================================================\nPython:     3.x.y\nPlatform:   Windows 11 (AMD64)\nOS:         <platform string>\nApp dir:    <path to app>\nLog file:   <path>\\logs\\denis_...log\nPySide6     <version>\nmatplotlib  <version>\nnumpy       <version>\nsatlas2     <version>\nclstools    <version>\n------------------------------------------------------------",
+   "code": "============================================================\nDENIS v1.1.2\n============================================================\nPython:     3.x.y\nPlatform:   Windows 11 (AMD64)\nOS:         <platform string>\nApp dir:    <path to app>\nLog file:   <path>\\logs\\denis_...log\nPySide6     <version>\nmatplotlib  <version>\nnumpy       <version>\nsatlas2     <version>\nclstools    <version>\n------------------------------------------------------------",
    "caption": "Startup banner; any dependency that fails to import prints NOT FOUND instead of a version.",
    "lang": "text"
   },
@@ -7285,7 +7285,7 @@
   },
   {
    "type": "p",
-   "text": "DENIS v1.1.1 is developed by Arda Kayaalp. For questions, bug reports, or citation guidance, email <code>arda.kayaalp@kuleuven.be</code>."
+   "text": "DENIS v1.1.2 is developed by Arda Kayaalp. For questions, bug reports, or citation guidance, email <code>arda.kayaalp@kuleuven.be</code>."
   },
   {
    "type": "h2",
@@ -7420,7 +7420,7 @@
   },
   {
    "type": "note",
-   "text": "Files load in the background: the list fills in at once (&#9203; while a file loads) and the window stays usable. From 30 files or 300&nbsp;MB on, they load on up to 8 worker processes (fewer if <b>Settings &rarr; Max cores</b> is lower): 412 runs took 1.7&ndash;4.4&nbsp;s that way against 8.1&nbsp;s one by one."
+   "text": "Files load in the background: the list fills in at once (&#9203; while a file loads) and the window stays usable. From 30 files or 300&nbsp;MB on, they load on up to 8 worker processes (fewer if <b>Settings &rarr; Max cores</b> is lower), about four times faster than one by one."
   },
   {
    "type": "h2",
@@ -7428,7 +7428,7 @@
   },
   {
    "type": "p",
-   "text": "Every top-level entry that is not an array (Run, Date, CoolerVoltage, LaserSetpoint, MassAMU, ScanningRanges, <code>raw_header</code>, &hellip;) with its type. Values are shown exactly as stored; the Note column says where DENIS reads one differently &mdash; <code>CoolerVoltage</code> is stored divided by 10&nbsp;000, so 2.99128455 is 29&nbsp;912.85&nbsp;V."
+   "text": "Every top-level entry that is not an array (Run, Date, CoolerVoltage, LaserSetpoint, MassAMU, ScanningRanges, <code>raw_header</code>, &hellip;) with its type. Values are shown exactly as stored; the Note column says where DENIS reads one differently &mdash; <code>CoolerVoltage</code> is stored divided by 10&nbsp;000, so 3.0 is 30&nbsp;000&nbsp;V."
   },
   {
    "type": "h2",

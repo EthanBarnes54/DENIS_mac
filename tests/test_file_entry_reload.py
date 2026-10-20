@@ -46,8 +46,8 @@ class FileEntryReloadButtonTests(unittest.TestCase):
 
         fe = FileEntry(
             filepath="/data/run_X.asdf",
-            run_number="X", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            run_number="X", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         self.assertTrue(hasattr(fe, "reload_btn"))
         self.assertTrue(hasattr(fe, "reload_requested"))
         # The reload button must be visible on a regular file entry.
@@ -72,8 +72,8 @@ class FileEntryReloadButtonTests(unittest.TestCase):
 
         fe = FileEntry(
             filepath="/data/run_X.asdf",
-            run_number="X", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            run_number="X", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         captured = []
         fe.reload_requested.connect(captured.append)
         fe.reload_btn.click()
@@ -95,8 +95,8 @@ class PaReloadHandlerTests(unittest.TestCase):
         pa = PreAnalysisTab()
         fe = FileEntry(
             filepath="/data/run_X.asdf",
-            run_number="X", cooler_v=29895.3, date="2026-05-13",
-            laser_sp=15975.4150, mass_amu=47.95)
+            run_number="X", cooler_v=29999.9, date="2026-01-01",
+            laser_sp=20000.0, mass_amu=100.0)
         pa._file_entries.append(fe)
         # Force clstools to "available" for the path we exercise.
         # (_get_clstools() replaced the old _HAS_CLSTOOLS flag when the

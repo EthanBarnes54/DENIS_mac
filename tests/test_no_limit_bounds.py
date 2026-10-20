@@ -3,11 +3,11 @@
 The Model block stores "no limit" as -1e12 / +1e12 (a limit only counts
 as set inside +-1e11). Passed on as numbers, lmfit fitted those
 parameters in its bounded internal coordinate, where over a 2e12 range
-its finite-difference steps are useless (2026-09-26, run 7507):
+its finite-difference steps are useless:
   * nelder / powell: the numerical Hessian failed -> no error bars;
-  * leastsq: the background error came out 0.111 against 0.247 from
-    the exact chi-square curvature, scale 6.66 against 8.37.
-T02's explicit finite bounds (1e6-1e8) were not affected (<= 0.5 %).
+  * leastsq: the background and scale errors came out well below the
+    ones from the exact chi-square curvature.
+Explicit finite bounds such as 1e6-1e8 were not affected.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_no_limit_bounds.py -q
@@ -58,7 +58,7 @@ class UnitTests(unittest.TestCase):
         self.assertEqual((p["FWHMG"]["min"], p["FWHMG"]["max"]), (1.0, 600.0))
 
     def test_large_but_real_limits_are_kept(self):
-        """T02 carries 1e6-1e8 bounds on purpose; they stay."""
+        """A model may carry 1e6-1e8 bounds on purpose; they stay."""
         cfg = [{"type": "Voigt", "name": "M", "params": {
             "mu": _p(0.0, -1e8, 1e8), "Bkg_p0": _p(1.0, -1e6, 1e6)}}]
         p = _unset_sentinel_bounds(cfg)[0]["params"]
@@ -86,7 +86,7 @@ class UnitTests(unittest.TestCase):
 
 def _source_config():
     return {
-        "Z": 32, "A": 73, "mass": 72.923459, "harmonic": 2,
+        "Z": 50, "A": 115, "mass": 114.903345, "harmonic": 2,
         "e_lower": 0, "e_upper": 0, "tof_gate": [38.0, 44.0],
         "pmt_gate": [3, 4], "v_gate": None, "f_gate": None,
         "noise_filter": 0, "cooler_correction": "pbp",

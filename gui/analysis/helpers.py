@@ -79,11 +79,11 @@ def _make_int(value=0, min_val=0, max_val=99999, tooltip=""):
 
 
 def format_value_error(value, err, unit="", digits=1):
-    """Compact value(error) notation: ``-136.5(14) MHz``.
+    """Compact value(error) notation: ``-123.4(12) MHz``.
 
     The parenthesised error is in units of the last shown digit (the
-    standard concise physics notation, so ``(14)`` on one decimal means
-    ±1.4). ``err`` that is None / zero / non-finite falls back to the
+    standard concise physics notation, so ``(12)`` on one decimal means
+    ±1.2). ``err`` that is None / zero / non-finite falls back to the
     bare value; errors smaller than one last-digit unit floor at (1).
     """
     import math

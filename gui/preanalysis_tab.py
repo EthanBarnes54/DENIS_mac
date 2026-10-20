@@ -396,8 +396,6 @@ class _NoScrollInt(QSpinBox):
 #: ToF histogram bin, in microseconds. 0.1 us resolves the bunch
 #: shape -- the width of an ion bunch is a couple of microseconds, and
 #: the 1 us bins this used to default to turned it into three steps.
-#: It is also what Arda's own analysis uses (tof_bin_us in the Yb
-#: calibration settings), so the two agree by default (2026-09-25).
 DEFAULT_TOF_BIN_US = 0.1
 
 
@@ -419,8 +417,8 @@ def _make_double(value=0.0, min_val=-1e12, max_val=1e12, decimals=6,
 def _settle_on_edit(*spins):
     """Emit valueChanged when the typing STOPS, not on every digit.
 
-    With keyboard tracking on (Qt's default) typing "70" into the mass
-    number emits 7 and then 70, and each one triggers a replot. On the
+    With keyboard tracking on (Qt's default) typing "112" into the mass
+    number emits 1, 11 and then 112, and each one triggers a replot. On the
     inputs that move the frequency axis that is a second of blocked
     GUI per keystroke. Stepping with the arrows or the wheel still
     emits immediately -- that is a finished value.
@@ -870,7 +868,7 @@ class FileEntry(QWidget):
         A selected row carries ``FileEntry, FileEntry * {background...}``
         and a child dialog inherits it -- and so does every tooltip
         shown over that dialog, which came out dark grey instead of the
-        theme's light one (Arda, 2026-10-09).
+        theme's light one.
         """
         return self.window() or self
 
@@ -1714,8 +1712,8 @@ class HFSModelPanel(QGroupBox):
                              | Qt.AlignmentFlag.AlignVCenter)
             row.addWidget(lbl)
 
-            # A background slope is ~0.02 counts/MHz and a
-            # curvature ~1e-5; at the 2 decimals that suit a centroid
+            # A background slope is small (e.g. 0.01-0.05 counts/MHz)
+            # and a curvature ~1e-5; at the 2 decimals that suit a centroid
             # they round to nothing. Step down to match.
             _dec, _step = (2, 1.0)
             if key == "bkg_p1":
@@ -4375,8 +4373,8 @@ class PreAnalysisTab(QWidget):
                 # The line must be HIDDEN for that capture, as for the
                 # first one above: captured visible, it was baked into
                 # the background, and every later drag frame drew the
-                # new spectrum on top of the old one (Arda, 2026-09-27:
-                # "it shows the previous spectrum when I move the tof").
+                # new spectrum on top of the old one (the previous
+                # spectrum showed while the ToF gate was dragged).
                 ax.set_ylim(0.0, ymax * 1.08 if ymax > 0 else 1.0)
                 ln.set_visible(False)
                 try:
@@ -6681,8 +6679,9 @@ class PreAnalysisTab(QWidget):
             from matplotlib.lines import Line2D
 
             def _cols(n):
-                """Wrap a tall legend into columns. A 15-run project
-                produced 17 stacked entries, a third of the panel."""
+                """Wrap a tall legend into columns. A project with a
+                dozen or more runs would otherwise stack its entries
+                down a third of the panel."""
                 return 1 if n <= 8 else (2 if n <= 18 else 3)
 
             extra = []

@@ -742,7 +742,7 @@ class MergeWiringTests(unittest.TestCase):
         """Same, but with the physics that makes the merge dialog pick
         the frequency domain (ref_freq == 0 forces a voltage merge)."""
         cfg = MergeWiringTests._minimal_source_config()
-        cfg.update({"ref_freq": 1.0e15, "mass": 70.0, "A": 70})
+        cfg.update({"ref_freq": 1.0e15, "mass": 100.0, "A": 100})
         return cfg
 
 
@@ -1020,8 +1020,8 @@ class PytensorCxxNoteTests(unittest.TestCase):
         self.assertIn("slower", note)
         # ...and it has to name the RIGHT compiler. PyTensor probes
         # `g++ -v` and has no MSVC code path, so the note saying
-        # only "C compiler" once sent Arda to Visual Studio -- which
-        # he already had installed, and which cannot satisfy it.
+        # only "C compiler" once sent a user to Visual Studio -- which
+        # was already installed, and which cannot satisfy it.
         self.assertIn("g++", note)
 
     def test_note_does_not_recommend_msvc(self):

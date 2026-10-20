@@ -3,11 +3,10 @@
 The peak rows are generated from I, Jl and Ju. from_dict restores
 those spins with signals blocked, so nothing rebuilt the rows: the
 table still described the spin the block was CREATED with (the
-Ge-like default, I = 7/2), and every saved intensity was dropped
+default, I = 7/2), and every saved intensity was dropped
 because no label matched. A 171Yb model saved with three free
 intensities reloaded with 21 Racah defaults -- a fit that then used
-the wrong line strengths without saying so (found 2026-09-25 while
-generating a Yb calibration session).
+the wrong line strengths without saying so.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest \\

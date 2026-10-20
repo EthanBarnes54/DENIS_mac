@@ -45,8 +45,8 @@ from gui.calibration import (
     shift_mhz_over_scan,
 )
 
-MASS = 51.0           # 51-V
-LASER = 15975.02      # cm^-1, from configs/V_analysis.yaml
+MASS = 100.0          # amu, synthetic
+LASER = 20000.0       # cm^-1, synthetic
 HARMONIC = 2
 COOLER_KV = 3.0       # Vrfq; * VCoolDiv(10000) = 30 kV
 PEAK_V = 200.0        # the resonance sits at DV = 200 V
@@ -90,10 +90,10 @@ class CalibrationEndToEndTests(unittest.TestCase):
         raw = np.column_stack([ts, dv, bunch, tdc, tof,
                                np.full(len(dv), COOLER_KV)])
 
-        cls.path = os.path.join(cls.tmp, "run_9001.asdf")
+        cls.path = os.path.join(cls.tmp, "run_1001.asdf")
         asdf.AsdfFile({
-            "Run": 9001, "CoolerVoltage": COOLER_KV, "LaserSetpoint": LASER,
-            "DwellTime": 0.1, "Experiment": "V", "Date": "2026-07-14",
+            "Run": 1001, "CoolerVoltage": COOLER_KV, "LaserSetpoint": LASER,
+            "DwellTime": 0.1, "Experiment": "TEST", "Date": "2026-07-14",
             "StepSize": 5.0, "ScanningRanges": [[0.0, 400.0]],
             "CalSet": cls.cal_set, "CalReadback": cls.cal_read, "raw": raw,
         }).write_to(cls.path)
@@ -181,15 +181,15 @@ class CalibrationEndToEndTests(unittest.TestCase):
         self.assertEqual(meta["n_excluded"], 0)
 
     def test_borrowing_a_good_run_recovers_the_same_centroid(self):
-        """1002 is broken, 1001 is fine, and they share a supply: borrowing
-        1001's calibration must land the centroid where fixing 1002's own
+        """1001 is broken, 1000 is fine, and they share a supply: borrowing
+        1000's calibration must land the centroid where fixing 1001's own
         points does."""
         import asdf
         rng = np.random.default_rng(4)
         d_set = np.linspace(0.0, 400.0, 21)
         d_read = (1.0007 * d_set + 0.35
                   + rng.normal(0.0, 0.03, d_set.size)) / VACC
-        donor = os.path.join(self.tmp, "run_9000.asdf")
+        donor = os.path.join(self.tmp, "run_1000.asdf")
         asdf.AsdfFile({"CalSet": d_set,
                        "CalReadback": d_read}).write_to(donor)
 
@@ -258,10 +258,10 @@ class CalibrationEndToEndTests(unittest.TestCase):
         from gui.analysis.pipeline import prepare_run_data
         from gui.analysis.vasdf import write_vasdf
 
-        vpath = os.path.join(self.tmp, "9001_A.vasdf")
-        write_vasdf(vpath, parent_path=self.path, source_id="9001_A",
-                    label="9001_A", lo=0.0, hi=PEAK_V)
-        desc = {"parent_path": self.path, "source_id": "9001_A",
+        vpath = os.path.join(self.tmp, "1001_A.vasdf")
+        write_vasdf(vpath, parent_path=self.path, source_id="1001_A",
+                    label="1001_A", lo=0.0, hi=PEAK_V)
+        desc = {"parent_path": self.path, "source_id": "1001_A",
                 "split_lo": 0.0, "split_hi": PEAK_V,
                 "metadata_override": {}}
 

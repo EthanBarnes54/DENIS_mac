@@ -13,14 +13,14 @@ file, and three ways to fill it:
   no clicks at all.
 * **Search Folder...** searches any folder, with or without its
   subfolders. Same-named runs in different places are told apart by
-  how much of the old path's tail they share (``Data/13/run_7885``).
+  how much of the old path's tail they share (``session/day2/run_1001``).
 * **Locate...** asks for the selected files one by one. Each file
   located by hand is turned into a folder move (old folder -> new
   folder) and applied to every other missing file that exists at the
   moved location, so one pick usually resolves the whole session.
 
 Picking a file with a different name asks first (a slip of the mouse
-once swapped run_7885 for run_7860). Cancelling a file prompt returns
+can swap run_1001 for run_1002). Cancelling a file prompt returns
 here with everything found so far kept; nothing is dropped from the
 session until the user presses **Load**, and the files still missing
 then are left out of this load only.

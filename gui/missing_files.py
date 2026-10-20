@@ -207,7 +207,7 @@ def suffix_score(original, candidate):
     """How many trailing path components ``candidate`` shares with
     ``original`` (the file name counts as one). Used to pick, among
     several files with the same name, the one sitting in the same
-    relative place -- ``Data/13/run_7885.asdf`` over a stray copy."""
+    relative place -- ``session/day2/run_1001.asdf`` over a stray copy."""
     a, b = _parts(original), _parts(candidate)
     n = 0
     while n < min(len(a), len(b)) and a[-1 - n] == b[-1 - n]:
@@ -310,10 +310,10 @@ def _remap_registry_keys_inplace(yaml_dict, remap):
     """Rewrite the path-keyed registry sections. Returns slots replaced.
 
     ``remap`` is keyed by the raw strings stored in the YAML's *file-entry*
-    slots (e.g. ``C:/Users/x/Desktop/run_7735.asdf``), but the registries key
+    slots (e.g. ``C:/Users/x/Desktop/run_1001.asdf``), but the registries key
     themselves through ``canonical_path`` (``os.path.normcase`` + ``abspath``),
     which on Windows lowercases and flips the separators
-    (``c:\\users\\x\\desktop\\run_7735.asdf``). A direct ``remap.get(path)``
+    (``c:\\users\\x\\desktop\\run_1001.asdf``). A direct ``remap.get(path)``
     therefore never matches, and the section would be silently left pointing at
     the dead path -- the run then loads fine and quietly computes its voltages
     from the uncorrected calibration. So match canonically, on both sides.

@@ -46,39 +46,39 @@ class ThresholdTests(unittest.TestCase):
     """The value->severity mapping, independent of Qt."""
 
     def test_percent_bands(self):
-        self.assertEqual(pct_key(2.35), "pct_good")
+        self.assertEqual(pct_key(2.0), "pct_good")
         self.assertEqual(pct_key(PCT_GOOD - 0.01), "pct_good")
-        self.assertEqual(pct_key(19.66), "pct_fair")
+        self.assertEqual(pct_key(20.0), "pct_fair")
         self.assertEqual(pct_key(PCT_FAIR), "pct_poor")
-        self.assertEqual(pct_key(80.29), "pct_poor")
+        self.assertEqual(pct_key(80.0), "pct_poor")
         self.assertEqual(pct_key(PCT_POOR), "pct_bad")
-        self.assertEqual(pct_key(671509.73), "pct_bad")
+        self.assertEqual(pct_key(500000.0), "pct_bad")
 
     def test_the_runaway_errors_are_flagged(self):
-        """354992519857.76% is not a large uncertainty, it is a
+        """300000000000% is not a large uncertainty, it is a
         parameter the data does not constrain. It must not land in
         the same bucket as 25%."""
-        self.assertEqual(pct_key(354992519857.76), "pct_bad")
-        self.assertNotEqual(pct_key(354992519857.76), pct_key(25.42))
+        self.assertEqual(pct_key(300000000000.0), "pct_bad")
+        self.assertNotEqual(pct_key(300000000000.0), pct_key(25.0))
 
     def test_correlation_bands_use_magnitude(self):
         """Sign is irrelevant to degeneracy; -1.0 is as bad as +1.0."""
         self.assertEqual(corr_key(1.0), "corr_degenerate")
         self.assertEqual(corr_key(-1.0), "corr_degenerate")
         self.assertEqual(corr_key(CORR_DEGENERATE), "corr_degenerate")
-        self.assertEqual(corr_key(-0.9791), "corr_degenerate")
+        self.assertEqual(corr_key(-0.99), "corr_degenerate")
         self.assertEqual(corr_key(CORR_HIGH), "corr_high")
-        self.assertEqual(corr_key(-0.8584), "corr_high")
-        self.assertEqual(corr_key(0.1455), "corr_low")
+        self.assertEqual(corr_key(-0.85), "corr_high")
+        self.assertEqual(corr_key(0.15), "corr_low")
 
     def test_reduced_chi_square_bands(self):
         """1 is the target. Far above means the model does not fit;
         far below means the errors are overestimated -- both worth
         seeing, so neither is 'good'."""
-        self.assertEqual(rchi_key(0.78438531), "pct_good")
-        self.assertEqual(rchi_key(1.52611209), "pct_good")
-        self.assertEqual(rchi_key(3.02239433), "pct_poor")
-        self.assertEqual(rchi_key(19.7318461), "pct_bad")
+        self.assertEqual(rchi_key(0.8), "pct_good")
+        self.assertEqual(rchi_key(1.5), "pct_good")
+        self.assertEqual(rchi_key(3.0), "pct_poor")
+        self.assertEqual(rchi_key(20.0), "pct_bad")
         self.assertEqual(rchi_key(0.01), "pct_bad")
 
 
@@ -94,39 +94,39 @@ class DetectionTests(unittest.TestCase):
 
     def test_other_text_is_not(self):
         self.assertFalse(looks_like_fit_report(
-            "run_number,centroid,error\n7934,-181.1,4.2\n"))
+            "run_number,centroid,error\n1001,-200.0,4.0\n"))
         self.assertFalse(looks_like_fit_report(""))
         self.assertFalse(looks_like_fit_report("Binning: 5 MHz\n"))
 
     def test_the_marker_may_be_below_the_first_line(self):
         """Reports open with a run banner, not the section header."""
-        body = "\n=========== RUN 7934 ===========\n" + \
+        body = "\n=========== RUN 1001 ===========\n" + \
                "  Cooler V: 1.0\n[[Fit Statistics]]\n"
         self.assertTrue(looks_like_fit_report(body))
 
 
 class ParameterLineTests(unittest.TestCase):
 
-    LINE = ("    Run_7934___Model_1___centroid:     -181.140600 "
-            "+/- 4.25328305 (2.35%) (init = -181.1406)")
-    BAD = ("    Run_7934___Model_1___Al:            13.1820000 "
-           "+/- 88518.4121 (671509.73%) (init = 13.182)")
+    LINE = ("    Run_1001___Model_1___centroid:     -200.000000 "
+            "+/- 4.00000000 (2.00%) (init = -200.0)")
+    BAD = ("    Run_1001___Model_1___Al:            10.0000000 "
+           "+/- 50000.0000 (500000.00%) (init = 10.0)")
 
     def test_a_good_error_is_green_and_a_hopeless_one_is_red(self):
         fmt = build_formats(True)
-        self.assertEqual(_color_of(self.LINE, "(2.35%)"),
+        self.assertEqual(_color_of(self.LINE, "(2.00%)"),
                          QColor(fmt["pct_good"].foreground().color()).name())
-        self.assertEqual(_color_of(self.BAD, "(671509.73%)"),
+        self.assertEqual(_color_of(self.BAD, "(500000.00%)"),
                          QColor(fmt["pct_bad"].foreground().color()).name())
-        self.assertNotEqual(_color_of(self.LINE, "(2.35%)"),
-                            _color_of(self.BAD, "(671509.73%)"))
+        self.assertNotEqual(_color_of(self.LINE, "(2.00%)"),
+                            _color_of(self.BAD, "(500000.00%)"))
 
     def test_the_repeated_prefix_is_dimmed_and_the_leaf_is_not(self):
-        """Run_7934___Model_1___ is identical on every line of the
+        """Run_1001___Model_1___ is identical on every line of the
         block and carries nothing once you know which run you are
         reading; 'centroid' is what the eye is hunting for."""
         c = _colors(self.LINE)
-        prefix = c[self.LINE.index("Run_7934")]
+        prefix = c[self.LINE.index("Run_1001")]
         leaf = c[self.LINE.index("centroid")]
         self.assertNotEqual(prefix, leaf)
         fmt = build_formats(True)
@@ -135,8 +135,8 @@ class ParameterLineTests(unittest.TestCase):
     def test_a_bkg_parameter_leaf_is_found_too(self):
         """Background params use a different separator depth
         (Model_1_bkg___p0); the leaf must still be p0."""
-        line = ("    Run_7934___Model_1_bkg___p0:        3.53560000 "
-                "+/- 0.89887614 (25.42%) (init = 3.5356)")
+        line = ("    Run_1001___Model_1_bkg___p0:        4.00000000 "
+                "+/- 1.00000000 (25.00%) (init = 4.0)")
         fmt = build_formats(True)
         self.assertEqual(_color_of(line, "p0:"),
                          fmt["name"].foreground().color().name())
@@ -145,39 +145,39 @@ class ParameterLineTests(unittest.TestCase):
         fmt = build_formats(True)
         self.assertEqual(_color_of(self.LINE, "(init"),
                          fmt["init"].foreground().color().name())
-        fixed = "    Run_7934___Model_1___Au:            0 (fixed)"
+        fixed = "    Run_1001___Model_1___Au:            0 (fixed)"
         self.assertEqual(_color_of(fixed, "(fixed)"),
                          fmt["fixed"].foreground().color().name())
 
     def test_a_fixed_parameter_gets_no_error_colouring(self):
         """It has no uncertainty to judge, so colouring it would be
         inventing information."""
-        fixed = "    Run_7934___Model_1___Au:            0 (fixed)"
+        fixed = "    Run_1001___Model_1___Au:            0 (fixed)"
         c = _colors(fixed)
         fmt = build_formats(True)
         bad = fmt["pct_bad"].foreground().color().name()
         self.assertNotIn(bad, c.values())
 
     def test_scientific_notation_errors_still_parse(self):
-        """The worst fits report 6.4292e+11, and that is exactly when
-        the colour matters most."""
-        line = ("    Run_7957___Model_1___centroid:     -198.033574 "
-                "+/- 6.4292e+11 (324653921356.18%) (init = -181.1406)")
+        """The worst fits report errors like 6.0000e+11, and that is
+        exactly when the colour matters most."""
+        line = ("    Run_1002___Model_1___centroid:     -200.000000 "
+                "+/- 6.0000e+11 (300000000000.00%) (init = -200.0)")
         fmt = build_formats(True)
-        self.assertEqual(_color_of(line, "(324653921356.18%)"),
+        self.assertEqual(_color_of(line, "(300000000000.00%)"),
                          fmt["pct_bad"].foreground().color().name())
 
 
 class CorrelationLineTests(unittest.TestCase):
 
-    DEGEN = ("    C(Run_7934___Model_1___Al, Run_7934___Model_1___Bl)"
+    DEGEN = ("    C(Run_1001___Model_1___Al, Run_1001___Model_1___Bl)"
              "          = +1.0000")
-    WEAK = ("    C(Run_7934___Model_1___centroid, "
-            "Run_7934___Model_1___scale) = +0.1223")
+    WEAK = ("    C(Run_1001___Model_1___centroid, "
+            "Run_1001___Model_1___scale) = +0.1500")
 
     def test_a_degenerate_pair_is_red(self):
         """C(Al, Bl) = +1.0000 is the line that explains the
-        671509% above it -- the two parameters trade off at no cost,
+        500000% above it -- the two parameters trade off at no cost,
         so neither is determined."""
         fmt = build_formats(True)
         self.assertEqual(_color_of(self.DEGEN, "+1.0000"),
@@ -185,7 +185,7 @@ class CorrelationLineTests(unittest.TestCase):
 
     def test_a_weak_correlation_is_not(self):
         fmt = build_formats(True)
-        self.assertEqual(_color_of(self.WEAK, "+0.1223"),
+        self.assertEqual(_color_of(self.WEAK, "+0.1500"),
                          fmt["corr_low"].foreground().color().name())
 
     def test_both_parameter_names_are_split(self):
@@ -198,17 +198,17 @@ class CorrelationLineTests(unittest.TestCase):
         self.assertEqual(c[self.DEGEN.index("Bl)")], leaf)
 
     def test_a_negative_strong_correlation_is_flagged(self):
-        line = ("    C(Run_7943___Model_1___FWHML, "
-                "Run_7943___Model_1_bkg___p0) = -0.9791")
+        line = ("    C(Run_1003___Model_1___FWHML, "
+                "Run_1003___Model_1_bkg___p0) = -0.9900")
         fmt = build_formats(True)
-        self.assertEqual(_color_of(line, "-0.9791"),
+        self.assertEqual(_color_of(line, "-0.9900"),
                          fmt["corr_degenerate"].foreground().color().name())
 
 
 class StructureTests(unittest.TestCase):
 
     def test_run_banner(self):
-        line = "==================== RUN 7934 ===================="
+        line = "==================== RUN 1001 ===================="
         fmt = build_formats(True)
         c = _colors(line)
         self.assertEqual(c[0], fmt["rule"].foreground().color().name())
@@ -229,27 +229,27 @@ class StructureTests(unittest.TestCase):
                          fmt["subsection"].foreground().color().name())
 
     def test_reduced_chi_square_is_coloured_by_value(self):
-        good = "    reduced chi-square = 0.78438531"
-        bad = "    reduced chi-square = 19.7318461"
+        good = "    reduced chi-square = 0.80000000"
+        bad = "    reduced chi-square = 20.0000000"
         fmt = build_formats(True)
-        self.assertEqual(_color_of(good, "0.78438531"),
+        self.assertEqual(_color_of(good, "0.80000000"),
                          fmt["pct_good"].foreground().color().name())
-        self.assertEqual(_color_of(bad, "19.7318461"),
+        self.assertEqual(_color_of(bad, "20.0000000"),
                          fmt["pct_bad"].foreground().color().name())
 
     def test_plain_chi_square_is_not_judged(self):
         """chi-square alone means nothing without the dof; only the
         reduced form has a target of 1."""
-        line = "    chi-square         = 1460.15661"
+        line = "    chi-square         = 1500.00000"
         fmt = build_formats(True)
-        self.assertEqual(_color_of(line, "1460.15661"),
+        self.assertEqual(_color_of(line, "1500.00000"),
                          fmt["value"].foreground().color().name())
 
     def test_the_metadata_strip_splits_keys_from_values(self):
-        line = ("  Cooler V: 29906.94  |  Laser: 18429.999991940065 "
+        line = ("  Cooler V: 30000.00  |  Laser: 20000.0 "
                 "cm-1  |  Harmonic: 2")
         fmt = build_formats(True)
-        self.assertEqual(_color_of(line, "29906.94"),
+        self.assertEqual(_color_of(line, "30000.00"),
                          fmt["value"].foreground().color().name())
         self.assertEqual(_color_of(line, "Cooler"),
                          fmt["key"].foreground().color().name())
@@ -359,8 +359,8 @@ class ViewerIntegrationTests(unittest.TestCase):
         """Highlighting must never alter the document -- this is the
         file the user exports."""
         tab = self._tab()
-        body = ("[[Variables]]\n    Run_1___M___centroid: -181.14 "
-                "+/- 4.25 (2.35%) (init = -181.14)")
+        body = ("[[Variables]]\n    Run_1___M___centroid: -200.00 "
+                "+/- 4.00 (2.00%) (init = -200.00)")
         tab._set_report_text(body)
         self.assertEqual(tab._text_viewer.toPlainText(), body)
 

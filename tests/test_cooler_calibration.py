@@ -1,12 +1,11 @@
 """Cooler-voltage offset calibration from Yb hyperfine constants.
 
-The numbers here are Arda's own published calibration report ("Cooler-
-voltage calibration via A_l(171Yb+) and A_l(173Yb+)", May 2026): its
-Table 1 (per-run lines and the offset where each run reproduces the
-literature A), Table 2 (per-isotope weighted means) and its
-recommended dV* = -29.27 +/- 1.70 V. Reproducing a result that was
-produced independently, outside DENIS, is the only real check that
-this module implements the intended method.
+Every expected value here is worked out by hand from lines built for
+the test: a run's line ``(A - A_lit) = a + b dV`` reproduces the
+literature A at ``dV = -a/b``, with an error propagated from those of a
+and b; an isotope's offset is the inverse-variance mean over its runs;
+and the calibration is where the two isotope lines cross. The numbers
+are synthetic, chosen so the arithmetic is easy to follow.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_cooler_calibration.py -q
@@ -21,23 +20,44 @@ from cls_estimations.cooler_calibration import (
     weighted_mean,
 )
 
-#: Report Table 1: run, isotope, b (MHz/V), sigma_b, a - A_lit (MHz),
-#: sigma, and the dV* / sigma it printed.
-REPORT_TABLE_1 = [
-    ("7547", "171Yb", -0.2097, 0.0268, -6.466, 0.741, -30.83, 5.30),
-    ("7507", "171Yb", -0.2083, 0.0170, -6.827, 0.470, -32.78, 3.50),
-    ("7509", "171Yb", -0.2098, 0.0179, -7.487, 0.497, -35.69, 3.87),
-    ("7502", "173Yb", +0.0591, 0.0016, +0.822, 0.044, -13.92, 0.84),
-    ("7548", "173Yb", +0.0572, 0.0112, +1.078, 0.311, -18.85, 6.58),
+#: Synthetic per-run lines: run, isotope, b (MHz/V), sigma_b,
+#: a - A_lit (MHz), sigma_a. They reproduce the literature A at
+#: -30, -32 and -28 V (171Yb) and at -10 and -15 V (173Yb).
+RUN_LINES = [
+    ("1001", "171Yb", -0.5, 0.05, -15.0, 1.5),
+    ("1002", "171Yb", -0.5, 0.02, -16.0, 0.5),
+    ("1003", "171Yb", -0.4, 0.02, -11.2, 0.4),
+    ("1004", "173Yb", +0.1, 0.002, +1.0, 0.03),
+    ("1005", "173Yb", +0.1, 0.01, +1.5, 0.3),
 ]
 
+#: Two synthetic isotope lines, ``(A - A_lit) = slope * (dV - zero)``.
+ZERO_171, SLOPE_171 = -30.0, -0.3
+ZERO_173, SLOPE_173 = -10.0, +0.1
+#: Where they cross: b1 (x - z1) = b2 (x - z2) at
+#: x = (b1 z1 - b2 z2) / (b1 - b2) = (9 + 1) / -0.4 = -25 V.
+CROSSING = ((SLOPE_171 * ZERO_171 - SLOPE_173 * ZERO_173)
+            / (SLOPE_171 - SLOPE_173))
 
-def _published_line(b, sb, a, sa):
-    """A LineFit standing in for one of the report's rows. The offset
-    grid was symmetric about zero, so intercept and slope are
-    essentially uncorrelated and a diagonal covariance is right."""
+
+def _line(b, sb, a, sa):
+    """A LineFit with independent intercept and slope errors (a
+    diagonal covariance, as for an offset grid symmetric about zero)."""
     return LineFit(intercept=a, slope=b, cov=np.diag([sa ** 2, sb ** 2]),
                    n=15, chi2=0.0, ndf=13)
+
+
+def _zero_by_hand(b, sb, a, sa):
+    """``(-a/b, sigma)`` with sigma^2 = (sa/b)^2 + (a sb/b^2)^2: the
+    intercept term and the slope term."""
+    return -a / b, math.hypot(sa / b, a * sb / b ** 2)
+
+
+def _mean_by_hand(values, sigmas):
+    """Inverse-variance mean and its error."""
+    w = [1.0 / s ** 2 for s in sigmas]
+    return (sum(wi * v for wi, v in zip(w, values)) / sum(w),
+            1.0 / math.sqrt(sum(w)))
 
 
 def _points_on(line_zero, slope, *, run, isotope, a_lit, dvs=None,
@@ -49,23 +69,24 @@ def _points_on(line_zero, slope, *, run, isotope, a_lit, dvs=None,
                       sigma=sigma) for dv in dvs]
 
 
-class ReportTable1Tests(unittest.TestCase):
+class PerRunZeroCrossingTests(unittest.TestCase):
     """Per run: where the line crosses the literature value."""
 
-    def test_every_run_reproduces_its_published_offset(self):
-        for run, _iso, b, sb, a, sa, dv_p, sig_p in REPORT_TABLE_1:
+    def test_every_run_crosses_where_the_algebra_says(self):
+        for run, _iso, b, sb, a, sa in RUN_LINES:
+            want, want_sig = _zero_by_hand(b, sb, a, sa)
             with self.subTest(run=run):
-                dv, sig = _published_line(b, sb, a, sa).root()
-                self.assertAlmostEqual(dv, dv_p, delta=0.02)
-                self.assertAlmostEqual(sig, sig_p, delta=0.02)
+                dv, sig = _line(b, sb, a, sa).root()
+                self.assertAlmostEqual(dv, want, places=9)
+                self.assertAlmostEqual(sig, want_sig, places=9)
 
     def test_the_error_is_not_just_the_intercept_term(self):
         """Both the intercept and the slope are uncertain, and for
-        run 7547 they contribute about equally (3.5 and 3.9 V). Taking
-        only the first would quote 3.5 instead of 5.3."""
-        _run, _iso, b, sb, a, sa, _dv, sig_p = REPORT_TABLE_1[0]
-        _dv, sig = _published_line(b, sb, a, sa).root()
-        self.assertAlmostEqual(sig, sig_p, delta=0.02)
+        run 1001 they contribute equally (3 V each). Taking only the
+        first would quote 3.0 instead of 3 sqrt(2) = 4.24 V."""
+        _run, _iso, b, sb, a, sa = RUN_LINES[0]
+        _dv, sig = _line(b, sb, a, sa).root()
+        self.assertAlmostEqual(sig, 3.0 * math.sqrt(2.0), places=9)
         self.assertGreater(sig, abs(sa / b) * 1.3)
 
     def test_a_flat_line_has_no_solution(self):
@@ -75,37 +96,39 @@ class ReportTable1Tests(unittest.TestCase):
             LineFit(0.5, 0.0, np.eye(2), 5, 0.0, 3).root())
 
 
-class ReportTable2Tests(unittest.TestCase):
+class PerIsotopeMeanTests(unittest.TestCase):
 
     def test_the_per_isotope_weighted_means(self):
-        for iso, want, want_sig in (("171Yb", -33.46, 2.33),
-                                    ("173Yb", -14.00, 0.83)):
-            rows = [r for r in REPORT_TABLE_1 if r[1] == iso]
-            dv, sig = zip(*[_published_line(b, sb, a, sa).root()
-                            for _r, _i, b, sb, a, sa, _d, _s in rows])
+        for iso in ("171Yb", "173Yb"):
+            rows = [r[2:] for r in RUN_LINES if r[1] == iso]
+            want, want_sig = _mean_by_hand(
+                *zip(*[_zero_by_hand(*row) for row in rows]))
+            dv, sig = zip(*[_line(*row).root() for row in rows])
             m, s = weighted_mean(dv, sig)
             with self.subTest(isotope=iso):
-                self.assertAlmostEqual(m, want, delta=0.02)
-                self.assertAlmostEqual(s, want_sig, delta=0.02)
+                self.assertAlmostEqual(m, want, places=9)
+                self.assertAlmostEqual(s, want_sig, places=9)
 
     def test_the_precise_run_dominates(self):
-        """7502 (sigma 0.84) against 7548 (6.58): the mean must sit
-        next to 7502, not midway."""
-        m, _s = weighted_mean([-13.92, -18.85], [0.84, 6.58])
-        self.assertLess(abs(m - (-13.92)), abs(m - (-18.85)))
+        """1004 (sigma 0.36 V) against 1005 (3.35 V): the mean must sit
+        next to 1004, not midway."""
+        (z4, s4), (z5, s5) = [_zero_by_hand(*r[2:]) for r in RUN_LINES[3:]]
+        m, _s = weighted_mean([z4, z5], [s4, s5])
+        self.assertLess(abs(m - z4), abs(m - z5))
 
 
 class IntersectionTests(unittest.TestCase):
 
-    def test_two_lines_cross_where_the_report_says(self):
-        """With the report's isotope slopes and zero crossings, the
-        lines meet at -29.25 V -- its recommended -29.27."""
-        a = fit_line([-50, 50], [-0.21 * (-50 + 33.46),
-                                 -0.21 * (50 + 33.46)])
-        b = fit_line([-50, 50], [0.058 * (-50 + 14.0),
-                                 0.058 * (50 + 14.0)])
+    def test_two_lines_cross_where_the_algebra_says(self):
+        """Lines through -30 V (slope -0.3) and -10 V (slope +0.1)
+        meet at (b1 z1 - b2 z2) / (b1 - b2) = -25 V."""
+        a = fit_line([-50, 50], [SLOPE_171 * (-50 - ZERO_171),
+                                 SLOPE_171 * (50 - ZERO_171)])
+        b = fit_line([-50, 50], [SLOPE_173 * (-50 - ZERO_173),
+                                 SLOPE_173 * (50 - ZERO_173)])
         dv, _sig = intersect(a, b)
-        self.assertAlmostEqual(dv, -29.25, delta=0.05)
+        self.assertAlmostEqual(dv, CROSSING, places=9)
+        self.assertAlmostEqual(dv, -25.0, places=9)
 
     def test_parallel_lines_never_cross(self):
         a = fit_line([0, 10], [0.0, 1.0])
@@ -176,23 +199,24 @@ class CalibrateTests(unittest.TestCase):
     def _points(self):
         a171, a173 = LITERATURE_A["171Yb"], LITERATURE_A["173Yb"]
         pts = []
-        for run in ("7547", "7507", "7509"):
-            pts += _points_on(-33.46, -0.21, run=run, isotope="171Yb",
-                              a_lit=a171)
-        for run in ("7502", "7548"):
-            pts += _points_on(-14.00, 0.058, run=run, isotope="173Yb",
-                              a_lit=a173)
+        for run in ("1001", "1002", "1003"):
+            pts += _points_on(ZERO_171, SLOPE_171, run=run,
+                              isotope="171Yb", a_lit=a171)
+        for run in ("1004", "1005"):
+            pts += _points_on(ZERO_173, SLOPE_173, run=run,
+                              isotope="173Yb", a_lit=a173)
         return pts
 
     def test_end_to_end(self):
         res = calibrate(self._points())
         self.assertEqual([s.isotope for s in res.isotopes],
                          ["171Yb", "173Yb"])
-        self.assertAlmostEqual(res.dv, -29.25, delta=0.05)
+        self.assertAlmostEqual(res.dv, CROSSING, delta=0.05)
         # The systematic scan runs between the two zero crossings.
-        self.assertAlmostEqual(res.scan_lo, -33.46, delta=0.01)
-        self.assertAlmostEqual(res.scan_hi, -14.00, delta=0.01)
-        self.assertAlmostEqual(res.scan_width, 19.46, delta=0.02)
+        self.assertAlmostEqual(res.scan_lo, ZERO_171, delta=0.01)
+        self.assertAlmostEqual(res.scan_hi, ZERO_173, delta=0.01)
+        self.assertAlmostEqual(res.scan_width, ZERO_173 - ZERO_171,
+                               delta=0.02)
         # ...and the calibration sits inside it.
         self.assertLess(res.scan_lo, res.dv)
         self.assertLess(res.dv, res.scan_hi)
@@ -202,8 +226,8 @@ class CalibrateTests(unittest.TestCase):
         by_iso = {s.isotope: s for s in res.isotopes}
         self.assertEqual(len(by_iso["171Yb"].runs), 3)
         for r in by_iso["171Yb"].runs:
-            self.assertAlmostEqual(r.dv, -33.46, delta=0.01)
-        self.assertAlmostEqual(by_iso["171Yb"].mean_dv, -33.46,
+            self.assertAlmostEqual(r.dv, ZERO_171, delta=0.01)
+        self.assertAlmostEqual(by_iso["171Yb"].mean_dv, ZERO_171,
                                delta=0.01)
 
     def test_the_sign_of_the_173_constant_matters(self):
@@ -221,14 +245,14 @@ class CalibrateTests(unittest.TestCase):
         self.assertIsNone(res.dv)
         self.assertIn("two isotopes", res.note)
         # ...but its own zero crossing is still reported.
-        self.assertAlmostEqual(res.isotopes[0].zero, -33.46, delta=0.01)
+        self.assertAlmostEqual(res.isotopes[0].zero, ZERO_171, delta=0.01)
 
     def test_a_run_with_a_single_offset_is_skipped(self):
         pts = self._points()
-        pts.append(ScanPoint("9999", "171Yb", 0.0, 1.0, 0.1))
+        pts.append(ScanPoint("1999", "171Yb", 0.0, 1.0, 0.1))
         res = calibrate(pts)
         runs = [r.run for s in res.isotopes for r in s.runs]
-        self.assertNotIn("9999", runs)
+        self.assertNotIn("1999", runs)
 
     def test_no_points_is_not_a_crash(self):
         res = calibrate([])

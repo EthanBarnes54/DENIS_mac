@@ -8,8 +8,7 @@ overlays trial HFS models so the operator can read off initial
 parameters before the full fit.
 
 Each pre-analysis is a sub-tab under \app{+ Create Pre-Analysis}; the
-sub-tab name (e.g.\ \app{Rh} in
-Figure~\ref{fig:quickstart_preanalysis}) is shared with the Analysis
+sub-tab name (e.g.\ the isotope being studied) is shared with the Analysis
 tab when settings are pushed across (Section~\ref{sec:analysis}). The
 layout has two panes: a left column holding the \app{Data Files}
 list, the \app{Plot Options} group, and the \app{HFS Models} panel,
@@ -141,8 +140,7 @@ editor: each peak can stay on its \app{Racah} intensity, be typed
 freely (\app{Free}), or be \app{Linked} to another peak by a ratio.
 
 To overlay a ground state and an isomer, add two models and rename
-them (e.g.\ \app{g.s.} and \app{meta} in
-Figure~\ref{fig:quickstart_preanalysis}). \app{Duplicate checked}
+them (e.g.\ \app{g.s.} and \app{meta}). \app{Duplicate checked}
 copies ticked models; \app{Remove checked} removes them (undoable
 with \code{Ctrl+Z}).
 
@@ -218,8 +216,8 @@ their parent's arrays.
 
 Each run carries a DAC$\rightarrow$HV calibration table; a polynomial
 through it turns every event's DAC value into a real voltage, so a
-bad table biases the whole frequency axis (at 30~kV and mass 51,
-1~V of calibration error is $\sim$18~MHz of centroid shift). \denis{}
+bad table biases the whole frequency axis (at 30~kV, 1~V of
+calibration error is typically tens of MHz of centroid shift). \denis{}
 fits this calibration itself on every load, so the numbers do not
 depend on which \code{clstools} build is installed, and by default
 \emph{nothing is dropped}: a run whose calibration outliers would

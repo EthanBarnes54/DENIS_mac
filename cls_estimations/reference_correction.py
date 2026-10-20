@@ -485,12 +485,10 @@ class ReferenceCorrector:
                 A_slow = pm.HalfCauchy("A_slow", beta=1000.0)
                 # The thesis fixes this at Gamma(160, 1) -- 160 HOURS,
                 # sized for its multi-week campaign. Applied to a
-                # 3.5 h run that says the drift is flat, and the MAP
+                # run of a few hours that says the drift is flat, and the MAP
                 # then has to call every real wiggle noise (sigma_n
-                # hit 22 MHz on T02). Scale the prior MEAN to the
-                # observed span instead, shape 2, which is what
-                # Arda's independent analysis of the same data does
-                # (2026-09-21).
+                # can grow to tens of MHz). Scale the prior MEAN to
+                # the observed span instead, shape 2.
                 length_slow = pm.Gamma(
                     "length_slow", alpha=2.0,
                     beta=2.0 / max(t_range, 1e-3))
@@ -628,8 +626,7 @@ class ReferenceCorrector:
         Evaluated by Gauss-Legendre quadrature (window_nodes): the
         posterior is smooth on the scale of a run, and 8 nodes are exact
         to ~1e-10. Until 2026-10-09 it was 32 EQUALLY weighted linspace
-        nodes, which over-weight the window's ends (error ~1/n): up to
-        0.09 MHz on a T02 run (Arda chose the exact rule).
+        nodes, which over-weight the window's ends (error ~1/n).
 
         The sd comes from the FULL posterior covariance across the
         window: G_bar is a linear functional of the GP, so
@@ -727,11 +724,11 @@ class ReferenceCorrector:
         nothing else. The GP's *predictive* sd deliberately does not
         appear -- adding it shrinks every residual by crediting the
         point with the mean function's uncertainty, which is not what
-        a residual is asking about. It also matches the definition
-        used by the reference pipeline this diagnostic is compared
-        against ("observed minus fitted GP / reference measurement
-        and extra-noise sigma"), so the two figures can be read side
-        by side. Times are relative to the first training point,
+        a residual is asking about. It is the common definition
+        ("observed minus fitted GP / reference measurement and
+        extra-noise sigma"), so the figure can be read side by side
+        with other GP drift analyses. Times are relative to the first
+        training point,
         matching :meth:`diagnostic_arrays`.
         """
         self._require_fit()

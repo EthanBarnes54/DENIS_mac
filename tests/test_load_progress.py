@@ -1,7 +1,7 @@
 """The window that shows a session file being loaded.
 
 Restoring a save opens every run named in it -- half a minute on a
-campaign, during which DENIS used to look hung. The window says what
+large session, during which DENIS used to look hung. The window says what
 it is on.
 
 Two properties matter more than the pixels:
@@ -40,7 +40,7 @@ class ReportingWithoutAWindowTests(unittest.TestCase):
 
     def test_it_is_a_no_op(self):
         self.assertIsNone(lp.active())
-        lp.report("run_7947.asdf", 3, 40)      # must not raise
+        lp.report("run_1001.asdf", 3, 40)      # must not raise
         lp.report()
 
     def test_active_is_none(self):
@@ -56,7 +56,7 @@ class WindowTests(unittest.TestCase):
         self.parent = QWidget()
         self.addCleanup(self.parent.deleteLater)
         self.dlg = lp.LoadProgressDialog.begin(
-            self.parent, "T04.yaml", PHASES)
+            self.parent, "session_b.yaml", PHASES)
         self.addCleanup(self.dlg.finish)
 
     def test_it_becomes_the_reporting_target(self):
@@ -72,7 +72,7 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(lp.is_loading())
 
     def test_it_names_the_file(self):
-        self.assertIn("T04.yaml", self.dlg._title.text())
+        self.assertIn("session_b.yaml", self.dlg._title.text())
 
     def test_it_is_modal(self):
         """So a click cannot reach the half-rebuilt window behind it."""
@@ -121,9 +121,9 @@ class WindowTests(unittest.TestCase):
     def test_a_report_without_numbers_only_changes_the_text(self):
         self.dlg.phase("analysis")
         value = self.dlg._bar.value()
-        self.dlg.report("run_7947.asdf")
+        self.dlg.report("run_1001.asdf")
         self.assertEqual(self.dlg._bar.value(), value)
-        self.assertIn("7947", self.dlg._detail.text())
+        self.assertIn("1001", self.dlg._detail.text())
 
     def test_a_long_name_is_elided_not_clipped(self):
         """The label has a fixed height and no chance to re-lay-out,
@@ -143,8 +143,8 @@ class WindowTests(unittest.TestCase):
 
     def test_the_module_level_report_reaches_it(self):
         self.dlg.phase("analysis")
-        lp.report("run_9999.asdf")
-        self.assertIn("9999", self.dlg._detail.text())
+        lp.report("run_1999.asdf")
+        self.assertIn("1999", self.dlg._detail.text())
 
     def test_the_context_manager_closes_it(self):
         with lp.LoadProgressDialog.begin(self.parent, "y.yaml",
@@ -166,7 +166,7 @@ class PumpingTests(unittest.TestCase):
         self.parent = QWidget()
         self.addCleanup(self.parent.deleteLater)
         self.dlg = lp.LoadProgressDialog.begin(
-            self.parent, "T01.yaml", PHASES)
+            self.parent, "session.yaml", PHASES)
         self.addCleanup(self.dlg.finish)
 
     def test_a_report_pumps_the_event_loop(self):
@@ -230,19 +230,19 @@ class SilentModeTests(unittest.TestCase):
         self.addCleanup(self.parent.deleteLater)
 
     def test_the_setting_picks_the_silent_one(self):
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=False)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=False)
         self.addCleanup(p.finish)
         self.assertIsInstance(p, lp.SilentProgress)
         self.assertNotIsInstance(p, lp.LoadProgressDialog)
 
     def test_the_default_is_the_window(self):
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=True)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=True)
         self.addCleanup(p.finish)
         self.assertIsInstance(p, lp.LoadProgressDialog)
 
     def test_it_still_counts_as_loading(self):
         """So the Pre-Analysis replots stand down either way."""
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=False)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=False)
         self.addCleanup(p.finish)
         self.assertTrue(lp.is_loading())
         p.finish()
@@ -250,7 +250,7 @@ class SilentModeTests(unittest.TestCase):
 
     def test_it_still_pumps(self):
         from PySide6.QtCore import QTimer
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=False)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=False)
         self.addCleanup(p.finish)
         fired = []
         QTimer.singleShot(0, lambda: fired.append(True))
@@ -260,23 +260,23 @@ class SilentModeTests(unittest.TestCase):
     def test_it_creates_no_window(self):
         from PySide6.QtWidgets import QApplication
         before = len(QApplication.topLevelWidgets())
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=False)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=False)
         self.addCleanup(p.finish)
         p.phase("analysis")
-        p.report("run_7947.asdf", 1, 2)
+        p.report("run_1001.asdf", 1, 2)
         self.assertEqual(len(QApplication.topLevelWidgets()), before)
 
     def test_reporting_through_the_module_works(self):
-        p = lp.begin(self.parent, "T01.yaml", PHASES, show=False)
+        p = lp.begin(self.parent, "session.yaml", PHASES, show=False)
         self.addCleanup(p.finish)
-        lp.report("run_7947.asdf", 1, 2)      # must not raise
+        lp.report("run_1001.asdf", 1, 2)      # must not raise
 
     def test_a_broken_settings_file_still_gives_a_window(self):
         import gui.shared_widgets as sw
         real = sw._load_settings
         sw._load_settings = lambda: (_ for _ in ()).throw(OSError("gone"))
         self.addCleanup(setattr, sw, "_load_settings", real)
-        p = lp.begin(self.parent, "T01.yaml", PHASES)
+        p = lp.begin(self.parent, "session.yaml", PHASES)
         self.addCleanup(p.finish)
         self.assertIsInstance(p, lp.LoadProgressDialog)
 
@@ -347,8 +347,8 @@ class LoadIntegrationTests(unittest.TestCase):
 
     def test_a_load_walks_the_phases_in_order(self):
         self._load({"analysis": {"projects": [
-            {"project_name": "74Ge", "blocks": []},
-            {"project_name": "70Ge", "blocks": []}]}})
+            {"project_name": "116Sn", "blocks": []},
+            {"project_name": "112Sn", "blocks": []}]}})
         phases = [k for kind, k, _d in self.seen if kind == "phase"]
         self.assertEqual(phases, ["registries", "analysis", "layout"])
 
@@ -360,11 +360,11 @@ class LoadIntegrationTests(unittest.TestCase):
 
     def test_every_project_is_named_as_it_is_rebuilt(self):
         self._load({"analysis": {"projects": [
-            {"project_name": "74Ge", "blocks": []},
-            {"project_name": "70Ge", "blocks": []}]}})
+            {"project_name": "116Sn", "blocks": []},
+            {"project_name": "112Sn", "blocks": []}]}})
         named = [t for kind, _p, t in self.seen if kind == "report"]
-        self.assertIn("74Ge", named)
-        self.assertIn("70Ge", named)
+        self.assertIn("116Sn", named)
+        self.assertIn("112Sn", named)
 
     def test_the_window_is_gone_afterwards(self):
         self._load({"analysis": {"projects": []}})
@@ -380,7 +380,7 @@ class LoadIntegrationTests(unittest.TestCase):
             seen.append(key), real(self, key, detail))[1]
         self.addCleanup(setattr, lp.SilentProgress, "phase", real)
         self._load({"analysis": {"projects": [
-            {"project_name": "74Ge", "blocks": []}]}})
+            {"project_name": "116Sn", "blocks": []}]}})
         self.assertIn("analysis", seen)
         self.assertIsNone(lp.active())
 
@@ -432,7 +432,7 @@ class PaintingFrozenTests(unittest.TestCase):
         lp.LoadProgressDialog.report = spy
         self.addCleanup(setattr, lp.LoadProgressDialog, "report", real)
         self._load(w, {"analysis": {"projects": [
-            {"project_name": "74Ge", "blocks": []}]}})
+            {"project_name": "116Sn", "blocks": []}]}})
         self.assertTrue(seen, "no progress reported at all")
         self.assertTrue(all(v is False for v in seen), seen)
 
@@ -454,8 +454,8 @@ class DataStackPreloadTests(unittest.TestCase):
     """pandas pulls in pyarrow, which loads ~60 MB of native libraries
     (arrow.dll alone is 22 MB). Left to the lazy import that happened
     deep inside a session restore, with a dozen run files already in
-    memory, and on Arda's machine it died there with an access
-    violation during the DLL load (2026-09-25, stack in his session
+    memory, and it was seen to die there with an access
+    violation during the DLL load (the stack was in the session
     log). It is loaded while the process is still small instead."""
 
     @classmethod

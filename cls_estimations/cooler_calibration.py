@@ -7,7 +7,7 @@ hyperfine A constant -- a frequency *difference* within one spectrum --
 moves with it. Two isotopes with precisely known A constants therefore
 pin the offset down.
 
-The method, following the Yb II 369.42 nm calibration report:
+The method (Yb II 369.42 nm line):
 
 1. For each calibration run, fit the spectrum at a grid of assumed
    cooler offsets dV and record the extracted A (with its error).
@@ -26,9 +26,8 @@ The method, following the Yb II 369.42 nm calibration report:
    voltage.
 
 Everything here is pure numerics on (dV, value, sigma) triples -- no
-Qt, no fitting -- so it can be checked against the published report
-(see tests/test_cooler_calibration.py, which reproduces its Table 1
-and Table 2 to the last printed digit).
+Qt, no fitting -- so it can be checked against hand-computed values
+(see tests/test_cooler_calibration.py).
 
 Sign convention: A constants are used as reported, INCLUDING sign.
 A(173Yb+) is negative; feeding its magnitude would flip the slope and
@@ -285,10 +284,10 @@ def calibrate(points, literature=None):
     *points* is any iterable of :class:`ScanPoint`. *literature* maps
     isotope -> A_lit in MHz, defaulting to :data:`LITERATURE_A`.
 
-    Each isotope contributes its POOLED line to the crossing, which
-    is the report's Fig. 1. The per-run lines and their individual
-    solutions are computed too -- they are its Table 1 -- and the
-    weighted mean of those per-run solutions is its Table 2.
+    Each isotope contributes its POOLED line to the crossing (the
+    calibration figure). The per-run lines and their individual
+    solutions are computed too (the per-run table), and so is the
+    weighted mean of those per-run solutions (the per-isotope table).
     """
     lit = dict(LITERATURE_A if literature is None else literature)
     pts = list(points)
@@ -375,11 +374,10 @@ def calibrate(points, literature=None):
 # -- the one offset every run is analysed at ------------------------
 
 #: Ways to turn the calibration into the single offset applied to every
-#: run. The crossing of the two isotope lines is the report's choice;
-#: the zero crossings disagree by more than their errors on real data
-#: (3.1 sigma on the Ge campaign), so the middle of the interval and
-#: their weighted mean are defensible too -- the Ge analysis quoted the
-#: middle. Values are stable keys: they are saved with the session.
+#: run. The crossing of the two isotope lines is the default; the zero
+#: crossings can disagree by more than their errors on real data, so
+#: the middle of the interval and their weighted mean are defensible
+#: too. Values are stable keys: they are saved with the session.
 COMMON_INTERSECTION = "intersection"
 COMMON_MIDRANGE = "midrange"
 COMMON_WEIGHTED = "weighted"
@@ -435,8 +433,8 @@ def systematic_range(result, widen=False):
     """``(lo, hi)`` between the two zero crossings, or None.
 
     With ``widen`` each end moves outward by its OWN crossing's 1-sigma
-    -- the conservative envelope the Ge analysis used (its -24.42 V is
-    the middle of that, -38.52 .. -10.31 V).
+    -- a conservative envelope whose middle is a natural choice for
+    the common offset.
     """
     zs = zero_crossings(result)
     if len(zs) < 2:
@@ -507,8 +505,8 @@ def _drop_trend_outliers(points, literature):
     """``(kept, [(point, reason)])``: per run, drop the worst point while
     it sits more than OUTLIER_SIGMA off the run's own line (and at least
     four points remain). Catches a fit that converged to the wrong
-    minimum with an error bar that looks fine (seen 580-9500 MHz off on
-    the Yb data when the scan was unseeded)."""
+    minimum with an error bar that looks fine (hundreds to thousands of
+    MHz off are possible when the scan is unseeded)."""
     by_run: dict = {}
     for p in points:
         by_run.setdefault((p.isotope, p.run), []).append(p)
@@ -552,8 +550,8 @@ def offset_tag(offset):
     Empty for no offset, so an ordinary analysis keeps the plain
     ``iter_003`` it always had. The sign is always written, since
     "+12V" and "-12V" are different analyses and a bare "12V" would
-    not say which. Trailing zeros are dropped (``-29.250`` ->
-    ``-29.25``) to keep the name readable.
+    not say which. Trailing zeros are dropped (``-12.500`` ->
+    ``-12.5``) to keep the name readable.
     """
     try:
         v = float(offset or 0.0)

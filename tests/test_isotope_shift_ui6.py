@@ -7,7 +7,7 @@ Author:  Arda Kayaalp <arda.kayaalp@kuleuven.be>
 Pins the Phase-6 contracts:
 
 1. ``format_value_error`` — concise value(err) unit notation for the
-   δν labels ("-136.5(14) MHz").
+   δν labels ("-150.0(15) MHz").
 2. gid-based style round-trip — FancyArrowPatch δν arrows are captured
    by ``_extract_figure_style`` and re-applied by gid; saved entries of
    the wrong artist KIND are skipped (the old index-matching smeared δν
@@ -50,12 +50,12 @@ def _shift_figure():
     ax.plot([0, 1, 2], [1, 3, 2], label="run")
     arrow = FancyArrowPatch((0.2, 2.5), (1.8, 2.5), arrowstyle="<->",
                             mutation_scale=12, color="#333333", lw=1.5)
-    arrow.set_gid("isarrow:30Si")
+    arrow.set_gid("isarrow:118Sn")
     ax.add_patch(arrow)
-    txt = ax.text(1.0, 2.6, "δν = -251.2(21) MHz", ha="center",
+    txt = ax.text(1.0, 2.6, "δν = -250.0(25) MHz", ha="center",
                   fontsize=8, color="#333333")
-    txt.set_gid("istext:30Si")
-    ax.text(0.02, 0.9, "30Si", transform=ax.transAxes)
+    txt.set_gid("istext:118Sn")
+    ax.text(0.02, 0.9, "118Sn", transform=ax.transAxes)
     return fig, ax, arrow, txt
 
 
@@ -65,8 +65,8 @@ class FormatValueErrorTests(unittest.TestCase):
         return format_value_error(*a, **k)
 
     def test_concise_notation(self):
-        self.assertEqual(self._f(-136.5, 1.4, "MHz"), "-136.5(14) MHz")
-        self.assertEqual(self._f(-251.2, 2.1, "MHz"), "-251.2(21) MHz")
+        self.assertEqual(self._f(-150.0, 1.5, "MHz"), "-150.0(15) MHz")
+        self.assertEqual(self._f(-250.0, 2.5, "MHz"), "-250.0(25) MHz")
 
     def test_no_error_falls_back_to_bare_value(self):
         self.assertEqual(self._f(10.0, None, "MHz"), "10.0 MHz")
@@ -91,7 +91,7 @@ class GidStyleRoundTripTests(unittest.TestCase):
         style = _extract_figure_style(fig)
         arrows = style["axes"][0]["arrows"]
         self.assertEqual(len(arrows), 1)
-        self.assertEqual(arrows[0]["gid"], "isarrow:30Si")
+        self.assertEqual(arrows[0]["gid"], "isarrow:118Sn")
         self.assertIn("posA", arrows[0])
 
         # Mutate the saved style, apply onto a FRESH default render.
@@ -100,7 +100,7 @@ class GidStyleRoundTripTests(unittest.TestCase):
         arrows[0]["posA"] = [0.1, 2.0]
         arrows[0]["posB"] = [1.9, 2.0]
         for st in style["axes"][0]["texts"]:
-            if st.get("gid") == "istext:30Si":
+            if st.get("gid") == "istext:118Sn":
                 st["fontsize"] = 14.0
         fig2, ax2, arrow2, txt2 = _shift_figure()
         _apply_figure_style(fig2, style)
@@ -126,7 +126,7 @@ class GidStyleRoundTripTests(unittest.TestCase):
                                      _apply_figure_style)
         fig, ax, arrow, txt = _shift_figure()
         style = _extract_figure_style(fig)
-        style["removed_gids"] = ["isarrow:30Si", "istext:30Si"]
+        style["removed_gids"] = ["isarrow:118Sn", "istext:118Sn"]
         _apply_figure_style(fig, style)
         self.assertNotIn(arrow, ax.patches)
         self.assertNotIn(txt, ax.texts)
@@ -150,7 +150,7 @@ class PlotEditorPhase6Tests(unittest.TestCase):
         self.assertIn("arrow", kinds)
         row = kinds.index("arrow")
         self.assertIs(dlg._line_artists[row][0], arrow)
-        self.assertIn("isarrow:30Si",
+        self.assertIn("isarrow:118Sn",
                       dlg._lines_list.item(row).text())
         dlg.deleteLater()
 
@@ -176,7 +176,7 @@ class PlotEditorPhase6Tests(unittest.TestCase):
         dlg._lines_list.setCurrentRow(row)
         dlg._on_line_selected(row)
         dlg._remove_selected_artist()
-        self.assertIn("isarrow:30Si", dlg.removed_gids)
+        self.assertIn("isarrow:118Sn", dlg.removed_gids)
         self.assertNotIn(arrow, ax.patches)
         dlg.deleteLater()
 

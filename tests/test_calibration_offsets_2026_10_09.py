@@ -1,4 +1,4 @@
-"""Arda's requests of 2026-10-09.
+"""The calibration-offset changes of 2026-10-09.
 
 * The voltage-calibration dialog: light tooltips like the rest of the
   app, a dark canvas on request, and plots that read better (per-point
@@ -49,11 +49,11 @@ from gui.analysis.systematics_tab import (  # noqa: E402
 N_POINTS = 41
 _SET = np.arange(N_POINTS, dtype=float)
 _rng = np.random.default_rng(7)
-_READ_V = -0.96 + 0.9965 * _SET + _rng.normal(0.0, 0.05, N_POINTS)
+_READ_V = -1.0 + 0.99 * _SET + _rng.normal(0.0, 0.05, N_POINTS)
 _READ_V[0] += 5.0            # a supply still settling at the start
 _READ_RAW = _READ_V / calibration.DEFAULT_VACC_DIV
-PATH = os.path.join(os.path.abspath(os.sep), "nowhere", "run_9999.asdf")
-PHYSICS = {"mass_amu": 73.92, "laser_cm": 18836.3, "cooler_v": 29907.9,
+PATH = os.path.join(os.path.abspath(os.sep), "nowhere", "run_1999.asdf")
+PHYSICS = {"mass_amu": 100.0, "laser_cm": 20000.0, "cooler_v": 30000.0,
            "harmonic": 2}
 
 
@@ -73,7 +73,7 @@ class _DialogCase(unittest.TestCase):
         self.addCleanup(calibration.get_registry().clear, PATH)
 
     def dialog(self, parent=None, physics=PHYSICS):
-        dlg = caldlg.CalibrationDialog(PATH, run_label="run_9999",
+        dlg = caldlg.CalibrationDialog(PATH, run_label="run_1999",
                                        physics=physics, parent=parent)
         self.addCleanup(dlg.deleteLater)
         return dlg
@@ -97,7 +97,8 @@ def _tip_colour(widget):
 
 
 class _Win98:
-    """Apply Arda's theme for one test, and put the app back after."""
+    """Apply the Windows 98 theme for one test, and put the app back
+    after."""
 
     def __enter__(self):
         from gui.theme import apply_theme
@@ -115,7 +116,7 @@ class _Win98:
 
 
 class TooltipTests(_DialogCase):
-    """The tooltips in the dialog were dark grey (Arda, 2026-10-09)."""
+    """The tooltips in the dialog were dark grey."""
 
     BUTTERMILK = "#ffffe1"
 
@@ -123,8 +124,8 @@ class TooltipTests(_DialogCase):
         from gui.preanalysis_tab import FileEntry
         win = QMainWindow()
         self.addCleanup(win.deleteLater)
-        fe = FileEntry(filepath=PATH, run_number="9999", cooler_v=29907.9,
-                       date="2026-10-09", laser_sp=18836.3, mass_amu=73.92)
+        fe = FileEntry(filepath=PATH, run_number="1999", cooler_v=30000.0,
+                       date="2026-10-09", laser_sp=20000.0, mass_amu=100.0)
         win.setCentralWidget(fe)
         fe.selected = True      # FileEntry, FileEntry * { background }
         return win, fe
@@ -266,9 +267,36 @@ class PlotTests(_DialogCase):
 
 # ── the common offset ────────────────────────────────────────────────
 
-def _cal_result(z171=(-32.760, 5.759), z173=(-13.083, 2.770),
-                dv=(-28.339, 4.508)):
-    """A calibration with the Ge analysis's correlated_all numbers."""
+# Two synthetic isotope lines, (A - A_lit) = a + b dV, with independent
+# errors on a and b. Every expected number below is worked out from
+# them by hand: 171Yb crosses zero at -30 V, 173Yb at -10 V.
+LINE_171 = dict(a=-15.0, sa=1.6, b=-0.5, sb=0.04)
+LINE_173 = dict(a=2.5, sa=0.6, b=0.25, sb=0.045)
+
+
+def _zero(a, sa, b, sb):
+    """Zero crossing -a/b, with sigma^2 = (sa/b)^2 + (a sb/b^2)^2."""
+    return -a / b, math.hypot(sa / b, a * sb / b ** 2)
+
+
+def _crossing(l1, l2):
+    """Where two independent lines meet, x = (a2 - a1) / (b1 - b2), with
+    sigma^2 = (sa1^2 + x^2 sb1^2 + sa2^2 + x^2 sb2^2) / (b1 - b2)^2."""
+    db = l1["b"] - l2["b"]
+    x = (l2["a"] - l1["a"]) / db
+    var = (l1["sa"] ** 2 + x ** 2 * l1["sb"] ** 2
+           + l2["sa"] ** 2 + x ** 2 * l2["sb"] ** 2) / db ** 2
+    return x, math.sqrt(var)
+
+
+Z171 = _zero(**LINE_171)                  # -30 +/- 4 V (3.2 and 2.4)
+Z173 = _zero(**LINE_173)                  # -10 +/- 3 V (2.4 and 1.8)
+CROSS = _crossing(LINE_171, LINE_173)     # -23.33 V
+WIDE_LO, WIDE_HI = Z171[0] - Z171[1], Z173[0] + Z173[1]   # -34, -7 V
+
+
+def _cal_result(z171=Z171, z173=Z173, dv=CROSS):
+    """A calibration whose isotope lines are LINE_171 and LINE_173."""
     iso = [SimpleNamespace(isotope="171Yb", zero=z171[0],
                            zero_sigma=z171[1]),
            SimpleNamespace(isotope="173Yb", zero=z173[0],
@@ -279,49 +307,60 @@ def _cal_result(z171=(-32.760, 5.759), z173=(-13.083, 2.770),
 
 
 class CommonOffsetTests(unittest.TestCase):
-    """Checked against the Ge analysis (cooler_calibration_all.py and
-    the A5 review's weighted mean)."""
+    """Each way of picking the common offset, against the arithmetic
+    done by hand on the synthetic lines above."""
 
     def test_the_range_is_the_zero_crossings(self):
         self.assertEqual(systematic_range(_cal_result()),
-                         (-32.760, -13.083))
+                         (Z171[0], Z173[0]))
 
     def test_widened_each_end_moves_out_by_its_own_sigma(self):
         lo, hi = systematic_range(_cal_result(), widen=True)
-        self.assertAlmostEqual(lo, -38.519)
-        self.assertAlmostEqual(hi, -10.313)
+        self.assertAlmostEqual(lo, WIDE_LO)
+        self.assertAlmostEqual(hi, WIDE_HI)
 
     def test_the_order_of_the_isotopes_does_not_matter(self):
-        r = _cal_result(z171=(-13.083, 2.770), z173=(-32.760, 5.759))
+        r = _cal_result(z171=Z173, z173=Z171)
         lo, hi = systematic_range(r, widen=True)
-        self.assertAlmostEqual(lo, -38.519)
-        self.assertAlmostEqual(hi, -10.313)
+        self.assertAlmostEqual(lo, WIDE_LO)
+        self.assertAlmostEqual(hi, WIDE_HI)
 
-    def test_the_middle_of_the_widened_range_is_the_ge_production(self):
+    def test_the_middle_of_the_widened_range(self):
         c = common_offset(_cal_result(), COMMON_MIDRANGE, widen=True)
-        self.assertAlmostEqual(c.value, -24.416, places=3)
-        self.assertAlmostEqual(c.half_range, 14.103, places=3)
+        self.assertAlmostEqual(c.value, (WIDE_LO + WIDE_HI) / 2)     # -20.5
+        self.assertAlmostEqual(c.half_range, (WIDE_HI - WIDE_LO) / 2)  # 13.5
 
     def test_the_weighted_mean_of_the_crossings(self):
-        """The A5 review: -16.8 +/- 2.5 V, chi2 = 9.5, scaled 7.7 V."""
+        """Inverse-variance mean of the two crossings, its error, the
+        chi2 of the pair about it and the Birge-scaled error: here
+        -17.2 +/- 2.4 V, chi2 = 16, scaled 9.6 V."""
+        (z1, s1), (z2, s2) = Z171, Z173
+        w1, w2 = 1.0 / s1 ** 2, 1.0 / s2 ** 2
+        mean = (w1 * z1 + w2 * z2) / (w1 + w2)
+        sigma = 1.0 / math.sqrt(w1 + w2)
+        chi2 = w1 * (z1 - mean) ** 2 + w2 * (z2 - mean) ** 2
+        # For two values that is (z1 - z2)^2 / (s1^2 + s2^2).
+        self.assertAlmostEqual(chi2, (z1 - z2) ** 2 / (s1 ** 2 + s2 ** 2))
+        self.assertGreater(chi2, 1.0)       # so the error is inflated
         c = common_offset(_cal_result(), COMMON_WEIGHTED)
-        self.assertAlmostEqual(c.value, -16.78, places=2)
-        self.assertAlmostEqual(c.sigma, 2.496, places=3)
-        self.assertAlmostEqual(c.chi2, 9.48, places=2)
-        self.assertAlmostEqual(c.sigma_scaled, 7.69, places=2)
+        self.assertAlmostEqual(c.value, mean)
+        self.assertAlmostEqual(c.sigma, sigma)
+        self.assertAlmostEqual(c.chi2, chi2)
+        # One degree of freedom: scaled by sqrt(chi2 / 1).
+        self.assertAlmostEqual(c.sigma_scaled, sigma * math.sqrt(chi2))
 
     def test_the_intersection(self):
         c = common_offset(_cal_result(), COMMON_INTERSECTION)
-        self.assertEqual((c.value, c.sigma), (-28.339, 4.508))
+        self.assertEqual((c.value, c.sigma), CROSS)
 
     def test_the_range_does_not_depend_on_the_method(self):
         for m in (COMMON_INTERSECTION, COMMON_MIDRANGE, COMMON_WEIGHTED):
             c = common_offset(_cal_result(), m)
-            self.assertEqual((c.lo, c.hi), (-32.760, -13.083), m)
+            self.assertEqual((c.lo, c.hi), (Z171[0], Z173[0]), m)
 
     def test_a_manual_value_needs_no_calibration(self):
-        c = common_offset(None, COMMON_MANUAL, manual=-24.42)
-        self.assertEqual(c.value, -24.42)
+        c = common_offset(None, COMMON_MANUAL, manual=-25.0)
+        self.assertEqual(c.value, -25.0)
         self.assertIsNone(c.lo)
 
     def test_a_value_outside_the_range_is_said_so(self):
@@ -345,7 +384,8 @@ class CoolerTabTests(unittest.TestCase):
         tab = self._tab()
         self._pick(tab, COMMON_MIDRANGE)
         tab._widen.setChecked(True)
-        self.assertAlmostEqual(tab.common().value, -24.416, places=3)
+        self.assertAlmostEqual(tab.common().value, (WIDE_LO + WIDE_HI) / 2,
+                               places=3)
         self.assertTrue(tab._apply_btn.isEnabled())
 
     def test_manual_unlocks_its_box(self):
@@ -373,8 +413,8 @@ class CoolerTabTests(unittest.TestCase):
         tab = CoolerCalibrationTab(SimpleNamespace(_projects=yb))
         self.addCleanup(tab.deleteLater)
         pts = []
-        for iso, slope, star in (("171Yb", -0.21, -30.0),
-                                 ("173Yb", 0.06, -14.0)):
+        for iso, slope, star in (("171Yb", -0.3, -30.0),
+                                 ("173Yb", 0.1, -10.0)):
             for dv in np.linspace(-50, 50, 9):
                 pts.append({"run": "1", "isotope": iso, "dv": float(dv),
                             "value": LITERATURE_A[iso] + slope * (dv - star),
@@ -421,16 +461,16 @@ class CoolerTabTests(unittest.TestCase):
                  mock.patch("gui.analysis.cooler_calibration_tab"
                             ".QMessageBox.information"):
                 tab._analysis_tab._projects = [SimpleNamespace(
-                    project_name="70Ge", is_calibration=False,
+                    project_name="112Sn", is_calibration=False,
                     is_reference=False)]
                 tab._apply_dialog()
-        self.assertAlmostEqual(seen[0], (-32.760 + -13.083) / 2)
+        self.assertAlmostEqual(seen[0], (Z171[0] + Z173[0]) / 2)
 
 
 # ── systematics arithmetic ───────────────────────────────────────────
 
 def _band(values, dvs=(-30.0, -20.0, -10.0), baseline=None, sigma=1.0,
-          project="70Ge", run="", parameter="centroid"):
+          project="112Sn", run="", parameter="centroid"):
     pts = [ScanValue(dv=d, value=v, sigma=sigma) for d, v in zip(dvs, values)]
     base = values[1] if baseline is None else baseline
     return ParameterBand(project=project, run=run, parameter=parameter,
@@ -444,8 +484,8 @@ class BudgetTests(unittest.TestCase):
         self.assertAlmostEqual(combine([3.0, 4.0], LINEAR), 7.0)
         self.assertTrue(math.isnan(combine([float("nan")])))
 
-    def test_the_max_deviation_is_the_ge_rule(self):
-        """max |edge - production|, signed edges kept."""
+    def test_the_max_deviation_takes_the_larger_edge(self):
+        """max |edge - quoted|, signed edges kept."""
         b = _band([-120.0, -106.0, -92.5])
         self.assertAlmostEqual(b.systematic(MAX_DEV), 14.0)
         self.assertEqual(b.edge_deviations, (-14.0, 13.5))
@@ -456,16 +496,16 @@ class BudgetTests(unittest.TestCase):
                                14.0 / math.sqrt(3.0))
 
     def test_an_extra_applies_where_it_matches(self):
-        e = ExtraSystematic("mass", 0.22, run="70Ge")
-        self.assertTrue(e.matches("Isotope shifts", "70Ge", "delta_nu"))
-        self.assertFalse(e.matches("Isotope shifts", "72Ge", "delta_nu"))
+        e = ExtraSystematic("mass", 0.5, run="112Sn")
+        self.assertTrue(e.matches("Isotope shifts", "112Sn", "delta_nu"))
+        self.assertFalse(e.matches("Isotope shifts", "114Sn", "delta_nu"))
         self.assertFalse(ExtraSystematic("x", 1.0, use=False)
                          .matches("a", "b", "c"))
 
     def test_the_budget_adds_extras_as_chosen(self):
         b = _band([-120.0, -106.0, -92.0], sigma=3.0)    # cooler 14
         extras = [ExtraSystematic("scale", 5.5),
-                  ExtraSystematic("other run", 99.0, run="72Ge")]
+                  ExtraSystematic("other run", 99.0, run="114Sn")]
         q = budget(b, MAX_DEV, extras, QUADRATURE, QUADRATURE)
         self.assertEqual(q["extras"], [("scale", 5.5)])
         self.assertAlmostEqual(q["systematic"], math.hypot(14.0, 5.5))
@@ -495,10 +535,10 @@ class BudgetTests(unittest.TestCase):
 
 # ── the three-offset batch in the Systematics tab ────────────────────
 
-PROJECT = "70Ge_T02"
+PROJECT = "sample_A"
 MODEL = "HFS_1"
-SOURCES = ("Run_7947", "Run_7948")
-LO, COMMON, HI = -32.76, -24.42, -13.08
+SOURCES = ("Run_1001", "Run_1002")
+LO, COMMON, HI = -30.0, -22.0, -10.0     # off-centre: the edges differ
 
 
 class _Stub:
@@ -521,7 +561,7 @@ class _StubAnalysisTab:
         self._is_tab = None
 
 
-def _records(offsets=(LO, COMMON, HI), slope=18.0, base=-500.0):
+def _records(offsets=(LO, COMMON, HI), slope=20.0, base=-500.0):
     out = {}
     for dv in offsets:
         values = {}
@@ -531,7 +571,7 @@ def _records(offsets=(LO, COMMON, HI), slope=18.0, base=-500.0):
         out[float(dv)] = {
             "dv": float(dv), "status": "ok", "message": "",
             "values": values, "redchi": {}, "shifts": [],
-            "labels": {f"{PROJECT}|{s}": f"794{7 + i}"
+            "labels": {f"{PROJECT}|{s}": f"100{1 + i}"
                        for i, s in enumerate(SOURCES)},
             "iterations": {}}
     return out
@@ -569,11 +609,11 @@ class BatchTests(unittest.TestCase):
         tab._records = _records()
         tab.compute()
         runs, mean = tab.bands(PROJECT, MODEL, "centroid")
-        self.assertAlmostEqual(runs[0].baseline, -500.0 + 18.0 * COMMON)
-        self.assertAlmostEqual(mean.baseline, -495.0 + 18.0 * COMMON)
-        # the larger edge deviation: 18 MHz/V x 11.34 V
+        self.assertAlmostEqual(runs[0].baseline, -500.0 + 20.0 * COMMON)
+        self.assertAlmostEqual(mean.baseline, -495.0 + 20.0 * COMMON)
+        # the larger edge deviation: 20 MHz/V x 12 V
         self.assertAlmostEqual(mean.systematic(MAX_DEV),
-                               18.0 * (HI - COMMON))
+                               20.0 * (HI - COMMON))
 
     def test_no_fit_at_the_common_offset_means_no_value(self):
         tab = self._tab()
@@ -596,9 +636,10 @@ class BatchTests(unittest.TestCase):
             _cal_result(), COMMON_MIDRANGE, widen=True))
         tab = self._tab(cal_tab=cal)
         tab._range_from_calibration()
-        self.assertAlmostEqual(tab._dv_min.value(), -38.519, places=3)
-        self.assertAlmostEqual(tab._dv_max.value(), -10.313, places=3)
-        self.assertAlmostEqual(tab._baseline_dv.value(), -24.416, places=3)
+        self.assertAlmostEqual(tab._dv_min.value(), WIDE_LO, places=3)
+        self.assertAlmostEqual(tab._dv_max.value(), WIDE_HI, places=3)
+        self.assertAlmostEqual(tab._baseline_dv.value(),
+                               (WIDE_LO + WIDE_HI) / 2, places=3)
 
     def test_extras_enter_the_summary_as_chosen(self):
         tab = self._tab()
@@ -607,7 +648,7 @@ class BatchTests(unittest.TestCase):
         tab._combine_sys.setCurrentText(LINEAR)
         tab.compute()
         row = [r for r in tab.summary_rows() if r["run"] == "<weighted mean>"][0]
-        cooler = 18.0 * (HI - COMMON)
+        cooler = 20.0 * (HI - COMMON)
         self.assertAlmostEqual(row["systematic"], cooler)
         self.assertAlmostEqual(row["other"], 5.0)
         self.assertAlmostEqual(row["sys_total"], cooler + 5.0)
@@ -625,7 +666,7 @@ class BatchTests(unittest.TestCase):
     def test_the_new_settings_survive_a_save(self):
         tab = self._tab()
         tab._records = _records()
-        tab._add_extra(ExtraSystematic("mass", 0.22, run="70Ge",
+        tab._add_extra(ExtraSystematic("mass", 0.5, run="112Sn",
                                        parameter="delta_nu"))
         tab._combine_sys.setCurrentText(LINEAR)
         tab._birge.setChecked(True)

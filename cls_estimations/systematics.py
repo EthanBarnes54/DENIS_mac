@@ -47,8 +47,8 @@ STD_DEV = "Std deviation"
 MAX_DEV = "Max deviation from baseline"
 RMS_DEV = "RMS deviation from baseline"
 #: The max deviation read as the half-width of a uniform distribution:
-#: its 1-sigma is that over sqrt(3). The Ge analysis records it beside
-#: the max deviation without quoting it -- the choice is still open.
+#: its 1-sigma is that over sqrt(3). Offered beside the max deviation
+#: for whoever prefers a 1-sigma reading of it.
 MAX_DEV_FLAT = "Max deviation / sqrt(3) (uniform 1 sigma)"
 
 DEFINITIONS = (HALF_WIDTH, FULL_WIDTH, STD_DEV, MAX_DEV, RMS_DEV,
@@ -262,7 +262,7 @@ class ParameterBand:
     @property
     def edge_deviations(self):
         """``(at the lowest offset, at the highest)``, each value minus
-        the baseline, signed -- the Ge analysis's ``edge_minus_prod``.
+        the baseline, signed (edge minus baseline).
         A one-sided dependence shows here and nowhere else."""
         if not self.n or not math.isfinite(self.baseline):
             return float("nan"), float("nan")
@@ -392,7 +392,7 @@ def mean_over_runs(bands, project="", parameter="", birge=False):
 
     With ``birge`` every mean's error is scaled by sqrt(chi2/ndf) of
     the runs about it when that is above 1 -- the runs scatter more
-    than their own errors say (the Ge analysis's "option b").
+    than their own errors say (a Birge-ratio inflation).
     """
     from cls_estimations.isotope_shift import (
         weighted_average as _plain, weighted_average_with_birge)

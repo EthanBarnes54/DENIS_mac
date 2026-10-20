@@ -9,8 +9,8 @@ Two properties matter beyond "it collects numbers":
 
 * the override is REMOVED afterwards -- a leftover cooler offset
   would silently move every later fit of that project;
-* file output is suppressed -- a 15-point scan over 5 runs would
-  otherwise write 75 reports and 75 plot sets.
+* file output is suppressed -- a 10-point scan over 4 runs would
+  otherwise write 40 reports and 40 plot sets.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_cooler_scan.py -q
@@ -91,19 +91,19 @@ class ExtractParameterTests(unittest.TestCase):
     DF = {"Source": ["Run_1", "Run_1", "Run_2"],
           "Model": ["m", "m", "m"],
           "Parameter": ["Al", "Au", "Al"],
-          "Value": [12636.37, 2111.02, -3496.42],
-          "Stderr": [2.86, 3.55, 0.17]}
+          "Value": [1000.0, 200.0, -300.0],
+          "Stderr": [2.0, 3.5, 0.25]}
 
     def test_it_finds_a_named_parameter(self):
         self.assertEqual(extract_parameter(self.DF, "Au"),
-                         (2111.02, 3.55))
+                         (200.0, 3.5))
 
     def test_a_simultaneous_fit_needs_the_source_to_disambiguate(self):
         """One params_df can hold every run's parameters; without the
         source name the first Al wins, whichever run it belongs to."""
         self.assertEqual(
             extract_parameter(self.DF, "Al", source_name="Run_2")[0],
-            -3496.42)
+            -300.0)
 
     def test_a_missing_parameter_is_not_an_error(self):
         self.assertEqual(extract_parameter(self.DF, "Bl"), (None, None))
@@ -112,7 +112,7 @@ class ExtractParameterTests(unittest.TestCase):
     def test_the_error_column_may_be_named_either_way(self):
         df = dict(self.DF)
         df["Error"] = df.pop("Stderr")
-        self.assertEqual(extract_parameter(df, "Au")[1], 3.55)
+        self.assertEqual(extract_parameter(df, "Au")[1], 3.5)
 
 
 class ScanTests(unittest.TestCase):
@@ -124,7 +124,7 @@ class ScanTests(unittest.TestCase):
         return scan, _spin(scan)
 
     def test_it_visits_every_project_at_every_offset(self):
-        p = _StubProject("171Yb_cal", ["7547", "7507"], -0.21, 12636.0)
+        p = _StubProject("171Yb_cal", ["1001", "1002"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         _scan, out = self._scan((p, "171Yb"))
         # Outward from the offset the blocks were fitted at (0 here), so
@@ -134,19 +134,19 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(len(out["points"]), 6)
 
     def test_the_points_carry_the_offset_that_produced_them(self):
-        p = _StubProject("171Yb_cal", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171Yb_cal", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         _scan, out = self._scan((p, "171Yb"))
         by_dv = {pt.dv: pt for pt in out["points"]}
-        self.assertAlmostEqual(by_dv[-50.0].value, 12636.0 + 10.5)
-        self.assertAlmostEqual(by_dv[50.0].value, 12636.0 - 10.5)
+        self.assertAlmostEqual(by_dv[-50.0].value, 12000.0 + 15.0)
+        self.assertAlmostEqual(by_dv[50.0].value, 12000.0 - 15.0)
         self.assertEqual(by_dv[0.0].isotope, "171Yb")
-        self.assertEqual(by_dv[0.0].run, "7547")
+        self.assertEqual(by_dv[0.0].run, "1001")
         self.assertEqual(by_dv[0.0].sigma, 0.5)
 
     def test_two_isotopes_in_one_scan(self):
-        a = _StubProject("171", ["7547"], -0.21, 12636.0)
-        b = _StubProject("173", ["7502"], +0.059, -3496.4)
+        a = _StubProject("171", ["1001"], -0.3, 12000.0)
+        b = _StubProject("173", ["1003"], +0.1, -3000.0)
         for p in (a, b):
             self.addCleanup(p.deleteLater)
         _scan, out = self._scan((a, "171Yb"), (b, "173Yb"))
@@ -156,13 +156,13 @@ class ScanTests(unittest.TestCase):
     def test_the_override_is_removed_when_the_scan_ends(self):
         """A leftover offset would silently move every later fit of
         that project."""
-        p = _StubProject("171Yb_cal", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171Yb_cal", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         self._scan((p, "171Yb"))
         self.assertEqual(p._config_overrides, {})
 
     def test_file_output_is_suppressed_while_scanning(self):
-        p = _StubProject("171Yb_cal", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171Yb_cal", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         self._scan((p, "171Yb"))
         for _dv, out in p.seen:
@@ -183,13 +183,13 @@ class ScanTests(unittest.TestCase):
 
     def test_a_synchronous_fit_works_too(self):
         """Nothing may depend on the worker being asynchronous."""
-        p = _StubProject("171", ["7547"], -0.21, 12636.0, async_=False)
+        p = _StubProject("171", ["1001"], -0.3, 12000.0, async_=False)
         self.addCleanup(p.deleteLater)
         _scan, out = self._scan((p, "171Yb"))
         self.assertEqual(len(out["points"]), 3)
 
     def test_progress_is_reported(self):
-        p = _StubProject("171", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
@@ -202,7 +202,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(seen[-1][0], 2)                 # all done
 
     def test_stop_ends_it_early(self):
-        p = _StubProject("171", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
@@ -215,7 +215,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(p._config_overrides, {})
 
     def test_one_offset_is_not_a_scan(self):
-        p = _StubProject("171", ["7547"], -0.21, 12636.0)
+        p = _StubProject("171", ["1001"], -0.3, 12000.0)
         self.addCleanup(p.deleteLater)
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
@@ -237,11 +237,11 @@ class ScanFeedsTheCalibrationTests(unittest.TestCase):
         from cls_estimations.cooler_calibration import (
             LITERATURE_A, calibrate)
         a171, a173 = LITERATURE_A["171Yb"], LITERATURE_A["173Yb"]
-        # Lines crossing literature at -33.46 V and -14.00 V.
-        a = _StubProject("171", ["7547", "7507"], -0.21,
-                         a171 + 0.21 * -33.46)
-        b = _StubProject("173", ["7502"], 0.058,
-                         a173 - 0.058 * -14.00)
+        # Lines crossing literature at -30 V and -10 V:
+        # value = A_lit + slope * (dV - zero).
+        (z1, b1), (z2, b2) = (-30.0, -0.3), (-10.0, 0.1)
+        a = _StubProject("171", ["1001", "1002"], b1, a171 - b1 * z1)
+        b = _StubProject("173", ["1003"], b2, a173 - b2 * z2)
         for p in (a, b):
             self.addCleanup(p.deleteLater)
         scan = CoolerScan()
@@ -250,9 +250,12 @@ class ScanFeedsTheCalibrationTests(unittest.TestCase):
                    [-50.0, -25.0, 0.0, 25.0, 50.0])
         out = _spin(scan)
         res = calibrate(out["points"])
-        self.assertAlmostEqual(res.dv, -29.25, delta=0.1)
-        self.assertAlmostEqual(res.scan_lo, -33.46, delta=0.05)
-        self.assertAlmostEqual(res.scan_hi, -14.00, delta=0.05)
+        # b1 (x - z1) = b2 (x - z2) at x = (b1 z1 - b2 z2) / (b1 - b2),
+        # here (9 + 1) / -0.4 = -25 V.
+        self.assertAlmostEqual(res.dv, (b1 * z1 - b2 * z2) / (b1 - b2),
+                               delta=0.1)
+        self.assertAlmostEqual(res.scan_lo, z1, delta=0.05)
+        self.assertAlmostEqual(res.scan_hi, z2, delta=0.05)
 
 
 if __name__ == "__main__":

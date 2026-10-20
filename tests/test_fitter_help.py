@@ -1,8 +1,8 @@
 """The "?" guide next to the Fitter block's Method & Statistics.
 
-Arda asked (2026-09-25) for a square "?" button that opens a pop-up
-with practical detail on the methods in that block, "so user can make
-more informed decision which one to use when". The guide is data
+A square "?" button opens a pop-up with practical detail on the
+methods in that block, so the user can make a more informed decision
+about which one to use when. The guide is data
 (fitter_help.METHODS / STATISTICS), so these tests can insist that
 every choice the combos offer is explained -- a method added to the
 combo without a line in the guide fails here.

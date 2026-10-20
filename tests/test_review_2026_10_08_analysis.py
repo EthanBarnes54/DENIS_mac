@@ -264,7 +264,7 @@ class CancelTests(unittest.TestCase):
                 QTimer.singleShot(0, lambda: self.fit_cancelled.emit(
                     self.project_name))
 
-        p = _Cancelling("171", ["7547"], -0.21, 12636.0)
+        p = _Cancelling("171", ["1001"], -0.21, 12650.0)
         self.addCleanup(p.deleteLater)
         scan = CoolerScan()
         self.addCleanup(scan.deleteLater)
@@ -396,9 +396,9 @@ class VoltageMergeProjectionTests(unittest.TestCase):
         from gui.analysis.merge import project_voltage_merge_to_frequency
         md = {"x": [1150.0, 1200.0, 1250.0], "y": [1.0, 2.0, 1.0],
               "yerr": [1.0, 1.0, 1.0],
-              "merge_metadata": {"cooler_v": 29907.4, "laser_sp": 18555.15,
-                                 "mass_amu": 69.924249, "harmonic": 2}}
-        src = {"ref_freq": 1.1135842e15}
+              "merge_metadata": {"cooler_v": 30000.0, "laser_sp": 20000.0,
+                                 "mass_amu": 100.0, "harmonic": 2}}
+        src = {"ref_freq": 1.2e15}
         src.update(cfg)
         return np.asarray(project_voltage_merge_to_frequency(md, src)[0])
 
@@ -407,7 +407,7 @@ class VoltageMergeProjectionTests(unittest.TestCase):
                                    self._x() - 10.0, atol=1e-6)
 
     def test_cooler_offset_moves_the_axis(self):
-        self.assertGreater(abs(self._x(cooler_offset_v=-24.42)[0]
+        self.assertGreater(abs(self._x(cooler_offset_v=-20.0)[0]
                                - self._x()[0]), 100.0)
 
 
@@ -419,7 +419,7 @@ def _corrector():
         ReferenceCorrector, ReferenceObservation)
     rng = np.random.default_rng(0)
     t = np.linspace(0.0, 6.0, 14)
-    y = -100.0 - 14.0 * t + rng.normal(0, 0.4, t.size)
+    y = -100.0 - 20.0 * t + rng.normal(0, 0.4, t.size)
     rc = ReferenceCorrector(kernel="rbf", random_seed=0)
     rc.fit([ReferenceObservation(t=ti, centroid=yi, sigma=0.5)
             for ti, yi in zip(t, y)])
@@ -482,7 +482,7 @@ class ResultsTabSessionTests(unittest.TestCase):
     def test_clear_session_forgets_everything(self):
         from gui.results_tab import ResultsTab
         rt = ResultsTab()
-        rt._results_data = {"74Ge": {"iter_001": {"results": []}}}
+        rt._results_data = {"116Sn": {"iter_001": {"results": []}}}
         rt.clear_session()
         self.assertEqual(rt._results_data, {})
 
@@ -491,13 +491,13 @@ class IterationChoiceTests(unittest.TestCase):
 
     def setUp(self):
         self.root = tempfile.mkdtemp()
-        self.pdir = os.path.join(self.root, "analysis", "73Ge_T03")
-        for name, c in (("iter_001", 85.48), ("iter_002", 86.55)):
+        self.pdir = os.path.join(self.root, "analysis", "115Sn_A")
+        for name, c in (("iter_001", 80.0), ("iter_002", 90.0)):
             d = os.path.join(self.pdir, name)
             os.makedirs(d)
-            pd.DataFrame({"run_number": ["7984"], "Parameter": ["centroid"],
+            pd.DataFrame({"run_number": ["1001"], "Parameter": ["centroid"],
                           "Value": [c], "Error": [1.0],
-                          "Source": ["Run_7984"], "Model": ["M"]}).to_csv(
+                          "Source": ["Run_1001"], "Model": ["M"]}).to_csv(
                 os.path.join(d, "parameters.csv"), index=False)
 
     def tearDown(self):
@@ -505,7 +505,7 @@ class IterationChoiceTests(unittest.TestCase):
 
     def _load(self, recorded):
         from gui.analysis.project import AnalysisProject
-        p = AnalysisProject("73Ge_T03")
+        p = AnalysisProject("115Sn_A")
         p._session_iterations = list(recorded)
         with mock.patch("gui.shared_widgets.get_analysis_dir",
                         return_value=os.path.join(self.root, "analysis")):
@@ -515,7 +515,7 @@ class IterationChoiceTests(unittest.TestCase):
     def test_the_sessions_own_iteration_is_read(self):
         p = self._load(["iter_001"])
         self.assertEqual(p._loaded_iteration, "iter_001")
-        self.assertEqual(p._last_results[0]["params_df"]["Value"], [85.48])
+        self.assertEqual(p._last_results[0]["params_df"]["Value"], [80.0])
 
     def test_newest_only_when_nothing_is_recorded(self):
         self.assertEqual(self._load([])._loaded_iteration, "iter_002")

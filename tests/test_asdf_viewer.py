@@ -1,10 +1,9 @@
 """Tools ▸ ASDF Viewer, and "View ASDF…" on the run lists.
 
-Arda (2026-09-26): "add a raw asdf viewer ... user drops asdf files and
-the viewer shows the raw asdf entries, the header and the event tables.
-Also add right click options on the file column in preanalysis tab and
-analysis tab on the source block ... the tool ui opens with that run
-file already added."
+The viewer takes dropped ASDF files and shows their raw entries: the
+header and the event tables. The file columns of the Pre-Analysis tab
+and of the Analysis Source block have a right-click entry that opens
+the viewer with that run file already added.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_asdf_viewer.py -q
@@ -26,18 +25,18 @@ _APP = QApplication.instance() or QApplication([])
 from gui.asdf_viewer import (  # noqa: E402
     AsdfViewer, MAX_LISTED_VALUES, column_stats, open_in_viewer, read_asdf)
 
-EVENTS = np.array([[1.7e9, -900.0, 1, 3, 39.7, 2.9912],
-                   [1.7e9, -899.0, 2, 4, 40.3, 2.9913],
-                   [1.7e9, -898.0, 3, 3, 41.0, 2.9912]])
+EVENTS = np.array([[1.7e9, -900.0, 1, 3, 39.7, 3.0000],
+                   [1.7e9, -899.0, 2, 4, 40.3, 3.0001],
+                   [1.7e9, -898.0, 3, 3, 41.0, 3.0000]])
 COLUMNS = ["timestamp", "voltage", "bunch_number", "channel", "time",
            "cooler"]
 
 
-def write_run(folder, run=7507, name=None):
+def write_run(folder, run=1001, name=None):
     import asdf
-    tree = {"Run": run, "CoolerVoltage": 2.99128455,
-            "Date": dt.datetime(2026, 5, 8, 13, 29, 36),
-            "Experiment": "I340-V_CLS", "LaserSetpoint": 13522.68,
+    tree = {"Run": run, "CoolerVoltage": 3.0001,
+            "Date": dt.datetime(2026, 1, 1, 12, 0, 0),
+            "Experiment": "EXP-TEST", "LaserSetpoint": 20000.0,
             "ScanningRanges": [[-900.0, -800.0], [600.0, 1000.0]],
             "CalSet": np.linspace(-900, 1000, 5),
             "CalReadback": np.linspace(-899.5, 1000.5, 5),
@@ -65,8 +64,8 @@ class ReadTests(unittest.TestCase):
 
     def test_values_are_as_stored(self):
         h = dict(self.info["header"])
-        self.assertEqual(h["CoolerVoltage"], 2.99128455)   # not x10 000
-        self.assertEqual(h["Run"], 7507)
+        self.assertEqual(h["CoolerVoltage"], 3.0001)   # not x10 000
+        self.assertEqual(h["Run"], 1001)
 
     def test_the_event_table_comes_first_with_named_columns(self):
         raw = self.info["tables"][0]
@@ -91,7 +90,7 @@ class ReadTests(unittest.TestCase):
 
     def test_a_split_shows_its_parent(self):
         from gui.analysis.vasdf import write_vasdf
-        v = os.path.join(self.dir, "run_7507_low.vasdf")
+        v = os.path.join(self.dir, "run_1001_low.vasdf")
         try:
             write_vasdf(v, parent_path=self.path, source_id="s", label="low",
                         lo=-900.0, hi=-850.0)
@@ -122,8 +121,8 @@ class ViewerTests(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.a = write_run(self.dir, 7507)
-        self.b = write_run(self.dir, 7939)
+        self.a = write_run(self.dir, 1001)
+        self.b = write_run(self.dir, 1002)
         self.v = AsdfViewer()
         self.addCleanup(self.v.deleteLater)
         self.addCleanup(self.v.stop_loading)
@@ -144,7 +143,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_the_list_names_the_run(self):
         self.add([self.a, self.b])
-        self.assertIn("7939", self.v.file_list.item(1).text())
+        self.assertIn("1002", self.v.file_list.item(1).text())
 
     def test_a_file_opened_twice_is_listed_once(self):
         self.add([self.a])
@@ -158,7 +157,7 @@ class ViewerTests(unittest.TestCase):
         t = self.v.header_table
         row = next(r for r in range(t.rowCount())
                    if t.item(r, 0).text() == "CoolerVoltage")
-        self.assertIn("29,912.85", t.item(row, 3).text())
+        self.assertIn("30,001.00", t.item(row, 3).text())
 
     def test_switching_tables(self):
         self.add([self.a])
@@ -274,8 +273,8 @@ class RightClickTests(unittest.TestCase):
         orig = av.open_in_viewer
         av.open_in_viewer = lambda paths, anchor=None: seen.append(paths)
         self.addCleanup(setattr, av, "open_in_viewer", orig)
-        e = FileEntry(self.path, "7507", 29912.8, "2026-05-08", 13522.68,
-                      167.2)
+        e = FileEntry(self.path, "1001", 30000.0, "2026-01-01", 20000.0,
+                      100.0)
         self.addCleanup(e.deleteLater)
         self._choose("View ASDF")
         e.contextMenuEvent(QContextMenuEvent(
@@ -292,7 +291,7 @@ class RightClickTests(unittest.TestCase):
         self.addCleanup(setattr, av, "open_in_viewer", orig)
         sb = SourceBlock()
         self.addCleanup(sb.deleteLater)
-        entry = {"path": self.path, "run_number": "7507"}
+        entry = {"path": self.path, "run_number": "1001"}
         self._choose("View ASDF")
         sb._show_file_row_menu(entry, sb, QPoint(1, 1))
         self.assertEqual(seen, [[self.path]])
@@ -315,12 +314,12 @@ class RightClickTests(unittest.TestCase):
 
 
 class BackgroundLoadingTests(unittest.TestCase):
-    """The window never waits for a file (Arda, 2026-09-27: "can we
-    make the loading multicore process so it loads faster?")."""
+    """The window never waits for a file: files load in the background,
+    in worker processes when there are many of them."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.paths = [write_run(self.dir, 7000 + i) for i in range(4)]
+        self.paths = [write_run(self.dir, 1000 + i) for i in range(4)]
         self.v = AsdfViewer()
         self.addCleanup(self.v.deleteLater)
         self.addCleanup(self.v.stop_loading)
@@ -331,7 +330,7 @@ class BackgroundLoadingTests(unittest.TestCase):
         self.assertTrue(self.v.is_loading())
         self.assertTrue(self.v.wait_until_loaded())
         self.assertFalse(self.v.is_loading())
-        self.assertIn("Run 7003", self.v.file_list.item(3).text())
+        self.assertIn("Run 1003", self.v.file_list.item(3).text())
         self.assertEqual(self.v.model.rowCount(), 3)   # last one selected
 
     def test_a_few_files_do_not_start_processes(self):
@@ -353,7 +352,7 @@ class BackgroundLoadingTests(unittest.TestCase):
         self.assertEqual(len(self.v._files), 4)
         runs = sorted(dict(i["header"])["Run"]
                       for i in self.v._files.values())
-        self.assertEqual(runs, [7000, 7001, 7002, 7003])
+        self.assertEqual(runs, [1000, 1001, 1002, 1003])
 
     def test_the_worker_needs_neither_qt_nor_the_gui(self):
         """So a worker process starts by importing numpy and asdf only."""
@@ -415,7 +414,7 @@ class TooltipTests(unittest.TestCase):
     def test_a_cooler_cell_shows_volts(self):
         tip = self.v.model.data(self.v.model.index(0, 5),
                                 Qt.ItemDataRole.ToolTipRole)
-        self.assertEqual(tip, "29,912.00 V")
+        self.assertEqual(tip, "30,000.00 V")
 
     def test_header_keys_are_explained(self):
         t = self.v.header_table
@@ -426,7 +425,7 @@ class TooltipTests(unittest.TestCase):
         self.assertIn("Column names", tips["raw_header"])
 
     def test_every_field_of_a_real_run_is_documented(self):
-        """The keys a CLS run file carries (run_7507, 2026-05-08)."""
+        """The keys a CLS run file carries."""
         from gui.asdf_viewer import FIELD_DOCS, COLUMN_DOCS
         real = ["BunchesPerChannel", "CalReadback", "CalSet",
                 "CoolerVoltage", "Date", "DwellTime", "Experiment",

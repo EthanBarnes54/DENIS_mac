@@ -253,9 +253,9 @@ def canonical_obs_key(key):
     """Normalise an exclusion key to ``"<project>/<run number>"``.
 
     Keys saved before 2026-09-22 end in a file name
-    (``74Ge_T02/run_7961.asdf``); test and legacy labels may read
-    ``run_7961``. All three name the same run, so all three map to
-    ``74Ge_T02/7961``. Anything that is not a run file or a
+    (``116Sn_A/run_1001.asdf``); test and legacy labels may read
+    ``run_1001``. All three name the same run, so all three map to
+    ``116Sn_A/1001``. Anything that is not a run file or a
     ``run_<N>`` label -- a merged name, say -- is left as it is.
     """
     import os

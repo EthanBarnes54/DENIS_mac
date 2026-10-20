@@ -197,7 +197,7 @@ def prepare_run_data(
     # runs and the cooler's drift within a run. Until 2026-10-08 the
     # offset was applied as a constant "header cooler + offset" for every
     # event, which switched the per-event correction off: a run whose
-    # header and readback differ by 0.75 V moved ~13 MHz (Arda). Zero
+    # header and readback differ by under a volt moved by several MHz. Zero
     # offset leaves every byte of the old path alone.
     cooler_offset = float(source_config.get("cooler_offset_v", 0.0) or 0.0)
     cooler_plan = resolve_cooler(cooler_override, cooler_offset,

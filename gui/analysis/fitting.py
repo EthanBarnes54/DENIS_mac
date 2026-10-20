@@ -239,16 +239,16 @@ def _shift_binning_info_x(info, corr_mhz):
 #: Minimisers that cannot be used on a likelihood. satlas2 does not
 #: refuse them -- it quietly substitutes SLSQP (core.py: "if
 #: method.lower() in ['leastsq', 'least_squares']: method = 'slsqp'"),
-#: and on a Yb hyperfine spectrum SLSQP walks off to a centroid of
-#: 1e12 MHz and an A_l of -9659 without raising. The fit "succeeds",
-#: the numbers are nonsense and the plotted model is nowhere near the
-#: data, which is what "Poisson cannot fit" looked like from the
-#: outside (Arda, 2026-09-25).
+#: and on a hyperfine spectrum SLSQP can walk off to a centroid near
+#: the 1e12 MHz bound and a nonsense A without raising. The fit
+#: "succeeds", the numbers are nonsense and the plotted model is
+#: nowhere near the data, which is what "Poisson cannot fit" looks
+#: like from the outside.
 _LEAST_SQUARES_METHODS = ("leastsq", "least_squares")
 
-#: What to use instead. Nelder-Mead is what Arda's own pipeline
-#: minimises the Poisson likelihood with, and it reproduces its
-#: numbers: A_l 12637.36 against 12637.23 from its emcee run.
+#: What to use instead. Nelder-Mead is a common choice for minimising
+#: the Poisson likelihood: derivative-free, robust, and in agreement
+#: with an emcee sampling of the same likelihood.
 LLH_FALLBACK_METHOD = "nelder"
 
 
@@ -460,8 +460,8 @@ def _residual_statistics(y, y_fit, yerr, n_vary):
     numbers are not a chi-square. Under emcee they are worse: lmfit
     evaluates the objective once at the medians, gets the summed
     log-likelihood as a single number, and reports "1 data point" and
-    chisqr = (ln L)^2 (a 1.7 fit came out as reduced chi-square
-    181134, 2026-09-25). These use the real bins and lmfit's own
+    chisqr = (ln L)^2 (so a good fit can report a reduced chi-square
+    in the hundreds of thousands). These use the real bins and lmfit's own
     definitions, so every objective reports the same kind of number:
     AIC = n ln(chi2/n) + 2k, BIC = n ln(chi2/n) + k ln n.
     """
@@ -844,7 +844,7 @@ def _patch_satlas2_emcee_numpy2():
 #: number, lmfit treats it as a real bound and fits that parameter in its
 #: bounded internal coordinate; across a 2e12 range the numerical
 #: Hessian's fixed step becomes ~1e8 MHz, so every nelder / powell error
-#: estimate on run 7507 failed and left no error bars at all (2026-09-26).
+#: estimate on such a fit failed and left no error bars at all.
 #: No fit ever reaches such a bound, so +-inf is what the UI means --
 #: and it is what it shows ("-inf" / "inf").
 _NO_LIMIT = 1e11

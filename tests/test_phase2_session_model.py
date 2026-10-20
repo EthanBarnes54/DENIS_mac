@@ -79,7 +79,7 @@ class DirtyTrackingTests(unittest.TestCase):
     def test_save_writes_current_path_without_dialog(self):
         edit = self.win.estimate_tab.params_tab.global_params.element_edit
         old = edit.text()
-        edit.setText("Si")
+        edit.setText("Ca")
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "session.yaml")
             self.win._write_save_file(path)
@@ -89,14 +89,14 @@ class DirtyTrackingTests(unittest.TestCase):
             self.assertIn("session.yaml", self.win.windowTitle())
 
             # Edit again; _save() must write to the same path, no dialog.
-            edit.setText("Ge")
+            edit.setText("Sn")
             self.assertTrue(self.win._is_dirty())
             self.assertTrue(self.win._save())
             self.assertFalse(self.win._is_dirty())
             import yaml
             with open(path) as f:
                 raw = yaml.safe_load(f)
-            self.assertEqual(raw["estimate"]["element"], "Ge")
+            self.assertEqual(raw["estimate"]["element"], "Sn")
             # Leave no dangling _config_path into other tests.
             self.win._config_path = None
         edit.setText(old)
@@ -166,15 +166,15 @@ class EstimateRunPersistenceTests(unittest.TestCase):
 
     def _fake_worker(self):
         plot_results = [{
-            "label": "28Si",
+            "label": "116Sn",
             "dV_array": np.linspace(-50.0, 50.0, 101),
             "intensity_array": np.exp(
                 -0.5 * (np.linspace(-50.0, 50.0, 101) / 5.0) ** 2),
             "measured_peak_dVs": [0.0],
         }]
         all_peaks = [{
-            "label": "28Si", "state": "gs", "iso_shift_MHz": 0.0,
-            "offset_MHz": 0.0, "dV": 0.0, "V_acc": 29907.0,
+            "label": "116Sn", "state": "gs", "iso_shift_MHz": 0.0,
+            "offset_MHz": 0.0, "dV": 0.0, "V_acc": 30000.0,
             "intensity": 1.0,
         }]
         return types.SimpleNamespace(plot_results=plot_results,
@@ -205,11 +205,11 @@ class EstimateRunPersistenceTests(unittest.TestCase):
             self.win._restore_estimate_outputs({
                 "run_dir": run_dir,
                 "config_name": "cls_test",
-                "file_tag": "_28Si",
+                "file_tag": "_116Sn",
                 "palette": "default",
             })
             self.assertEqual(len(et.plots_tab._plot_results), 1)
-            self.assertEqual(et.plots_tab._plot_results[0]["label"], "28Si")
+            self.assertEqual(et.plots_tab._plot_results[0]["label"], "116Sn")
             self.assertEqual(len(et.plots_tab._all_peaks), 1)
             self.assertIn("estimation log line",
                           et.run_tab.log_text.toPlainText())
@@ -226,7 +226,7 @@ class EstimateRunPersistenceTests(unittest.TestCase):
     def test_last_run_lands_in_estimate_dict(self):
         self.win._last_estimate_run = {
             "run_dir": r"C:\somewhere\cls_x", "config_name": "cls_x",
-            "file_tag": "_28Si", "palette": "default",
+            "file_tag": "_116Sn", "palette": "default",
         }
         d = self.win._build_estimate_dict()
         self.assertEqual(d["last_run"]["config_name"], "cls_x")

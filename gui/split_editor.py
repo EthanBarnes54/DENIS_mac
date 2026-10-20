@@ -190,7 +190,7 @@ class SplitFileEditor(QDialog):
         sid.setToolTip(
             "Source ID — appears as the trailing token of the source "
             "name (Run_<this>) and in the .vasdf filename. No 'run_' "
-            "prefix; the convention is <run>_<suffix> e.g. 7509_A.")
+            "prefix; the convention is <run>_<suffix> e.g. 1001_A.")
         form.addRow("Source ID:", sid)
         cooler_spin = _make_double(0.0, -1e8, 1e8, 3, 1.0, " V")
         form.addRow("Cooler:", cooler_spin)
@@ -541,7 +541,7 @@ class SplitFileEditor(QDialog):
 
         # Default save dir = parent's directory; default names use
         # the trailing token of each source_id as the filename suffix
-        # (so 7509_A → run_7509_A.vasdf next to run_7509.asdf).
+        # (so 1001_A → run_1001_A.vasdf next to run_1001.asdf).
         suffix_a = sid_a.rsplit("_", 1)[-1] if "_" in sid_a else sid_a
         suffix_b = sid_b.rsplit("_", 1)[-1] if "_" in sid_b else sid_b
         defaults = default_vasdf_paths(

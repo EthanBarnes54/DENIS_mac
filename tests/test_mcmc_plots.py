@@ -1,6 +1,6 @@
 """Walk and correlation (corner) plots of an emcee chain.
 
-Two requests from Arda (2026-09-25): mark the burn-in cut on the walk
+Two features: mark the burn-in cut on the walk
 plot as a vertical line, and draw the correlation plot like a
 publication corner plot -- filled 2-D credible regions at 0.5, 1, 1.5
 and 2 sigma, step histograms with the 16/50/84 % lines, value titles --
@@ -117,7 +117,7 @@ class WalkPlotTests(unittest.TestCase):
         ws = dict(WALK_STYLE, **style)
         fig = Figure()
         draw_walk(fig, ["centroid", "Al", "FWHML"], _chain(), ws,
-                  run_num="7507", burn=burn)
+                  run_num="1001", burn=burn)
         return fig
 
     def test_the_cut_is_marked_on_every_panel(self):
@@ -157,7 +157,7 @@ class CornerPlotTests(unittest.TestCase):
         cs = dict(CORNER_STYLE, **style)
         flat = _chain().reshape(-1, 3)
         fig = Figure(figsize=(6, 6))
-        axes = draw_corner(fig, self.LABELS, flat, cs, run_num="7507")
+        axes = draw_corner(fig, self.LABELS, flat, cs, run_num="1001")
         return fig, axes, flat
 
     def test_the_upper_triangle_is_empty(self):
@@ -249,8 +249,8 @@ class CornerPlotTests(unittest.TestCase):
 class TitleFormatTests(unittest.TestCase):
 
     def test_two_significant_figures_of_the_error(self):
-        self.assertEqual(value_title("c", 628.594, 0.581, 0.577),
-                         "c = $628.59^{+0.58}_{-0.58}$")
+        self.assertEqual(value_title("c", 500.123, 0.456, 0.789),
+                         "c = $500.12^{+0.46}_{-0.79}$")
         self.assertEqual(value_title("c", 1.23456, 0.0045, 0.0047),
                          "c = $1.2346^{+0.0045}_{-0.0047}$")
 

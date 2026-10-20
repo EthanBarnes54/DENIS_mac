@@ -42,13 +42,13 @@ class NormalizeSourceInfoTests(unittest.TestCase):
         from gui.preanalysis_tab import _normalize_source_info
 
         norm = _normalize_source_info([
-            ["7735", "/data/run_7735.asdf"],
-            ["7740", "/data/run_7740.asdf"],
+            ["1001", "/data/run_1001.asdf"],
+            ["1002", "/data/run_1002.asdf"],
         ])
 
         self.assertEqual(len(norm), 2)
-        self.assertEqual(norm[0]["run_number"], "7735")
-        self.assertEqual(norm[0]["filepath"], "/data/run_7735.asdf")
+        self.assertEqual(norm[0]["run_number"], "1001")
+        self.assertEqual(norm[0]["filepath"], "/data/run_1001.asdf")
         for k in ("cooler_v", "laser_sp", "mass_amu", "harmonic"):
             self.assertIsNone(norm[0][k])
             self.assertIsNone(norm[1][k])
@@ -57,22 +57,22 @@ class NormalizeSourceInfoTests(unittest.TestCase):
         from gui.preanalysis_tab import _normalize_source_info
 
         norm = _normalize_source_info([
-            ("7735", "/data/run_7735.asdf"),
+            ("1001", "/data/run_1001.asdf"),
         ])
-        self.assertEqual(norm[0]["run_number"], "7735")
-        self.assertEqual(norm[0]["filepath"], "/data/run_7735.asdf")
+        self.assertEqual(norm[0]["run_number"], "1001")
+        self.assertEqual(norm[0]["filepath"], "/data/run_1001.asdf")
 
     def test_preserves_full_dict_fields(self):
         from gui.preanalysis_tab import _normalize_source_info
 
         norm = _normalize_source_info([
-            {"run_number": "7735", "filepath": "/data/run_7735.asdf",
-             "cooler_v": 29895.3, "laser_sp": 15975.4150,
-             "mass_amu": 47.95, "harmonic": 2},
+            {"run_number": "1001", "filepath": "/data/run_1001.asdf",
+             "cooler_v": 29999.9, "laser_sp": 20000.0,
+             "mass_amu": 100.0, "harmonic": 2},
         ])
-        self.assertEqual(norm[0]["cooler_v"], 29895.3)
-        self.assertAlmostEqual(norm[0]["laser_sp"], 15975.4150)
-        self.assertEqual(norm[0]["mass_amu"], 47.95)
+        self.assertEqual(norm[0]["cooler_v"], 29999.9)
+        self.assertAlmostEqual(norm[0]["laser_sp"], 20000.0)
+        self.assertEqual(norm[0]["mass_amu"], 100.0)
         self.assertEqual(norm[0]["harmonic"], 2)
 
     def test_partial_dict_missing_keys_become_none(self):
@@ -105,14 +105,14 @@ class MergedFileEntrySchemaTests(unittest.TestCase):
             merged_y=np.array([1.0, 2.0, 3.0]),
             merge_domain="voltage",
             source_info=[("a", "/p/a"), ("b", "/p/b")],
-            merge_cooler_v=29895.4,
-            merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95,
+            merge_cooler_v=30000.0,
+            merge_laser_sp=20000.0,
+            merge_mass_amu=100.0,
             merge_harmonic=2,
         )
-        self.assertAlmostEqual(mfe.merge_cooler_v, 29895.4)
-        self.assertAlmostEqual(mfe.merge_laser_sp, 15975.4150)
-        self.assertAlmostEqual(mfe.merge_mass_amu, 47.95)
+        self.assertAlmostEqual(mfe.merge_cooler_v, 30000.0)
+        self.assertAlmostEqual(mfe.merge_laser_sp, 20000.0)
+        self.assertAlmostEqual(mfe.merge_mass_amu, 100.0)
         self.assertEqual(mfe.merge_harmonic, 2)
 
     def test_init_defaults_merge_metadata_to_none(self):
@@ -165,18 +165,18 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
             merged_y=np.array([1.0, 2.0]),
             merge_domain="voltage",
             source_info=[
-                {"run_number": "7735",
-                 "filepath": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
-                {"run_number": "7740",
-                 "filepath": "/data/run_7740.asdf",
-                 "cooler_v": 29895.5, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_number": "1001",
+                 "filepath": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
+                {"run_number": "1002",
+                 "filepath": "/data/run_1002.asdf",
+                 "cooler_v": 30000.1, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.4,
-            merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95,
+            merge_cooler_v=30000.0,
+            merge_laser_sp=20000.0,
+            merge_mass_amu=100.0,
             merge_harmonic=2,
         )
         pa = MagicMock()
@@ -193,14 +193,14 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
 
         md = sb._file_entries[0]["merged_data"]
         self.assertEqual(len(md["per_run"]), 2)
-        self.assertEqual(md["per_run"][0]["run_num"], "7735")
-        self.assertAlmostEqual(md["per_run"][0]["cooler_v"], 29895.3)
-        self.assertAlmostEqual(md["per_run"][1]["cooler_v"], 29895.5)
-        self.assertAlmostEqual(md["per_run"][0]["laser_set"], 15975.4150)
+        self.assertEqual(md["per_run"][0]["run_num"], "1001")
+        self.assertAlmostEqual(md["per_run"][0]["cooler_v"], 29999.9)
+        self.assertAlmostEqual(md["per_run"][1]["cooler_v"], 30000.1)
+        self.assertAlmostEqual(md["per_run"][0]["laser_set"], 20000.0)
 
         mm = md["merge_metadata"]
-        self.assertAlmostEqual(mm["cooler_v"], 29895.4)
-        self.assertAlmostEqual(mm["laser_sp"], 15975.4150)
+        self.assertAlmostEqual(mm["cooler_v"], 30000.0)
+        self.assertAlmostEqual(mm["laser_sp"], 20000.0)
         self.assertEqual(mm["harmonic"], 2)
 
     def test_frequency_merge_preserves_per_run_and_metadata(self):
@@ -223,18 +223,18 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
             merged_y=np.array([1.0, 7.0, 2.0]),
             merge_domain="frequency",
             source_info=[
-                {"run_number": "7735",
-                 "filepath": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
-                {"run_number": "7740",
-                 "filepath": "/data/run_7740.asdf",
-                 "cooler_v": 29895.5, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_number": "1001",
+                 "filepath": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
+                {"run_number": "1002",
+                 "filepath": "/data/run_1002.asdf",
+                 "cooler_v": 30000.1, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.4,
-            merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95,
+            merge_cooler_v=30000.0,
+            merge_laser_sp=20000.0,
+            merge_mass_amu=100.0,
             merge_harmonic=2,
         )
         pa = MagicMock()
@@ -256,9 +256,9 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
                                     atol=1e-6)
         # per_run + merge_metadata propagate for frequency merges too.
         self.assertEqual(len(md["per_run"]), 2)
-        self.assertAlmostEqual(md["per_run"][0]["cooler_v"], 29895.3)
+        self.assertAlmostEqual(md["per_run"][0]["cooler_v"], 29999.9)
         self.assertAlmostEqual(
-            md["merge_metadata"]["cooler_v"], 29895.4)
+            md["merge_metadata"]["cooler_v"], 30000.0)
 
     def test_old_two_list_source_info_still_imports(self):
         """Regression check for existing PA YAMLs."""
@@ -270,8 +270,8 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
             merged_x=np.array([-50.0, 0.0, 50.0]),
             merged_y=np.array([1.0, 5.0, 1.0]),
             merge_domain="voltage",
-            source_info=[("7735", "/data/run_7735.asdf"),
-                         ("7740", "/data/run_7740.asdf")],
+            source_info=[("1001", "/data/run_1001.asdf"),
+                         ("1002", "/data/run_1002.asdf")],
         )
         pa = MagicMock()
         pa._file_entries = [mfe]
@@ -286,7 +286,7 @@ class AnalysisBridgePopulatesPerRunTests(unittest.TestCase):
         sb._import_files_from_preanalysis(pa)
 
         md = sb._file_entries[0]["merged_data"]
-        self.assertEqual(md["source_runs"], ["7735", "7740"])
+        self.assertEqual(md["source_runs"], ["1001", "1002"])
         # per_run is populated with None cooler/laser since the old
         # 2-list shape didn't carry them.
         self.assertEqual(len(md["per_run"]), 2)
@@ -316,23 +316,23 @@ class YamlRoundTripTests(unittest.TestCase):
             merged_y=np.array([1.0, 5.0, 1.0]),
             domain="voltage",
             source_info=[
-                {"run_number": "7735",
-                 "filepath": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_number": "1001",
+                 "filepath": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.4,
-            merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95,
+            merge_cooler_v=30000.0,
+            merge_laser_sp=20000.0,
+            merge_mass_amu=100.0,
             merge_harmonic=2,
         )
 
         d = pa._build_config_dict()
         merged = d["preanalysis"]["merged_entries"][0]
-        self.assertEqual(merged["merge_cooler_v"], 29895.4)
+        self.assertEqual(merged["merge_cooler_v"], 30000.0)
         self.assertEqual(merged["merge_harmonic"], 2)
         # source_info is dict-shaped on save.
-        self.assertEqual(merged["source_info"][0]["cooler_v"], 29895.3)
+        self.assertEqual(merged["source_info"][0]["cooler_v"], 29999.9)
 
         # Reload into a fresh PA tab.
         pa2 = PreAnalysisTab()
@@ -342,10 +342,10 @@ class YamlRoundTripTests(unittest.TestCase):
                 if isinstance(fe, MergedFileEntry)]
         self.assertEqual(len(mfes), 1)
         m = mfes[0]
-        self.assertAlmostEqual(m.merge_cooler_v, 29895.4)
+        self.assertAlmostEqual(m.merge_cooler_v, 30000.0)
         self.assertEqual(m.merge_harmonic, 2)
-        self.assertEqual(m.source_info[0]["run_number"], "7735")
-        self.assertAlmostEqual(m.source_info[0]["cooler_v"], 29895.3)
+        self.assertEqual(m.source_info[0]["run_number"], "1001")
+        self.assertAlmostEqual(m.source_info[0]["cooler_v"], 29999.9)
 
     def test_yaml_text_roundtrip_preserves_merge_metadata(self):
         """Full save→YAML-text→load cycle. PyYAML round-trips ``None``
@@ -365,13 +365,13 @@ class YamlRoundTripTests(unittest.TestCase):
             merged_y=np.array([1.0, 2.0]),
             domain="voltage",
             source_info=[
-                {"run_number": "7735",
-                 "filepath": "/data/run_7735.asdf",
-                 "cooler_v": 29895.3, "laser_sp": 15975.4150,
-                 "mass_amu": 47.95, "harmonic": 2},
+                {"run_number": "1001",
+                 "filepath": "/data/run_1001.asdf",
+                 "cooler_v": 29999.9, "laser_sp": 20000.0,
+                 "mass_amu": 100.0, "harmonic": 2},
             ],
-            merge_cooler_v=29895.3, merge_laser_sp=15975.4150,
-            merge_mass_amu=47.95, merge_harmonic=2,
+            merge_cooler_v=29999.9, merge_laser_sp=20000.0,
+            merge_mass_amu=100.0, merge_harmonic=2,
         )
         pa._add_merged_entry(
             name="merged_unset",
@@ -394,7 +394,7 @@ class YamlRoundTripTests(unittest.TestCase):
         self.assertEqual(len(mfes), 2)
         full = next(m for m in mfes if m.run_number == "merged_full")
         unset = next(m for m in mfes if m.run_number == "merged_unset")
-        self.assertAlmostEqual(full.merge_cooler_v, 29895.3)
+        self.assertAlmostEqual(full.merge_cooler_v, 29999.9)
         self.assertEqual(full.merge_harmonic, 2)
         # None survives the text round-trip (PyYAML null ↔ Python None).
         self.assertIsNone(unset.merge_cooler_v)
@@ -429,8 +429,8 @@ class YamlRoundTripTests(unittest.TestCase):
                 "domain": "voltage",
                 "x": [-50.0, 0.0, 50.0],
                 "y": [1.0, 5.0, 1.0],
-                "source_info": [["7735", "/data/run_7735.asdf"],
-                                ["7740", "/data/run_7740.asdf"]],
+                "source_info": [["1001", "/data/run_1001.asdf"],
+                                ["1002", "/data/run_1002.asdf"]],
                 "color": "#333333",
                 "alpha": 1.0,
                 "linestyle": "-",
@@ -452,9 +452,9 @@ class YamlRoundTripTests(unittest.TestCase):
         # Old format → all merge_* are None.
         self.assertIsNone(m.merge_cooler_v)
         # source_info auto-normalized to dict shape.
-        self.assertEqual(m.source_info[0]["run_number"], "7735")
+        self.assertEqual(m.source_info[0]["run_number"], "1001")
         self.assertEqual(
-            m.source_info[1]["filepath"], "/data/run_7740.asdf")
+            m.source_info[1]["filepath"], "/data/run_1002.asdf")
         self.assertIsNone(m.source_info[0]["cooler_v"])
 
 

@@ -249,9 +249,9 @@ class AnalysisTab(QWidget):
     #: The three kinds a project can be, with the label of the action
     #: that converts TO it and what that means. A calibration project
     #: used to be a one-way street: created from the menu, and the
-    #: context menu only ever offered "reference". Arda asked for the
-    #: full set (2026-09-25) -- the runs are the same files either way,
-    #: and which role they play is a decision that changes.
+    #: context menu only ever offered "reference". It now offers the
+    #: full set -- the runs are the same files either way, and which
+    #: role they play is a decision that changes.
     PROJECT_KINDS = (
         ("sample", "Convert to Sample Project",
          "An ordinary isotope project: its fitted centroids are "

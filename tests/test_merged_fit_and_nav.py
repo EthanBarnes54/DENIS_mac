@@ -48,7 +48,7 @@ def _ensure_app():
 
 def _source_config(**over):
     cfg = {
-        "Z": 32, "A": 73, "mass": 72.923459, "harmonic": 2,
+        "Z": 50, "A": 115, "mass": 114.903345, "harmonic": 2,
         "e_lower": 0, "e_upper": 0, "tof_gate": [38.0, 44.0],
         "pmt_gate": [3, 4], "v_gate": None, "f_gate": None,
         "noise_filter": 0, "cooler_correction": "pbp",
@@ -127,7 +127,7 @@ class MergedRunFitTests(unittest.TestCase):
         res = _fit_single_run(
             "merged://merged_1_2", _source_config(), _poly_model(),
             _FITTER, output_config={},
-            merged_data=_merged_data(x_offset=-4.5822e8))
+            merged_data=_merged_data(x_offset=-3.0e8))
         self.assertTrue(res.get("success"))
         self.assertIn("MERGED_AXIS_FAR_FROM_REFERENCE",
                       _axis_warning_codes(res))

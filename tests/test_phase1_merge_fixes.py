@@ -53,14 +53,14 @@ class BuildMergedMetaHtmlTests(unittest.TestCase):
         from gui.analysis.blocks import SourceBlock
 
         merged_data = {
-            "merged_name": "merged_7735_7740",
+            "merged_name": "merged_1001_1002",
             "x": np.array([-50.0, 0.0, 50.0, 100.0]),
             "y": np.array([2.0, 5.0, 11.0, 4.0]),
             "yerr": np.array([1.4, 2.2, 3.3, 2.0]),
             "x_unit": "V",
-            "source_runs": ["7735", "7740"],
-            "source_files": ["/data/run_7735.asdf",
-                             "/data/run_7740.asdf"],
+            "source_runs": ["1001", "1002"],
+            "source_files": ["/data/run_1001.asdf",
+                             "/data/run_1002.asdf"],
             "per_run": [],
             "bin_step_mhz": 0,
             "metadata": {"imported_from": "preanalysis",
@@ -70,7 +70,7 @@ class BuildMergedMetaHtmlTests(unittest.TestCase):
         sb = SourceBlock()
         html = sb._build_merged_meta_html(merged_data)
 
-        self.assertIn("merged_7735_7740", html)
+        self.assertIn("merged_1001_1002", html)
         self.assertIn("Voltage (V)", html)  # axis label
         self.assertIn("Bins:           4", html)
         # Total counts = 2 + 5 + 11 + 4 = 22
@@ -79,8 +79,8 @@ class BuildMergedMetaHtmlTests(unittest.TestCase):
         self.assertIn("-50.000", html)
         self.assertIn("100.000", html)
         # Source runs
-        self.assertIn("7735", html)
-        self.assertIn("7740", html)
+        self.assertIn("1001", html)
+        self.assertIn("1002", html)
         # Metadata block
         self.assertIn("imported_from", html)
         self.assertIn("preanalysis", html)
@@ -234,9 +234,9 @@ class MergedWarningBadgeTests(unittest.TestCase):
             "source_files": ["/p/a", "/p/b"],
             "per_run": [],
             "bin_step_mhz": 0,
-            "merge_metadata": {"cooler_v": 29895.4,
-                                "laser_sp": 15975.4150,
-                                "mass_amu": 47.95,
+            "merge_metadata": {"cooler_v": 30000.0,
+                                "laser_sp": 20000.0,
+                                "mass_amu": 100.0,
                                 "harmonic": 2},
         }
         sb._add_merged_entry(merged_data)
@@ -247,7 +247,7 @@ class MergedWarningBadgeTests(unittest.TestCase):
         self.assertIn("Doppler-projected",
                        entry["warn_label"].toolTip())
         # Tooltip surfaces the merge metadata so the user can verify.
-        self.assertIn("29895", entry["warn_label"].toolTip())
+        self.assertIn("30000", entry["warn_label"].toolTip())
 
     def test_voltage_merge_with_raw_voltage_bin_mode_hides_badge(self):
         from gui.analysis.blocks import SourceBlock

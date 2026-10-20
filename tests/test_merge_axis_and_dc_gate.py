@@ -4,14 +4,14 @@
    The merge backend stores x relative to the transition
    (Compute_WL(ref=ref_freq), ref_freq = the transition); the display
    still assumed the absolute axis of PA's pre-2026-05-14 merge and
-   subtracted the transition again. On run_7894 + run_7860 the merged
-   spectrum was drawn 1 113 584 741 MHz below the runs (transition:
-   1 113 584 221 MHz). Pre-May merges, stored absolute, still display.
+   subtracted the transition again, so a merged spectrum was drawn
+   about one transition frequency (~1e9 MHz) below its runs. Pre-May
+   merges, stored absolute, still display.
 
 2. clstools' PMT gate only removes the channels 1-4 left unticked, so
    events on any other channel -- DC -- always passed. DENIS's own
-   in-memory paths filtered them, so the two disagreed. (No DC event
-   exists in any of the 412 Yb/Ge runs checked, so no result moved.)
+   in-memory paths filtered them, so the two disagreed whenever a
+   run held DC events.
 
 Run from the project root:
     .venv/Scripts/python.exe -m pytest tests/test_merge_axis_and_dc_gate.py -q
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 
 C_CM = 2.99792458e10          # cm/s
-E_LO, E_UP, HARM = 557.1341, 37702.3054, 2
+E_LO, E_UP, HARM = 0.0, 30000.0, 2
 TRANSITION_MHZ = (E_UP - E_LO) * C_CM / 1e6
 
 
@@ -41,8 +41,8 @@ class MergedFrequencyAxisTests(unittest.TestCase):
         cls.tab._e_lower.setValue(E_LO)
         cls.tab._e_upper.setValue(E_UP)
         cls.tab._harmonic.setValue(HARM)
-        cls.tab._z_spin.setValue(32)
-        cls.tab._a_spin.setValue(74)
+        cls.tab._z_spin.setValue(50)
+        cls.tab._a_spin.setValue(116)
         cls.detuning = np.linspace(-800.0, 600.0, 57)
         cls.y = np.exp(-0.5 * (cls.detuning / 120.0) ** 2) * 50 + 3
 

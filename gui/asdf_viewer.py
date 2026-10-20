@@ -24,7 +24,7 @@ timestamp or cooler cell for its converted reading.
 Files load in the background, so the window never freezes: a few files
 one after another (process start-up would cost more than it saves),
 larger drops on up to 8 worker processes (Settings ▸ Max cores caps it
-lower). Measured on 412 runs (2026-09-27): 8.1 s one by one, 1.65 s on
+lower). Measured on a few hundred runs: 8.1 s one by one, 1.65 s on
 8 processes; threads barely help, the ASDF header parsing being pure
 Python. The workers import only numpy and asdf
 (cls_estimations.asdf_contents), not the GUI.
@@ -57,9 +57,9 @@ FILE_FILTER = "ASDF run files (*.asdf *.vasdf);;All files (*)"
 #: after another on a background thread.
 PROCESS_MIN_FILES = 30
 PROCESS_MIN_BYTES = 300e6
-#: More workers only add start-up time: 412 runs took 1.65 s on 8
-#: processes but 3.95 s on 22, the first result arriving after 2.65 s
-#: (measured 2026-09-27; one by one: 8.1 s).
+#: More workers only add start-up time: a few hundred runs took 1.65 s
+#: on 8 processes but 3.95 s on 22, the first result arriving after
+#: 2.65 s (one by one: 8.1 s).
 MAX_WORKERS = 8
 
 #: Where DENIS reads a stored value differently -- the Header "Note".

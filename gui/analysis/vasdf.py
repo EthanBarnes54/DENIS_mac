@@ -8,17 +8,17 @@ A ``.vasdf`` is a tiny YAML pointer next to the parent ASDF:
 
     kind: virtual_split
     version: 1
-    parent_path: /path/to/run_7509.asdf
-    source_id: 7509_A
-    label: 7509_A
+    parent_path: /path/to/run_1001.asdf
+    source_id: 1001_A
+    label: 1001_A
     split:
       axis: raw_voltage
       lo: -120.0
       hi: 35.0
     metadata_override:
-      cooler_v: 29912.19
-      laser_sp: 10920.1234
-      comment: 173Yb peak
+      cooler_v: 30000.0
+      laser_sp: 20000.0
+      comment: right peak
 
 The parent ASDF is never touched. Loaders detect the ``.vasdf``
 extension, read the descriptor, load the parent ASDF, and apply the
@@ -156,7 +156,7 @@ def default_vasdf_paths(parent_asdf_path: str, suffixes):
     ``suffixes`` is an iterable of short side identifiers (e.g.
     ``["A", "B"]``); pass only the suffix that should be appended to
     the parent's basename, not the full source_id (which usually
-    already contains the run number, so passing ``"7509_A"`` would
+    already contains the run number, so passing ``"1001_A"`` would
     duplicate it).
 
     Convenience for the editor's "Save…" default — callers may save

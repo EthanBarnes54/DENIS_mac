@@ -104,8 +104,8 @@ def _asdf_ts_span(path: str) -> tuple[float, float]:
     ``raw[0, 0]``. Reading that single cell lazily costs a few tens of
     ms against a full ``Load_Run`` of the whole event array, which is
     what lets a run that has never been fitted still be placed on the
-    GP's time axis. Checked equal to the ``ts_start`` merge.py records
-    for every run of the Ge campaign.
+    GP's time axis. Equal to the ``ts_start`` merge.py records for the
+    same run.
 
     The last is needed because a fitted centroid reflects the drift
     averaged over the whole acquisition, not the drift at the instant
@@ -704,7 +704,7 @@ class ReferenceCorrectionPanel(QGroupBox):
             "<li><b>Untick any bad reference runs</b> in the "
             "Reference runs list. One unreliable centroid drags the "
             "whole curve: the GP has no notion of an outlier, so a "
-            "run sitting 200 MHz off its neighbours is fitted rather "
+            "run sitting far off its neighbours is fitted rather "
             "than discounted, and the slow amplitude inflates to "
             "cover it. An excluded run stays on the plot as a grey "
             "cross, so the figure records the decision. Typical "
@@ -750,15 +750,15 @@ class ReferenceCorrectionPanel(QGroupBox):
             "identical</b> either way &mdash; nothing is wrong with "
             "your data and nothing needs re-doing.</p>"
             "<p>How much slower depends entirely on what you run. "
-            "Measured on a 13-run Composite fit, MAP took 17.5 s in "
-            "pure Python against 7-11 s compiled: about 2x, because "
+            "For a MAP fit on a dozen or so runs, compiling typically "
+            "gains about 2x, because "
             "a GP this small spends most of its time in SciPy's "
             "optimiser and NumPy linear algebra, which are compiled "
             "on both paths. <b>MCMC is what really pays</b>, since "
             "it evaluates the model thousands of times &mdash; that "
             "is the combination that can look like a hang. Note too "
             "that the first fit after installing a compiler is slow "
-            "(~110 s here) while PyTensor builds and caches the C "
+            "(a minute or two) while PyTensor builds and caches the C "
             "code; later fits are fast.</p>"
             "<p><b>It has to be g++.</b> PyTensor runs "
             "<code>g++ -v</code> and, failing that, looks inside the "
@@ -1424,9 +1424,9 @@ class ReferenceCorrectionPanel(QGroupBox):
                 # The fitted centroid reflects the drift averaged over
                 # the whole acquisition, so subtract the GP averaged
                 # over the same window rather than its value at the
-                # instant the run began (2026-09-21). Worth ~2 MHz on
-                # a 5-minute run and ~4.4 MHz on a 33-minute one,
-                # against 4-6 MHz statistical errors.
+                # instant the run began. On a long run under fast
+                # drift the difference can reach a few MHz, comparable
+                # to typical statistical errors.
                 mu_v, sig_v = self._corrector.predict_interval(
                     t_hours, ts_stop / 3600.0 if ts_stop else t_hours)
                 fc = _FileCorrection(
@@ -1497,8 +1497,8 @@ class ReferenceCorrectionPanel(QGroupBox):
 
         Computed through gui.analysis.gp_frame rather than read off
         params_df. The old version assumed the fit had already
-        subtracted the GP; when it had not -- none of the 29 T02 runs
-        had -- the panel labelled "Corrected" was plotting raw
+        subtracted the GP; when it had not, the panel labelled
+        "Corrected" was plotting raw
         centroids. Times are rebased on the GP's first training point
         so the panels share one x axis.
 
@@ -2030,17 +2030,16 @@ class ReferenceCorrectionPanel(QGroupBox):
 
         The GP is only as good as the runs it trains on, and one bad
         centroid drags the whole curve: a reference run whose
-        calibration stream was invalid can sit 200 MHz off its
+        calibration stream was invalid can sit far off its
         neighbours, and the fit will bend to reach it rather than
-        treat it as noise. Until now there was no way to say so
-        (2026-09-21).
+        treat it as noise. This list is how to say so.
         """
         self._obs_guard = True
         try:
             self._obs_list.clear()
             obs = self._gather_observations()
             # Prefix with the project only when there is more than one
-            # -- "74Ge/run_7961" is noise when 74Ge is the only source.
+            # -- "116Sn/run_1001" is noise when 116Sn is the only source.
             multi = len(self._checked_names(self._ref_list)) > 1
             for o in obs:
                 run = o.label.split("/", 1)[-1]

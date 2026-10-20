@@ -11,7 +11,7 @@ Pre-Analysis and Analysis:
     One run. Readback-vs-set with the fitted polynomial on top, residuals
     underneath, and -- the part that actually decides anything -- what the
     choice costs in **MHz**. Volts of residual mean nothing to a
-    spectroscopist; a 47 MHz centroid shift against a 300 MHz isotope
+    spectroscopist; a 50 MHz centroid shift against a 200 MHz isotope
     shift means everything. Points are clickable, and the calibration can
     instead be borrowed from another run or typed in by hand.
 
@@ -80,7 +80,7 @@ def _fmt_mhz(v: float) -> str:
 #: Plot colours for the light and the dark canvas. Dark is the
 #: Pre-Analysis dark canvas (black axes, white ink) so the two read as
 #: one app; the order colour map starts higher there, because viridis'
-#: first colours are near-black and vanish on black (Arda, 2026-10-09).
+#: first colours are near-black and vanish on black.
 _PLOT_THEMES = {
     False: dict(fig="white", ax="white", fg="#202020", dim="#616161",
                 grid="#c8c8c8", zero="#888888", file="#8a8a8a",
@@ -488,7 +488,7 @@ class CalibrationDialog(QDialog):
         self._impact.setTextFormat(Qt.TextFormat.RichText)
         # Scoped to this label by name. A bare property list applies to
         # the label AND everything styled through it -- its tooltip
-        # included, which came out dark (Arda, 2026-10-09).
+        # included, which came out dark.
         self._impact.setObjectName("calImpactBox")
         self._impact.setStyleSheet(
             "QLabel#calImpactBox { padding:7px; border:1px solid #4a4a4f;"
@@ -958,9 +958,9 @@ class CalibrationDialog(QDialog):
             ax.scatter(x[~used], y[~used], marker="x", s=60,
                        c=th["excluded"], zorder=4, label="left out")
         self._hit[ax] = (idx_all, np.asarray(x, float), np.asarray(y, float))
-        # The two curves are genuinely close on an absolute scale -- a 1.3 V
-        # disagreement across a 400 V sweep is a third of a percent, which is
-        # invisible here and worth 50 MHz downstream. So label them with their
+        # The two curves are genuinely close on an absolute scale -- a 1 V
+        # disagreement across a 400 V sweep is a quarter of a percent, which
+        # is invisible here and worth tens of MHz downstream. So label them with their
         # coefficients: that keeps them distinguishable when they overlap, and
         # the residual panels below are the magnified view.
         if base is not None:

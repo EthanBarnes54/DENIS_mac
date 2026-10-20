@@ -529,9 +529,7 @@ _TIP_STRUCT_RE = None
 
 #: Long tooltips are boxed to a width that grows with the square root of
 #: their length -- about twice as wide as tall -- so they sit as a compact
-#: block by the pointer instead of a strip across the screen (Arda,
-#: 2026-09-27: "make it square ... confine them in rectangular or square
-#: boxes around the mouse pointer").
+#: block by the pointer instead of a strip across the screen.
 TIP_MIN_CHARS = 28
 TIP_MAX_CHARS = 60
 
@@ -4358,7 +4356,7 @@ def maybe_convert_path(path_str):
 #  Default plot settings
 # ══════════════════════════════════════════════════════════════════
 
-# 2026-07-25 (Arda): bolder on-screen defaults — thicker lines/axes/
+# 2026-07-25: bolder on-screen defaults — thicker lines/axes/
 # ticks, larger axis labels — and minor ticks visible on EVERY plot
 # (UI and saved outputs) by default.
 _DEFAULT_PLOT_SETTINGS = {

@@ -53,12 +53,12 @@ class ImportPreAnalysisMergedTests(unittest.TestCase):
         # Build a fake pre-analysis tab with one MergedFileEntry
         # (voltage-domain merge of two runs).
         mfe = MergedFileEntry(
-            name="merged_7735_7740",
+            name="merged_1001_1002",
             merged_x=np.array([-50.0, 0.0, 50.0, 100.0]),
             merged_y=np.array([2.0, 5.0, 11.0, 4.0]),
             merge_domain="voltage",
-            source_info=[("7735", "/data/run_7735.asdf"),
-                         ("7740", "/data/run_7740.asdf")],
+            source_info=[("1001", "/data/run_1001.asdf"),
+                         ("1002", "/data/run_1002.asdf")],
         )
         pa = MagicMock()
         pa._file_entries = [mfe]
@@ -76,16 +76,16 @@ class ImportPreAnalysisMergedTests(unittest.TestCase):
         self.assertEqual(len(sb._file_entries), 1)
         e = sb._file_entries[0]
         self.assertTrue(e.get("is_merged"))
-        self.assertEqual(e["path"], "merged://merged_7735_7740")
+        self.assertEqual(e["path"], "merged://merged_1001_1002")
 
         md = e["merged_data"]
-        self.assertEqual(md["merged_name"], "merged_7735_7740")
+        self.assertEqual(md["merged_name"], "merged_1001_1002")
         self.assertEqual(md["x_unit"], "V")
         np.testing.assert_array_equal(md["x"], [-50.0, 0.0, 50.0, 100.0])
         np.testing.assert_array_equal(md["y"], [2.0, 5.0, 11.0, 4.0])
-        self.assertEqual(md["source_runs"], ["7735", "7740"])
+        self.assertEqual(md["source_runs"], ["1001", "1002"])
         self.assertEqual(md["source_files"],
-                         ["/data/run_7735.asdf", "/data/run_7740.asdf"])
+                         ["/data/run_1001.asdf", "/data/run_1002.asdf"])
 
     def test_frequency_domain_merge_x_is_ref_shifted(self):
         from gui.preanalysis_tab import MergedFileEntry
@@ -109,8 +109,8 @@ class ImportPreAnalysisMergedTests(unittest.TestCase):
             merged_x=absolute_mhz,
             merged_y=np.array([1.0, 7.0, 2.0]),
             merge_domain="frequency",
-            source_info=[("7735", "/data/run_7735.asdf"),
-                         ("7740", "/data/run_7740.asdf")],
+            source_info=[("1001", "/data/run_1001.asdf"),
+                         ("1002", "/data/run_1002.asdf")],
         )
         pa = MagicMock()
         pa._file_entries = [mfe]
@@ -136,7 +136,7 @@ class ImportPreAnalysisMergedTests(unittest.TestCase):
         from gui.analysis.blocks import SourceBlock
 
         regular = MagicMock()
-        regular.filepath = "/data/run_7735.asdf"
+        regular.filepath = "/data/run_1001.asdf"
         regular._is_merged = False
         # MergedFileEntry has _is_merged=True attribute.
         merged = MergedFileEntry(
@@ -161,7 +161,7 @@ class ImportPreAnalysisMergedTests(unittest.TestCase):
         sb._import_files_from_preanalysis(pa)
 
         self.assertEqual(len(sb._file_entries), 2)
-        self.assertEqual(sb._file_entries[0]["path"], "/data/run_7735.asdf")
+        self.assertEqual(sb._file_entries[0]["path"], "/data/run_1001.asdf")
         self.assertFalse(sb._file_entries[0]["is_merged"])
         self.assertTrue(sb._file_entries[1]["is_merged"])
         self.assertEqual(sb._file_entries[1]["path"], "merged://merged_X")
@@ -222,26 +222,26 @@ class LegacyTuplesInYamlLoadTests(unittest.TestCase):
         yaml_text = (
             "preanalysis:\n"
             "  merged_entries:\n"
-            "    - name: merged_7735_7740\n"
+            "    - name: merged_1001_1002\n"
             "      domain: voltage\n"
             "      x: [0.0, 1.0]\n"
             "      y: [0.0, 2.0]\n"
             "      source_info:\n"
             "        - !!python/tuple\n"
-            "          - '7735'\n"
-            "          - /data/run_7735.asdf\n"
+            "          - '1001'\n"
+            "          - /data/run_1001.asdf\n"
             "        - !!python/tuple\n"
-            "          - '7740'\n"
-            "          - /data/run_7740.asdf\n"
+            "          - '1002'\n"
+            "          - /data/run_1002.asdf\n"
         )
         cfg = yaml.safe_load(yaml_text)
         merged = cfg["preanalysis"]["merged_entries"][0]
         # Tuples are loaded as lists, so the structure is iterable
         # the same way. s[0] / s[1] still work.
-        self.assertEqual(merged["source_info"][0][0], "7735")
+        self.assertEqual(merged["source_info"][0][0], "1001")
         self.assertEqual(
-            merged["source_info"][0][1], "/data/run_7735.asdf")
-        self.assertEqual(merged["source_info"][1][0], "7740")
+            merged["source_info"][0][1], "/data/run_1001.asdf")
+        self.assertEqual(merged["source_info"][1][0], "1002")
 
 
 if __name__ == "__main__":

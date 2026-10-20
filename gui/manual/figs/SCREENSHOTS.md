@@ -1,21 +1,24 @@
 # DENIS manual — screenshots needed
 
-> **2026-08-24 status:** every PNG in this folder was captured 2026-06-02,
-> *before* the 2026-07 UI overhaul (single-surface Estimate, 2-pane PA,
-> corner Layout/Grid/dark controls, new File menu, themes, NIST browser).
-> The manual *text* is current; the images are the remaining refresh —
-> recapture the checklist below against the new UI in a real window
-> (offscreen renders have no fonts). New shots to add while at it:
-> the NIST ASD Browser (Levels + Scheme Finder), the PA dark-mode plots,
-> the 3-tab Binning dialog, and the six-tab Plot Editor with its Add tab.
+> **Status:** every screenshot that showed measurement data (spectra,
+> fit plots, run lists, project tabs, Results) has been removed. The
+> PNGs still in this folder show no data: menus, the About box, the
+> installer menu, empty Fitter/Output blocks, Settings pages and the
+> Tools calculators with their example inputs. The removed shots await
+> recapture on synthetic data; until then their manual pages show a
+> placeholder. The manual *text* is current; recapture the checklist
+> below against the current UI in a real window (offscreen renders have
+> no fonts). New shots to add while at it: the NIST ASD Browser (Levels
+> + Scheme Finder), the PA dark-mode plots, the 3-tab Binning dialog,
+> and the six-tab Plot Editor with its Add tab.
 
 Drop captured images in this folder. Use the **suggested filename** for each (or
 any name — they can be remapped during embedding). Each "captures" line is one
 distinct screenshot to take; the `fills:` note lists the manual page slot(s) that
 image serves (one capture can fill several pages — it gets copied per slot).
 
-Take each shot on the developer's own data; placeholder slots show until the file
-is added. ~49 distinct captures.
+Take each shot on synthetic or public data only, never on the developer's own
+runs; placeholder slots show until the file is added. ~49 distinct captures.
 
 Legend:  `[ ]` to capture · `[x]` done · `[gen]` generated, no screenshot needed.
 
@@ -159,9 +162,12 @@ Legend:  `[ ]` to capture · `[x]` done · `[gen]` generated, no screenshot need
 
 ---
 
-## Status (embedding pass, 2026-06-02)
+## Status (embedding pass)
 
-**Embedded ✓** — 39 provided captures copied into 44 page slots; rendering live.
+**Embedded ✓** — only the data-free captures (menus, About box, installer
+menu, empty Fitter/Output blocks, Settings, Tools calculators). Every
+data-bearing capture was removed and awaits recapture on synthetic data;
+its page slot shows a placeholder until the new file is added.
 
 **Deferred to text (per your notes)** — these pages now show a short italic
 "(Figure deferred — …)" description instead of a figure; drop the image in and
@@ -173,10 +179,11 @@ ask me to re-embed to restore the figure:
 - Physics figures (simulated-spectrum, schmidt-orbitals, gp-diagnostic) — no
   figure blocks were ever placed, so nothing shows; add later if wanted.
 
-**Resolved (2026-06-02):**
-- `main_window.png` ✓ embedded (fills `ui_main_window.png` + `main_window.png`).
+**Resolved:**
 - `analysis_merge_dialog.png` — intentionally **not used**; the Analysis Merge
   dialog is identical to the Pre-Analysis one, so that page now links to
   `pa-merging` in text instead of showing a duplicate screenshot.
 
-All referenced screenshot slots are now filled — no placeholders remain.
+The slots of the removed data-bearing captures (main window, Estimate,
+Pre-Analysis, Analysis projects, Results) show placeholders until they are
+recaptured on synthetic data.

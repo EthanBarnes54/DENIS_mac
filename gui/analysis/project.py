@@ -642,8 +642,8 @@ class AnalysisProject(QWidget):
                 return
             # The SAME source names the real fit uses: Gaussian priors
             # and Fitter-block expressions name their parameters by
-            # them, and with the old file-name labels ("run_8116" vs
-            # "Run_8116") every start failed with a KeyError as soon as
+            # them, and with the old file-name labels ("run_1001" vs
+            # "Run_1001") every start failed with a KeyError as soon as
             # one prior was set (review 2026-10-08).
             if entry.get("is_merged"):
                 name = source_name_for_merged(
@@ -2232,7 +2232,7 @@ class AnalysisProject(QWidget):
 
                 # Cast run identifiers to int when they all look
                 # numeric (the common case); fall back to strings if
-                # any are virtual-split source_ids like "7509_A". The
+                # any are virtual-split source_ids like "1001_A". The
                 # latter renders as a categorical axis.
                 try:
                     runs_arr = np.array([int(r) for r in runs])
@@ -2253,7 +2253,7 @@ class AnalysisProject(QWidget):
                     ])
                 else:
                     if runs_arr.dtype == object:
-                        # Strings like "7509_A": sort by leading int.
+                        # Strings like "1001_A": sort by leading int.
                         try:
                             keys = [int(str(s).split("_")[0])
                                     for s in runs_arr]
@@ -2611,8 +2611,8 @@ class AnalysisProject(QWidget):
         In order: the fit made in this window; the last iteration the
         session file recorded that still has its parameters.csv; only
         then the newest iter_* folder. It used to be the newest folder
-        whatever the session said, so a test fit made elsewhere (73Ge_T03
-        iter_002) replaced the session's own (review 2026-10-08).
+        whatever the session said, so a test fit made elsewhere (a
+        later iter_002) replaced the session's own (review 2026-10-08).
         Returns ``(folder name, why)`` or ``(None, None)``.
         """
         scans = set(getattr(self, "_scan_iterations", ()) or ())

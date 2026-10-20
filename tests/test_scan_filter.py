@@ -40,12 +40,12 @@ from gui.scan_filter import (
 class BunchesPerScanTests(unittest.TestCase):
 
     def test_single_range_one_bpc(self):
-        # The example file run_7740: V=-70..300, step=1 -> 371 steps,
-        # BunchesPerChannel=1 -> 371 bunches per scan. Anchored on the
-        # actual file so accidental refactors that break this formula
-        # surface immediately.
+        # A typical single scan: V=-100..200, step=1 -> 301 steps,
+        # BunchesPerChannel=1 -> 301 bunches per scan. Pinned so
+        # accidental refactors that break this formula surface
+        # immediately.
         self.assertEqual(
-            bunches_per_scan([[-70, 300]], 1.0, 1), 371)
+            bunches_per_scan([[-100, 200]], 1.0, 1), 301)
 
     def test_step_size_two(self):
         # 0..10 V at 2 V step -> 6 steps (0, 2, 4, 6, 8, 10).

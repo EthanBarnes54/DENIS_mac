@@ -127,9 +127,7 @@ class ToFBinDefaultTests(unittest.TestCase):
     """0.1 us, not 1 us.
 
     An ion bunch is a couple of microseconds wide, so 1 us bins drew it
-    as three steps. 0.1 us is also what Arda's own analysis uses
-    (tof_bin_us in the Yb calibration settings), so the two agree
-    without anyone changing a box (2026-09-25).
+    as three steps; 0.1 us resolves it.
     """
 
     def setUp(self):

@@ -16,8 +16,9 @@ When the HV supply is still settling at the start of the calibration
 sweep the first readbacks are wrong, the polynomial is pulled toward
 them, and *every* voltage in the run is biased -- which propagates
 straight into the Doppler-shifted frequency axis and shifts the fitted
-centroid. At 30 kV / mass 51 the sensitivity is ~18 MHz per volt, so a
-bad calibration is the same size as the isotope shifts being measured.
+centroid. At 30 kV the sensitivity is typically tens of MHz per volt,
+so a bad calibration is the same size as the isotope shifts being
+measured.
 
 The one invariant
 -----------------
@@ -131,10 +132,10 @@ FLAG_SIGMA = 3.0
 #:
 #: So a run is flagged only if dropping its suspect points would actually
 #: *move the voltage*: the two calibrations must disagree by more than
-#: this, somewhere in the sweep. At ~18 MHz/V (30 kV, A=51) 0.05 V is
-#: about 1 MHz -- an order of magnitude below a typical statistical
-#: centroid error, and three orders below the multi-volt tilt a real
-#: settling glitch produces. The separation is so wide that the exact
+#: this, somewhere in the sweep. At ~20 MHz/V (a mid-mass ion at
+#: 30 kV) 0.05 V is about 1 MHz -- an order of magnitude below a typical
+#: statistical centroid error, and three orders below the multi-volt
+#: tilt a real settling glitch produces. The separation is so wide that the exact
 #: value hardly matters.
 FLAG_MIN_IMPACT_V = 0.05
 
@@ -923,9 +924,9 @@ def calibration_shift_v(coeffs_a: Sequence[float], coeffs_b: Sequence[float],
 
     Both coefficient sets are ascending, volts convention, so the result
     is directly the voltage error the choice of calibration costs you --
-    and multiplying by the run's dnu/dV (~18 MHz/V at 30 kV, A=51) turns
-    it into the centroid shift, which is the only form a physicist can
-    actually act on.
+    and multiplying by the run's dnu/dV (~20 MHz/V for a mid-mass ion
+    at 30 kV) turns it into the centroid shift, which is the only form a
+    physicist can actually act on.
     """
     if not len(coeffs_a) or not len(coeffs_b):
         return 0.0
