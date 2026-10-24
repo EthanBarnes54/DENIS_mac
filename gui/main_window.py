@@ -21,7 +21,9 @@ __version__ = "1.1.2"
 
 import sys
 import os
+import atexit
 import logging
+import shutil
 import tempfile
 from datetime import datetime
 
@@ -133,6 +135,8 @@ class MainWindow(QMainWindow):
         self._Estimate_Run = None       # latest run in the temp folder
         self._Estimate_Tmp = None       # tempfile.mkdtemp, made lazily
         self._Live_Pending = False      # a change arrived mid-run
+        self._Run_Config = None         # the inputs of the latest run
+        self._Run_Is_Live = False       # the latest run was a live re-run
         self._Live_Timer = QTimer(self, singleShot=True, interval=400,
                                   timeout=lambda: self._Start_Estimate_Run(True))
         for sig in (self.estimate_tab.Voltage_Estimator.Config_Changed,
@@ -1172,7 +1176,6 @@ class MainWindow(QMainWindow):
                 # One backup of the file as it was before DENIS first
                 # rewrote it; a later rewrite must not replace it.
                 if not os.path.exists(backup):
-                    import shutil
                     shutil.copy2(yaml_path, backup)
                 self._write_yaml(yaml_path, on_disk)
             except Exception as e:
@@ -1448,8 +1451,6 @@ class MainWindow(QMainWindow):
                 et.run_tab.append_log(problem)
             return problem
         if self._Estimate_Tmp is None:
-            import atexit
-            import shutil
             self._Estimate_Tmp = tempfile.mkdtemp(prefix="denis_estimate_")
             # Live runs are throwaway until Save; nothing is left behind.
             atexit.register(shutil.rmtree, self._Estimate_Tmp, True)
@@ -1557,13 +1558,11 @@ class MainWindow(QMainWindow):
             logger.removeHandler(h)
         if prev and prev["run_dir"] != (self._Estimate_Run or {}).get(
                 "run_dir"):
-            import shutil
             shutil.rmtree(prev["run_dir"], ignore_errors=True)
 
     def _On_Save_Estimation(self):
         """Copy the latest temp run to the output directory, keeping its
         cls_<timestamp> name (Load finds the files by that prefix)."""
-        import shutil
         from gui.shared_widgets import get_estimates_dir
         run = self._Estimate_Run
         if run is None or not os.path.isdir(run["run_dir"]):
@@ -1608,7 +1607,7 @@ class MainWindow(QMainWindow):
         and Run repeats the run), ``estimate_results.npz`` (arrays for
         native re-rendering) and ``peaks.csv`` (human-readable peak
         table)."""
-        cfg = getattr(self, "_Run_Config", None)
+        cfg = self._Run_Config
         if cfg is not None:
             # UTF-8 on every platform: Windows would default to cp1252.
             with open(os.path.join(run_dir, "estimate_config.yaml"), "w",
@@ -1762,7 +1761,7 @@ class MainWindow(QMainWindow):
     def _on_run_error(self, error_msg):
         et = self.estimate_tab
         et.run_tab.run_btn.setEnabled(True)
-        live = getattr(self, "_Run_Is_Live", False)
+        live = self._Run_Is_Live
         self.status.show("Estimation failed -- see the log" if live
                          else "Estimation failed -- see error dialog")
         # code review 2026-06-02, worker-thread-exceptions-not-logged:

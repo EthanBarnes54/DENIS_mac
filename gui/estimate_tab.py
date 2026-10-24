@@ -2473,10 +2473,10 @@ class Voltage_Range_Estimator(QGroupBox):
         if getattr(root, "_Estimator_Hooked", False):
             return
         root._Estimator_Hooked = True
-        for w in (root.findChildren(QAbstractSpinBox)
-                  + root.findChildren(QLineEdit)):
+        for w in root.findChildren(QLineEdit):
             w.editingFinished.connect(self.Schedule_Refresh)
         for w in root.findChildren(QAbstractSpinBox):
+            w.editingFinished.connect(self.Schedule_Refresh)
             if hasattr(w, "valueChanged"):
                 w.valueChanged.connect(
                     lambda *_, w=w: w.lineEdit().isModified()
@@ -2798,9 +2798,9 @@ class Voltage_Range_Estimator(QGroupBox):
             dvs = [abs(v - off) for st in shown
                    for v in self._Peak_Dvs(st, s) if v is not None]
             win = max(1.1 * max(dvs, default=0.0), 2 * dv)
-        xs = [s] + [self._Setpoint_For(st["centroid"] + off, self._V0 + w,
+        xs = [s] + [self._Setpoint_For(st["centroid"] + o, self._V0 + w,
                                        st["mass"])
-                    for st in shown for off in st["offsets"]
+                    for st in shown for o in st["offsets"]
                     for w in (-win, win)]
         pad = 0.05 * (max(xs) - min(xs)) or 1e-3
         fit = (min(xs) - pad, max(xs) + pad)

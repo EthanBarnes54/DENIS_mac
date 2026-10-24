@@ -413,7 +413,6 @@ class VoltageEstimatorTests(unittest.TestCase):
         """Rings are full strength in the sweep's core and fade towards its
         edges across the margin; the readout calls those crossings "edge"
         and counts them by weight; the map carries no text (2026-10-24)."""
-        import numpy as np
         self._Build(self.cfg)
         est = self.est
         self.assertFalse(est._Map.texts)

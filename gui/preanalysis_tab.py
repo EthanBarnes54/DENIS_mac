@@ -649,6 +649,7 @@ class FileEntry(QWidget):
         row.setContentsMargins(20, 0, 0, 0)     # under the colour swatch
         row.setSpacing(4)
         self._Overrides = {}
+        from PySide6.QtGui import QFont, QFontMetrics
         for key, name, unit, own, dec, step in (
                 ("laser", "Laser", "cm\u207b\u00b9", laser_sp, 6, 0.1),
                 ("cooler", "Cooler", "V", cooler_v, 2, 1.0)):
@@ -664,7 +665,6 @@ class FileEntry(QWidget):
             box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
             # Wide enough for a 5-digit value at the row's 11 px type, from
             # the font rather than the +/-100000 range the box allows.
-            from PySide6.QtGui import QFont, QFontMetrics
             font = QFont(box.font())
             font.setPixelSize(11)
             box.setFixedWidth(
