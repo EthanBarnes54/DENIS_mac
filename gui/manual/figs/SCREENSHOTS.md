@@ -56,7 +56,7 @@ Legend:  `[ ]` to capture · `[x]` done · `[gen]` generated, no screenshot need
 - [ ] **estimate_isotope_expanded.png** — an isotope panel expanded: nuclear fields
   (A/amu, Label, I, μ, Q, isotope shift) + isomer + Schmidt sub-panels. `fills: estimate_isotope_panel_expanded.png`
 - [ ] **estimate_run_log.png** — column 3: Run Options (output dir + Browse, palette, Generate
-  plots), the bold Run Estimation button, syntax-highlighted log with Grand Total + peak list.
+  plots), the Run / Save / Load buttons, syntax-highlighted log with Grand Total + peak list.
   `fills: estimate_run_options_log.png, qs_estimate_output.png`
 - [ ] **estimate_plots.png** — Plots sub-tab, View = Individual Spectra, dashed peak markers,
   toolbar + Edit Plot / Open PDF. `fills: estimate_plots_subtab.png` (also reused for physics-simulated-spectrum)

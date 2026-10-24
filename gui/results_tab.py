@@ -903,7 +903,11 @@ class ResultsTab(QWidget):
         # Page 1: text viewer
         self._text_viewer = QPlainTextEdit()
         self._text_viewer.setReadOnly(True)
-        self._text_viewer.setFont(QFont("Courier", 10))
+        # Menlo on macOS, which has no "Courier": Qt logged a font-alias
+        # warning at every start (2026-10-24).
+        import sys
+        self._text_viewer.setFont(
+            QFont("Menlo" if sys.platform == "darwin" else "Courier", 10))
         # One highlighter bound to the document for the widget's
         # lifetime. Building one per selection would leave a live
         # highlighter behind for every item ever clicked, each still

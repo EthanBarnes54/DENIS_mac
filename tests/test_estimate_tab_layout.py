@@ -135,6 +135,21 @@ class EstimateTabStructureTests(unittest.TestCase):
         self.assertTrue(
             tab.run_tab._log_host.isAncestorOf(tab.run_tab.log_text))
 
+    def test_Run_Column_Shares_5_5_2(self):
+        """Plots, estimator and log fill column 3 in a 5 : 5 : 2 split by
+        default; the log keeps its original 80 px minimum (2026-10-24)."""
+        from gui.estimate_tab import EstimateTab
+        tab = EstimateTab()
+        tab.resize(1500, 1100)
+        tab.show()
+        QApplication.processEvents()
+        vs = tab.run_tab._vsplit
+        sizes = vs.sizes()
+        for got, want in zip(sizes, (5, 5, 2)):
+            self.assertAlmostEqual(12 * got / sum(sizes), want, delta=0.15)
+        self.assertEqual(tab.run_tab._log_host.minimumHeight(), 80)
+        tab.close()
+
     def test_handles_still_forward(self):
         """main_window contracts: run_tab / plots_tab / run_requested."""
         from gui.estimate_tab import EstimateTab
@@ -392,7 +407,32 @@ class VoltageEstimatorTests(unittest.TestCase):
                if k in est._Selected(st)]
         inside = sorted(d for d in dvs if d is not None and abs(d) <= 300)
         self.assertTrue(inside)
-        self.assertEqual(sorted(est._Rings.get_ydata()), inside)
+        self.assertEqual(sorted(est._Rings.get_offsets()[:, 1]), inside)
+
+    def test_Estimator_Rings_Fade_Across_The_Margin(self):
+        """Rings are full strength in the sweep's core and fade towards its
+        edges across the margin; the readout calls those crossings "edge"
+        and counts them by weight; the map carries no text (2026-10-24)."""
+        import numpy as np
+        self._Build(self.cfg)
+        est = self.est
+        self.assertFalse(est._Map.texts)
+        est.Dv_Box.setValue(400)
+        est.Dv_Box.editingFinished.emit()
+        est.Margin_Box.setValue(150)
+        ys = est._Rings.get_offsets()[:, 1]
+        alphas = est._Rings.get_edgecolors()[:, 3]
+        self.assertGreater(len(ys), 0)
+        for y, a in zip(ys, alphas):
+            want = min(1.0, (400 - abs(y)) / 150)
+            self.assertAlmostEqual(a, max(0.1, want), places=6)
+        self.assertEqual(est._Weight(0.0), 1.0)
+        self.assertAlmostEqual(est._Weight(325.0), 0.5)
+        self.assertEqual(est._Weight(401.0), 0.0)
+        text = est.Readout.toPlainText()
+        self.assertIn("selected coverage", text)
+        if any(250 < abs(y) <= 400 for y in ys):
+            self.assertIn(" edge", text)
 
     def test_Estimator_Waits_For_Run(self):
         """F2: before the first Run a refresh reports the change but shows
@@ -461,34 +501,94 @@ class VoltageEstimatorTests(unittest.TestCase):
         self.assertEqual(est._Selected(st), set(top3))
 
     def test_Estimator_Optimise_Covers_Selected_Peaks(self):
-        """Optimise centres the selected peaks of the shown state in the
-        narrowest sweep that keeps the margin (100 V by default, set with
-        the gear), rounded up
-        to whole steps, and writes Laser and Scan (2026-10-24)."""
+        """Optimise leaves the setpoint alone and sets Scan > Voltage range
+        to the DAQ range of the selected peaks plus the margin (100 V by
+        default, set with the gear), start and stop outward to whole
+        steps; the readout lists them (2026-10-24)."""
         self._Build(self.cfg)
         est, gp = self.est, self.tab.params_tab.global_params
         est.Show_Combo.setCurrentIndex(1)       # 59Co only
         st = est._Shown()[0]
-        ks = sorted(est._Selected(st))
-        est._Optimise()
-        s, rng = gp.setpoint_cm.value(), gp.scan_range.value()
-        self.assertEqual(est._S, s)
-        steps = rng / gp.scan_step.value()
-        self.assertAlmostEqual(steps, round(steps), places=6)
-
-        def worst(x):
-            dvs = est._Peak_Dvs(st, x)
-            return max(abs(dvs[k]) for k in ks)
+        s0, step = est._S, gp.scan_step.value()
+        d = [est._Peak_Dvs(st, s0)[k] for k in est._Selected(st)]
+        start, stop = est._Peak_Range(s0)
         self.assertEqual(est.Margin_Box.value(), 100.0)
-        need = worst(s) + 100.0
-        self.assertGreaterEqual(rng / 2, need)
-        self.assertLess(rng / 2 - need, gp.scan_step.value())
-        est.Margin_Box.setValue(40.0)           # a tighter margin
+        for edge in (start, stop):
+            self.assertAlmostEqual(edge / step, round(edge / step), places=6)
+        self.assertLessEqual(start, min(d) - 100.0)
+        self.assertGreater(start, min(d) - 100.0 - step)
+        self.assertGreaterEqual(stop, max(d) + 100.0)
+        self.assertLess(stop, max(d) + 100.0 + step)
+        self.assertIn(f"[{start:.1f}, {stop:.1f}] V to scan",
+                      est.Readout.toPlainText())
         est._Optimise()
-        self.assertAlmostEqual(gp.scan_range.value() / 2 - (worst(s) + 40.0),
-                               0.0, delta=gp.scan_step.value())
-        for ds in (-1e-4, 1e-4):                # no nearby setpoint is better
-            self.assertGreaterEqual(worst(s + ds), worst(s) - 1e-6)
+        self.assertEqual(est._S, s0)                    # setpoint untouched
+        self.assertAlmostEqual(gp.scan_range.value(), stop - start, places=6)
+        est.Margin_Box.setValue(40.0)                   # a tighter margin
+        start2, stop2 = est._Peak_Range(s0)
+        self.assertAlmostEqual(stop2 - start2, (stop - start) - 120.0,
+                               delta=2 * step)
+
+    def test_Estimator_Follows_Stepped_Parameters(self):
+        """A step (arrows, wheel, code) in a parameter box refreshes the
+        estimator, not just Enter or focus-out; a half-typed number does
+        not (2026-10-24)."""
+        from unittest import mock
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        sp = self.tab.params_tab.global_params.setpoint_cm
+        self.tab.show()                 # showing schedules its own refresh
+        QApplication.processEvents()
+        with mock.patch.object(self.est, "Schedule_Refresh") as refresh:
+            sp.stepUp()
+            self.assertTrue(refresh.called)
+            refresh.reset_mock()
+            sp.setValue(10920.5)
+            self.assertTrue(refresh.called)
+            refresh.reset_mock()
+            sp.setFocus()
+            sp.lineEdit().selectAll()
+            QTest.keyClicks(sp.lineEdit(), "109")
+            refresh.assert_not_called()
+            QTest.keyClick(sp, Qt.Key.Key_Up)
+            self.assertTrue(refresh.called)
+
+    def test_Estimator_Readout_Offset_Is_Display_Only(self):
+        """The readout offset moves what is drawn (lines, rings, spectrum,
+        the sweep band) and the readout's dV and scan range by its signed
+        amount; the axes, their limits and labels, the parsed config and
+        the hyperfine model stay as they are (2026-10-24)."""
+        import copy
+        import numpy as np
+        self._Build(self.cfg)
+        est = self.est
+        st, s = est._States[0], est._S
+        before = est._Peak_Dvs(st, s)
+        rng0 = est._Peak_Range(s)
+        axes0 = (est._Map.get_xlim(), est._Map.get_ylim(),
+                 est._Map.get_ylabel())
+        band0 = est._Map.patches[0].get_extents().y0
+        model = copy.deepcopy((est._Cfg, [dict(x) for x in est._States]))
+        y0, v0 = (np.asarray(a) for a in est._Spectra[0].get_data())
+        est.Offset_Box.setValue(-25.0)          # the DAQ reads 25 V low
+        self.assertEqual((est._Map.get_xlim(), est._Map.get_ylim(),
+                          est._Map.get_ylabel()), axes0)
+        after = est._Peak_Dvs(st, s)
+        for b, a in zip(before, after):
+            if b is not None:
+                self.assertAlmostEqual(a, b - 25.0, places=9)
+        self.assertLess(est._Map.patches[0].get_extents().y0, band0)
+        y1, v1 = (np.asarray(a) for a in est._Spectra[0].get_data())
+        self.assertAlmostEqual(v1[np.argmax(y1)], v0[np.argmax(y0)] - 25.0,
+                               delta=est._Fwhm_V / 5)
+        rng1 = est._Peak_Range(s)
+        self.assertAlmostEqual(rng1[0], rng0[0] - 25.0, places=6)
+        self.assertAlmostEqual(rng1[1], rng0[1] - 25.0, places=6)
+        self.assertIn("Offset   -25.00 V", est.Readout.toPlainText())
+        self.assertEqual(repr(est._Cfg), repr(model[0]))
+        for x, y in zip(est._States, model[1]):
+            self.assertEqual(x["hfs"], y["hfs"])
+            np.testing.assert_array_equal(x["offsets"], y["offsets"])
 
     def test_Estimate_States_Become_PreAnalysis_Models(self):
         """Point 8: Add Model > From Estimate lays each state of the last

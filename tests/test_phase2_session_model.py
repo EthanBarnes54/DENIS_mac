@@ -246,6 +246,83 @@ class EstimateRunPersistenceTests(unittest.TestCase):
             self.assertEqual(os.listdir(out), ["cls_2026-10-24_12-00-00"])
             self.win._Estimate_Run = self.win._last_estimate_run = None
 
+    def test_Load_Restores_Run_Inputs(self):
+        """A saved run keeps its inputs (estimate_config.yaml, UTF-8 on
+        every platform); Load restores them with the outputs, so Run
+        repeats the run (2026-10-24)."""
+        import tempfile
+        import yaml
+        from unittest import mock
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "configs", "example_cobalt.yaml")) as fh:
+            cfg = yaml.safe_load(fh)
+        cfg["isotopes"][1]["label"] = "54Co \u00b5-test"      # non-ASCII
+        et = self.win.estimate_tab
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = os.path.join(td, "cls_2026-10-24_18-00-00")
+            os.makedirs(run_dir)
+            self.win._Run_Config = cfg
+            self.win._worker = self._fake_worker()
+            self.win._persist_estimate_outputs(run_dir)
+            with open(os.path.join(run_dir, "estimate_config.yaml"),
+                      encoding="utf-8") as fh:
+                self.assertIn("\u00b5-test", fh.read())
+            self.win._worker = None
+            self.win._Run_Config = None
+            self.win._restore_estimate({"element": "Sn", "isotopes": []})
+            self.assertEqual(len(et.params_tab.isotope_list.panels), 0)
+            with mock.patch("gui.main_window.QFileDialog."
+                            "getExistingDirectory", return_value=run_dir):
+                self.win._on_load_estimation()
+            gp = et.params_tab.global_params
+            self.assertEqual(gp.element_edit.text(), "Co")
+            self.assertAlmostEqual(gp.setpoint_cm.value(), 10920.071952,
+                                   places=6)
+            self.assertEqual(
+                [p.iso_label.text() for p in et.params_tab.isotope_list.panels],
+                ["59Co", "54Co \u00b5-test"])
+            self.assertEqual(self.win._last_estimate_run["run_dir"], run_dir)
+            self.win._last_estimate_run = None
+
+    def test_Saved_Lines_Only_On_Save(self):
+        """Live runs go to a temp folder, so the pipeline's "Plots saved" /
+        "Log saved" lines are held back; Save prints them with the saved
+        paths and rewrites them in the copied log (2026-10-24)."""
+        import tempfile
+        et = self.win.estimate_tab
+        with tempfile.TemporaryDirectory() as td:
+            tmp = os.path.join(td, "denis_estimate_x")
+            run_dir = os.path.join(tmp, "cls_2026-10-24_20-00-00")
+            os.makedirs(run_dir)
+            log = os.path.join(run_dir, "cls_x_cls_estimate_116Sn.log")
+            with open(log, "w", encoding="utf-8") as fh:
+                fh.write(f"GRAND TOTAL: 1h\nLog saved:   {log}\n")
+            with open(os.path.join(run_dir, "cls_x_hfs_spectra.pdf"), "w") as fh:
+                fh.write("x")
+            self.win._Estimate_Tmp = tmp
+            et.run_tab.log_text.clear()
+            for line in ("GRAND TOTAL: 1h", f"Log saved:   {log}",
+                         f"             {run_dir}/x.pdf"):
+                self.win._Append_Run_Log(line)
+            self.assertEqual(et.run_tab.log_text.toPlainText(), "GRAND TOTAL: 1h")
+            self.win._Estimate_Run = {"run_dir": run_dir, "config_name": "x",
+                                      "file_tag": "", "palette": "default"}
+            self.win._last_estimate_run = None
+            out = os.path.join(td, "out")
+            et.run_tab.output_dir.setText(out)
+            self.win._worker = None
+            self.win._On_Save_Estimation()
+            dest = os.path.join(out, "cls_2026-10-24_20-00-00")
+            shown = et.run_tab.log_text.toPlainText()
+            self.assertIn(f"Log saved:   {os.path.join(dest, os.path.basename(log))}", shown)
+            self.assertIn(f"Plots saved: {os.path.join(dest, 'cls_x_hfs_spectra.pdf')}", shown)
+            with open(os.path.join(dest, os.path.basename(log)), encoding="utf-8") as fh:
+                saved = fh.read()
+            self.assertNotIn(tmp, saved)
+            self.assertIn(dest, saved)
+            self.win._Estimate_Tmp = self.win._Estimate_Run = None
+            self.win._last_estimate_run = None
+
     def test_restore_missing_dir_is_quiet(self):
         self.win._last_estimate_run = None
         self.win._restore_estimate_outputs({

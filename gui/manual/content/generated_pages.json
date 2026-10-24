@@ -1450,7 +1450,7 @@
   },
   {
    "type": "p",
-   "text": "<b>Run Estimation</b> and <b>Load Estimation...</b> sit on one row inside the Run Options group. Run starts the calculation: a read-only, monospaced, syntax-highlighted log at the bottom of the column streams progress and results; <b>Clear</b> empties it. The log is also saved to a <code>.log</code> file in the run's <code>cls_&lt;timestamp&gt;</code> output folder, next to the YAML config, the plot data (<code>estimate_results.npz</code>) and the peak table (<code>peaks.csv</code>)."
+   "text": "<b>Run</b>, <b>Save</b> and <b>Load...</b> sit on one row inside the Run Options group. Run starts the calculation: a read-only, monospaced, syntax-highlighted log at the bottom of the column streams progress and results; <b>Clear</b> empties it. From the first run on, every change re-runs the estimation live into a temporary folder. <b>Save</b> copies the latest run into the output directory as a <code>cls_&lt;timestamp&gt;</code> folder: the <code>.log</code> file, the plot PDFs, the plot data (<code>estimate_results.npz</code>), the peak table (<code>peaks.csv</code>) and every input the run used (<code>estimate_config.yaml</code>). The log's <i>Plots saved</i> and <i>Log saved</i> lines appear when Save writes them."
   },
   {
    "type": "h2",
@@ -1472,12 +1472,12 @@
   },
   {
    "type": "p",
-   "text": "<b>Load Estimation...</b> reopens any previous run folder for viewing — plots, peak table, and log restore without re-running and without creating new output. The save file also records the last run, so a saved session restores it automatically on load. Picking a folder that is not a run folder shows a hint instead of failing."
+   "text": "<b>Load...</b> reopens any saved run folder for viewing — plots, peak table, and log restore without re-running and without creating new output — and restores the inputs the run used, so <b>Run</b> repeats it. The save file also records the last saved run, so a saved session restores it automatically on load. Picking a folder that is not a run folder shows a hint instead of failing."
   },
   {
    "type": "screenshot",
    "file": "estimate_run_options_log.png",
-   "caption": "Column 3 showing the Run Options group (output directory + Browse, color palette, Generate plots), the bold Run Estimation button, and the syntax-highlighted log with a Grand Total and a peak list visible."
+   "caption": "Column 3 showing the Run Options group (output directory + Browse, color palette, Generate plots), the Run / Save / Load buttons, and the syntax-highlighted log with a Grand Total and a peak list visible."
   },
   {
    "type": "related",
@@ -1533,7 +1533,7 @@
   },
   {
    "type": "note",
-   "text": "Estimation runs from before the <code>.npz</code> persistence existed hold only PDFs. When such a run is loaded via [[est-run-options|Load Estimation...]], its PDF pages are rasterized onto the canvas as stacked images, so pan/zoom/save still work."
+   "text": "Estimation runs from before the <code>.npz</code> persistence existed hold only PDFs. When such a run is loaded via [[est-run-options|Load...]], its PDF pages are rasterized onto the canvas as stacked images, so pan/zoom/save still work."
   },
   {
    "type": "screenshot",

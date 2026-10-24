@@ -253,7 +253,7 @@ simulated spectrum.</p>
   <li>Make sure the <b>{R.link("est-statistics", "Statistics (Timing Mode)")}</b>
       group is enabled to get timing (leave it off for a spectrum-only
       simulation), and set the required &sigma;.</li>
-  <li>Click <b>Run Estimation</b> (right column). The log streams per-peak
+  <li>Click <b>Run</b> (under the isotope list). The log streams per-peak
       signal rates, the on-peak time for the requested &sigma;, the number of
       sweeps to cover the scan range, and a grand-total run time.</li>
   <li>The plot panel above the log shows the simulated voltage spectrum for
@@ -267,7 +267,7 @@ simulated spectrum.</p>
               "expanded, marked as Reference.")}
 
 {R.screenshot("qs_estimate_output.png",
-              "After Run Estimation: the log report (right column) and the "
+              "After Run: the log report (right column) and the "
               "simulated spectrum on the Plots sub-tab.")}
 
 {R.tip("The on-peak measurement time scales as t = &sigma;&sup2;(S+B)/S&sup2; "

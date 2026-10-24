@@ -149,8 +149,10 @@ the log, and the last good plots stay up. The log contains, in order:
 Runs go to a temporary folder that is deleted when DENIS closes.
 \app{Save} copies the latest run into the chosen \app{Output directory}
 as a \code{cls\_<timestamp>} folder: the log written verbatim to a
-\code{.log} file, the plot PDFs, and the plot arrays and peak table
-(\code{estimate\_results.npz}, \code{peaks.csv}). The session save
+\code{.log} file, the plot PDFs, the plot arrays and peak table
+(\code{estimate\_results.npz}, \code{peaks.csv}), and every input the
+run used (\code{estimate\_config.yaml}: the parameter boxes, the
+isotopes and the reference). The session save
 file records the saved folder --- so a saved session restores its
 plots, peak table, and log on load without re-running.
 
@@ -173,8 +175,10 @@ plots, against the fundamental setpoint, the voltage offset $\Delta V$
 at which every hyperfine component resonates: one line per component,
 solid for ground states and dashed for isomers, in each isotope's
 colour. A red bar marks the current setpoint, with a red ring where it
-crosses a selected peak's line inside the sweep; a shaded band marks the $\pm$\app{dV}
-sweep; thin
+crosses a selected peak's line inside the sweep, fading across the
+margin towards the sweep's edges, where scanning is riskier (the readout
+calls those crossings \emph{edge} and counts them by weight in its
+coverage line); a shaded band marks the $\pm$\app{dV} sweep; thin
 \emph{centre} markers show the setpoint that puts each state's centroid
 at $\Delta V = 0$. Beside the map, the spectrum at the current setpoint
 shares the $\Delta V$ axis, and a readout lists the setpoint, laser
@@ -194,11 +198,19 @@ values. Entering \app{dV} writes \app{Scan} $\rightarrow$
 \app{Peaks} picks the components the sweep must cover: by default
 each state's strongest \app{Peaks to measure} (the ones the run time
 counts), all components, or any ticked per state; selected components
-are drawn bold and marked in the readout. \app{Optimise} then sets the
-setpoint and the smallest \app{dV} that keep the selected peaks of the
-shown states inside the sweep, with 100\,V of baseline on each side
-(the gear button beside it changes this), rounding the scan range up to whole steps; it is one undo step.
-With \app{Show} on a single state it optimises for that state alone.
+are drawn bold and marked in the readout, whose \emph{Peaks} line
+gives the DAQ range [start, stop] that covers them at the current
+setpoint, with 100\,V of baseline on each side (the gear button beside
+\app{Optimise} changes this), start and stop rounded outward to whole
+steps. \app{Optimise} sets \app{Scan} $\rightarrow$ \app{Voltage range}
+to that range's width (one undo step); the setpoint is left for you to
+place. With \app{Show} on a single state it covers that state alone.
+The same gear holds a \app{Readout offset}: a signed shift in volts for
+a known DAQ readout shift (negative moves the peaks to lower
+$\Delta V$). The component lines, rings, spectrum and sweep band move by
+it, and the readout's $\Delta V$ values and scan range include it, so
+they can be entered as DAQ scanning ranges directly. The axes do not
+move, and the hyperfine model, the plots and the log are unchanged.
 \app{Window} only sets the plotted $\Delta V$ range (\app{auto} fits
 the components), and \app{Show} limits the view to one state. The
 estimator appears after the first \app{Run}; its commits then re-run
@@ -209,7 +221,10 @@ the estimation like any other change.
 \app{Load\dots} (next to \app{Run} and \app{Save}) reopens any
 saved \code{cls\_<timestamp>} run folder for viewing --- plots,
 peak table, and log are restored without re-running and without
-creating new output. A loaded run, like a loaded configuration, stays
-a static view until \app{Run} is pressed. Runs from before the \code{.npz} persistence
+creating new output --- and its inputs are restored from
+\code{estimate\_config.yaml}, so \app{Run} repeats it straight away.
+A loaded run, like a loaded configuration, stays a static view until
+\app{Run} is pressed; folders saved before the inputs were kept load
+their outputs only. Runs from before the \code{.npz} persistence
 existed hold only PDFs; their pages are rendered onto the live
 matplotlib canvas, so pan/zoom/save still work.

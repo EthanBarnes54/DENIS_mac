@@ -44,7 +44,7 @@ If `uv` is already installed: `uv sync && uv run python gui.py`.
 ### Estimate Tab
 - Run-time estimation and HFS spectrum simulation in voltage space; isotope shift and resonance voltage calculations for multi-isotope plans
 - Single-surface layout: global parameters, isotope list (color-striped), and Run Options + plots + log; an expand toggle covers the whole tab with the plots
-- Runs persist (`estimate_results.npz` + `peaks.csv` per `cls_<timestamp>` folder) and restore on load without re-running; **Load Estimation...** reopens any previous run, rendering PDF-only legacy runs onto the live canvas
+- Runs persist (`estimate_results.npz` + `peaks.csv` per `cls_<timestamp>` folder) and restore on load without re-running; **Load...** reopens any saved run, with the inputs it used,, rendering PDF-only legacy runs onto the live canvas
 - Sortable **Peak List** view; intensity-ordered and voltage-ordered peak tables in the log
 
 ### Pre-Analysis Tab

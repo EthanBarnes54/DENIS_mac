@@ -585,9 +585,16 @@ class FileEntry(QWidget):
         self.np_vcool = None         # per-event cooler voltage (V)
         self.run_time_s = 0.0  # run duration in seconds
 
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(2, 2, 2, 2)
+        # The card's rows, then the per-run override row under them at full
+        # width: indented under the run name, it overran the 380 px column
+        # once the theme's scrollbar and spin-box padding were counted.
+        root = QVBoxLayout(self)
+        root.setContentsMargins(2, 2, 2, 2)
+        root.setSpacing(0)
+        outer = QHBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
+        root.addLayout(outer)
 
         self.check = QCheckBox()
         self.check.setChecked(True)
@@ -639,7 +646,7 @@ class FileEntry(QWidget):
             "QCheckBox, QLabel { color: gray; font-size: 11px; }"
             " QDoubleSpinBox { font-size: 11px; }")
         row = QHBoxLayout(self.Override_Row)
-        row.setContentsMargins(0, 0, 0, 0)
+        row.setContentsMargins(20, 0, 0, 0)     # under the colour swatch
         row.setSpacing(4)
         self._Overrides = {}
         for key, name, unit, own, dec, step in (
@@ -655,6 +662,13 @@ class FileEntry(QWidget):
             # No arrows: the card must fit the 380 px column; the arrow
             # keys still step the value.
             box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            # Wide enough for a 5-digit value at the row's 11 px type, from
+            # the font rather than the +/-100000 range the box allows.
+            from PySide6.QtGui import QFont, QFontMetrics
+            font = QFont(box.font())
+            font.setPixelSize(11)
+            box.setFixedWidth(
+                QFontMetrics(font).horizontalAdvance("8" * (6 + dec)) + 16)
             for w in (tick, box):
                 w.setToolTip(f"Use this value for this run only. It "
                              f"overrides the global {name} setting in "
@@ -667,7 +681,7 @@ class FileEntry(QWidget):
             row.addWidget(box)
             row.addWidget(QLabel(unit))
         row.addStretch()
-        card.addWidget(self.Override_Row)
+        root.addWidget(self.Override_Row)
 
         outer.addLayout(card, 1)
 

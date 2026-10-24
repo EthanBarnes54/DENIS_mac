@@ -1430,8 +1430,12 @@ class MainWindow(QMainWindow):
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 tmp_path = os.path.join(
                     tempfile.gettempdir(), f"cls_{timestamp}.yaml")
+                # The run's inputs, kept for its folder (see
+                # _persist_estimate_outputs).
+                self._Run_Config = self._build_estimate_dict()
+                self._Run_Config.pop("last_run", None)
                 with open(tmp_path, "w") as tmp:
-                    yaml.dump(self._build_estimate_dict(), tmp,
+                    yaml.dump(self._Run_Config, tmp,
                               default_flow_style=False, sort_keys=False,
                               allow_unicode=True)
                 self._tmp_config = tmp_path
@@ -1480,7 +1484,7 @@ class MainWindow(QMainWindow):
             no_plot=opts["no_plot"],
             palette=opts["palette"],
         )
-        self._worker.log_line.connect(et.run_tab.append_log)
+        self._worker.log_line.connect(self._Append_Run_Log)
         self._worker.finished_ok.connect(self._on_run_finished)
         self._worker.finished_error.connect(self._on_run_error)
         self._worker.start()
@@ -1537,6 +1541,13 @@ class MainWindow(QMainWindow):
             self._Live_Pending = False
             self._Live_Timer.start()
 
+    def _Append_Run_Log(self, line):
+        """The run's log, minus the pipeline's "Plots saved" / "Log saved"
+        lines: they name the temp folder, and are printed with the real
+        paths only when Save actually saves (2026-10-24)."""
+        if not (self._Estimate_Tmp and self._Estimate_Tmp in line):
+            self.estimate_tab.run_tab.append_log(line)
+
     def _Drop_Estimate_Run(self, prev):
         """Close the pipeline's log (Windows can't delete an open file),
         then delete the previous temp run unless it is the current one."""
@@ -1569,17 +1580,40 @@ class MainWindow(QMainWindow):
             return
         try:
             shutil.copytree(run["run_dir"], dest, dirs_exist_ok=True)
+            # The copied log names the temp folder: point it at this one.
+            names = sorted(os.listdir(dest))
+            for name in (n for n in names if n.endswith(".log")):
+                path = os.path.join(dest, name)
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text.replace(run["run_dir"], dest))
         except OSError as e:
             QMessageBox.critical(self, "Save Estimation",
                                  f"Could not save to {dest}:\n{e}")
             return
         self._last_estimate_run = dict(run, run_dir=dest)
+        # The pipeline's own "saved" lines, now that they are true.
+        pdfs = [os.path.join(dest, n) for n in names if n.endswith(".pdf")]
+        rt = self.estimate_tab.run_tab
+        for i, path in enumerate(pdfs):
+            rt.append_log(f"{'Plots saved:' if i == 0 else '':<13}{path}")
+        for n in (n for n in names if n.endswith(".log")):
+            rt.append_log(f"Log saved:   {os.path.join(dest, n)}")
         self.status.show(f"Saved estimation to {dest}")
 
     def _persist_estimate_outputs(self, run_dir):
         """Write the in-memory run results into the run folder:
-        ``estimate_results.npz`` (arrays for native re-rendering) and
-        ``peaks.csv`` (human-readable peak table)."""
+        ``estimate_config.yaml`` (the run's inputs, so Load restores them
+        and Run repeats the run), ``estimate_results.npz`` (arrays for
+        native re-rendering) and ``peaks.csv`` (human-readable peak
+        table)."""
+        cfg = getattr(self, "_Run_Config", None)
+        if cfg is not None:
+            # UTF-8 on every platform: Windows would default to cp1252.
+            with open(os.path.join(run_dir, "estimate_config.yaml"), "w",
+                      encoding="utf-8") as fh:
+                yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
         if not (self._worker and self._worker.plot_results):
             return
         import numpy as np
@@ -1688,6 +1722,17 @@ class MainWindow(QMainWindow):
                 "holds the run's PDFs, log and results file.")
             return
         self._Set_Estimate_Live(False)          # a static view until Run
+        # Bring back the run's inputs too, so Run repeats it (2026-10-24).
+        # Folders saved before then have none and load outputs only.
+        cfg_path, with_inputs = os.path.join(d, "estimate_config.yaml"), False
+        if os.path.isfile(cfg_path):
+            try:
+                with open(cfg_path, encoding="utf-8") as fh:
+                    self._restore_estimate(yaml.safe_load(fh) or {})
+                with_inputs = True
+            except (OSError, ValueError, yaml.YAMLError):
+                logging.getLogger("denis").exception(
+                    "could not restore the inputs from %s", cfg_path)
         self._restore_estimate_outputs({
             "run_dir": d,
             "config_name": cfg_name,
@@ -1695,6 +1740,9 @@ class MainWindow(QMainWindow):
             "palette":
                 self.estimate_tab.run_tab.palette_combo.currentText(),
         })
+        if with_inputs:
+            self.status.show(f"Loaded {cfg_name} with its inputs -- press "
+                             "Run to repeat it")
 
     def _new_window(self):
         """Launch another independent DENIS instance (skips the
@@ -2083,6 +2131,10 @@ class SettingsDialog(QDialog):
         dir_row = QVBoxLayout()
         self._output_dir = QLineEdit(
             settings.get("output_directory", "./output"))
+        self._output_dir.setCursorPosition(0)       # the path's start
+        self._output_dir.textChanged.connect(
+            lambda _: self._output_dir.hasFocus()
+            or self._output_dir.setCursorPosition(0))
         self._output_dir.setToolTip(
             "Root output directory. Estimate runs land under "
             "<root>/estimates/ and Analysis runs under "
