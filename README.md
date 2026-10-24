@@ -22,7 +22,8 @@ git clone https://github.com/ardakayaalp/DENIS.git
 cd DENIS
 
 # First-time install (bootstraps uv, runs `uv sync`, creates a desktop
-# shortcut). No args = interactive menu; subcommands: full | uv | shortcut
+# shortcut; on macOS a DENIS.app in ~/Applications, linked from the
+# Desktop). No args = interactive menu; subcommands: full | uv | shortcut
 install.bat full       # Windows
 ./install.sh full      # Linux / macOS
 

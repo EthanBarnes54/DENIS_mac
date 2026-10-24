@@ -72,7 +72,7 @@
  "menu-bar": [
   {
    "type": "p",
-   "text": "Six menus run across the top of the window. Every entry carries a Lucide icon. This page maps them; the deeper behaviors each have their own page."
+   "text": "Six menus run across the top of the window. Every entry carries a Lucide icon. This page maps them; the deeper behaviors each have their own page. On macOS, <b>Settings...</b>, <b>Exit</b> (as Quit) and <b>About</b> sit in the application menu instead, and the Ctrl shortcuts use Cmd."
   },
   {
    "type": "table",
@@ -144,7 +144,7 @@
     ],
     [
      "Ctrl+Y",
-     "Redo"
+     "Redo (Cmd+Shift+Z on macOS)"
     ],
     [
      "Ctrl+=",
@@ -256,7 +256,7 @@
  "undo-redo": [
   {
    "type": "p",
-   "text": "A single application-wide undo stack backs <b>Edit > Undo</b> (Ctrl+Z) and <b>Edit > Redo</b> (Ctrl+Y). It holds up to 200 steps."
+   "text": "A single application-wide undo stack backs <b>Edit > Undo</b> (Ctrl+Z) and <b>Edit > Redo</b> (Ctrl+Y; Cmd+Shift+Z on macOS). It holds up to 200 steps."
   },
   {
    "type": "h2",
@@ -594,7 +594,7 @@
  "est-layout": [
   {
    "type": "p",
-   "text": "The <b>Estimate</b> tab predicts collinear-laser-spectroscopy measurement times and simulates hyperfine (HFS) spectra. Since the 2026-07 UI overhaul it is a <b>single surface</b> (no sub-tabs): three resizable columns — element/transition parameters, the isotope list, and a right column stacking Run Options, the plot display, and the log. The ⛶ button on the plot panel expands the plots over the whole tab."
+   "text": "The <b>Estimate</b> tab predicts collinear-laser-spectroscopy measurement times and simulates hyperfine (HFS) spectra. Since the 2026-07 UI overhaul it is a <b>single surface</b> (no sub-tabs): three resizable columns — element/transition parameters, the isotope list with Run Options under it, and a right column stacking the plot display, the Voltage Range Estimator, and the log. The ⛶ button on the plot panel expands the plots over the whole tab."
   },
   {
    "type": "h2",
@@ -604,8 +604,8 @@
    "type": "ul",
    "items": [
     "<b>Column 1 - global parameters</b>: Element && Transition, Beam, Laser, Linewidth, Scan, Statistics (Timing Mode), and Advanced groups in a scroll area. Its width band is <i>measured</i> from the content at runtime (so labels never clip at any font/DPI). See [[est-global-params-groups]].",
-    "<b>Column 2 - isotope list</b>: a dynamic, scrollable list of isotope panels added with <b>+ Add Isotope</b>, color-striped by position. See [[est-isotope-list]].",
-    "<b>Column 3 - Run Options, plots && log</b>: the Run Options group (output directory, palette, Generate plots, and the <b>Run Estimation</b> / <b>Load Estimation...</b> buttons) sits at its natural height; below it a vertical splitter holds the plot panel over the log. See [[est-run-options]] and [[est-plots-subtab]]."
+    "<b>Column 2 - isotope list</b>: a dynamic, scrollable list of isotope panels added with <b>+ Add Isotope</b>, color-striped by position. The Run Options group sits fixed under the list. See [[est-isotope-list]].",
+    "<b>Column 3 - plots, estimator && log</b>: a vertical splitter holds the plot panel, the Voltage Range Estimator (a live setpoint map that writes the chosen setpoint and sweep back into Laser and Scan; the Info button explains it) and the log. See [[est-run-options]] and [[est-plots-subtab]]."
    ]
   },
   {
@@ -1417,7 +1417,7 @@
  "est-run-options": [
   {
    "type": "p",
-   "text": "Column 3 (the <b>Run Options</b> group plus the log) is where you point the output, pick a palette, kick off the run, and watch progress stream in."
+   "text": "The <b>Run Options</b> group (under the isotope list) and the log (bottom of column 3) are where you point the output, pick a palette, kick off the run, and watch progress stream in."
   },
   {
    "type": "h2",
@@ -5349,7 +5349,7 @@
  "opening-settings": [
   {
    "type": "p",
-   "text": "DENIS keeps its application-wide preferences in one YAML file managed entirely through the <b>Settings...</b> dialog. Open it from <b>File &#9656; Settings...</b> (see [[menu-bar]]). The dialog is a single scrollable window titled <b>DENIS Settings</b>, grouped into <b>General</b>, <b>Performance</b>, <b>Output</b>, <b>Fitting Defaults</b> and <b>Plot Defaults</b>, with <b>OK</b> and <b>Cancel</b> at the bottom."
+   "text": "DENIS keeps its application-wide preferences in one YAML file managed entirely through the <b>Settings...</b> dialog. Open it from <b>File &#9656; Settings...</b> (on macOS, from the application menu; see [[menu-bar]]). The dialog is a single scrollable window titled <b>DENIS Settings</b>, grouped into <b>General</b>, <b>Performance</b>, <b>Output</b>, <b>Fitting Defaults</b> and <b>Plot Defaults</b>, with <b>OK</b> and <b>Cancel</b> at the bottom."
   },
   {
    "type": "h2",
@@ -5411,8 +5411,8 @@
      "Shows the folder holding <code>settings.yaml</code>; <b>Open</b> reveals it in the OS file explorer."
     ],
     [
-     "<b>Auto-convert paths (Linux/Windows)</b>",
-     "When on (default), file paths in loaded save files are converted between Windows and POSIX conventions (drive-letter / slash and Nextcloud-mount heuristics) so a config made on another OS still resolves."
+     "<b>Auto-convert paths (Windows/macOS/Linux)</b>",
+     "When on (default), file paths in loaded save files are converted between Windows and POSIX conventions (drive-letter / slash and Nextcloud-mount heuristics; on macOS a <code>\\\\server\\share</code> path maps to <code>/Volumes/share</code>) so a config made on another OS still resolves."
     ],
     [
      "<b>Theme:</b>",
@@ -7104,9 +7104,9 @@
      "Re-run <code>install.bat full</code> (or <code>uv sync</code>) so the venv contains <code>pythonw.exe</code>, then <code>install.bat shortcut</code> to recreate the shortcut."
     ],
     [
-     "macOS refuses to run <code>DENIS.command</code>",
-     "Gatekeeper quarantines downloaded scripts, or the file lost its executable bit.",
-     "Right-click the <code>.command</code> file and choose <b>Open</b> once to approve it, or run <code>chmod +x ~/Desktop/DENIS.command</code>."
+     "macOS <code>DENIS.app</code> does not start",
+     "The app runs <code>.venv/bin/python</code> in the folder <code>./install.sh</code> was run from, so moving or re-cloning DENIS breaks it.",
+     "Re-run <code>./install.sh shortcut</code> from the new folder to rebuild the app."
     ]
    ]
   },

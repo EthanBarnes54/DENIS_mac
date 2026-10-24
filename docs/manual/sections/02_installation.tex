@@ -33,8 +33,9 @@ The script:
         \code{install.bat shortcut} / \code{./install.sh shortcut}):
         a Windows \code{.lnk} pointing at
         \code{.venv\textbackslash Scripts\textbackslash pythonw.exe},
-        a Linux \code{.desktop} entry, or a clickable
-        \code{.command} on macOS.
+        a Linux \code{.desktop} entry, or on macOS a
+        \code{DENIS.app} in \code{\textasciitilde/Applications},
+        linked from the Desktop.
 \end{enumerate}
 
 When the script finishes, double-click the desktop shortcut
@@ -53,7 +54,7 @@ four tabs introduced in Section~\ref{sec:introduction}.
     \includegraphics[width=2.4cm]{fig_installation_shortcut.png}
     \caption{The \code{DENIS} desktop shortcut created on Windows by
         the installer. The Linux \code{.desktop} entry
-        and macOS \code{.command} launcher use the same icon.}
+        and macOS \code{DENIS.app} use the same icon.}
     \label{fig:installation_shortcut}
 \end{figure}
 
@@ -121,9 +122,9 @@ clstools = { path = "../cls_tools" }
         \code{.venv\textbackslash Scripts\textbackslash pythonw.exe};
         if it falls back to \code{python.exe}, \code{pythonw.exe} is
         missing from the environment. Re-run \code{uv sync} to repair.
-    \item[macOS \code{.command} launcher will not open.]
-        macOS may quarantine downloaded scripts. Right-click the
-        \code{DENIS.command} file, choose \app{Open}, and allow
-        execution at the Gatekeeper prompt; or grant execute
-        permission with \code{chmod +x \textasciitilde/Desktop/DENIS.command}.
+    \item[macOS \code{DENIS.app} does not start.]
+        The app runs \code{.venv/bin/python} in the folder
+        \code{./install.sh} was run from, so moving or re-cloning
+        \denis{} breaks it. Re-run \code{./install.sh shortcut} from
+        the new folder.
 \end{description}

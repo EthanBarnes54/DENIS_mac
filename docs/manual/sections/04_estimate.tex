@@ -11,11 +11,11 @@ timing pass and produces only the simulated lineshape --- useful when
 planning the scan window itself.
 
 The tab is a single surface with three resizable columns: the global
-parameters on the left, the
-isotope list in the middle, and a right column stacking the
-\app{Run Options} group, the plot display, and the streaming log. The expand button on
-the plot panel temporarily expands the plots over the whole tab;
-click it again to bring the parameter columns back.
+parameters on the left, the isotope list in the middle with the
+\app{Run Options} group under it, and a right column stacking the plot
+display, the \app{Voltage Range Estimator}, and the streaming log. The
+expand button on the plot panel temporarily expands the plots over the
+whole tab; click it again to bring the other panels back.
 
 \subsection{Global parameters}
 
@@ -123,8 +123,8 @@ spectrum and its own row to the timing table.
 
 \subsection{Running the estimation}
 
-Click \app{Run Estimation} in the \app{Run Options} group (right
-column). The log streams in real time and, on completion, contains
+Click \app{Run Estimation} in the \app{Run Options} group (under the
+isotope list). The log streams in real time and, on completion, contains
 in order:
 
 \begin{enumerate}
@@ -161,6 +161,37 @@ panel per isotope), \app{Combined Overview} (all isotopes overlaid),
 and \app{Peak List} (a sortable table of every hyperfine component).
 \app{Edit Plot} opens the matplotlib style editor; \app{Open PDF}
 reveals the exported PDF in the system file viewer.
+
+\subsection{Voltage range estimator}
+
+The \app{Voltage Range Estimator} picks a laser setpoint and a sweep
+interactively, using the same physics as \app{Run Estimation}. Its map
+plots, against the fundamental setpoint, the voltage offset $\Delta V$
+at which every hyperfine component resonates: one line per component,
+solid for ground states and dashed for isomers, in each isotope's
+colour. A red bar marks the current setpoint, with a red ring where it
+crosses a line inside the sweep; a shaded band marks the $\pm$\app{dV}
+sweep; thin
+\emph{centre} markers show the setpoint that puts each state's centroid
+at $\Delta V = 0$. Beside the map, the spectrum at the current setpoint
+shares the $\Delta V$ axis, and a readout lists the setpoint, laser
+frequency, beam voltage and every component's offset, $\Delta V$,
+intensity, and whether it lies inside the sweep.
+
+Drag the red bar, or click the map and use the arrow keys
+($\pm$0.001\,cm$^{-1}$, with Shift $\pm$0.01\,cm$^{-1}$); clicking a
+centre marker snaps to it. The mouse wheel zooms the map around the
+cursor, dragging away from the bar pans it, and a double-click refits
+it; the zoom is kept while you adjust the setpoint and the sweep. When you finish (mouse release, Enter in the
+\app{Setpoint} box, or a pause after the arrow keys), the setpoint is
+written to \app{Laser} $\rightarrow$ \app{Setpoint}; in anchor mode the
+\app{Setpoint} radio is selected and the anchor fields keep their
+values. Entering \app{dV} writes \app{Scan} $\rightarrow$
+\app{Voltage range} $= 2\,$\app{dV}. Both writes can be undone.
+\app{Window} only sets the plotted $\Delta V$ range (\app{auto} fits
+the components), and \app{Show} limits the view to one state. The
+estimator never starts a run: the plots and the log change only on
+\app{Run Estimation}.
 
 \subsection{Loading a previous estimation}
 

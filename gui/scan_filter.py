@@ -39,7 +39,9 @@ on save.
 
 from __future__ import annotations
 
+import ntpath
 import os
+import re
 from contextlib import contextmanager
 from typing import Iterable
 
@@ -50,17 +52,28 @@ from PySide6.QtCore import QObject, Signal
 
 # ── Path normalization ───────────────────────────────────────────────
 
+# ``C:\``, ``C:/`` or ``\\server``. Not a leading ``//``: Qt spells local
+# POSIX paths that way.
+_WINDOWS_FORM = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
 def canonical_path(path: str) -> str:
     """Normalize a file path to a single canonical key.
 
     The same file referenced as ``C:/foo/x.asdf`` and ``C:\\foo\\x.asdf``
     must hit the same registry entry, so we apply the OS's case-folding
-    plus ``abspath``. Returns the original string unchanged on TypeError
-    (defensive against stray None values from hand-edited YAML).
+    plus ``abspath``. A Windows-form path on a POSIX host gets Windows
+    semantics: a Windows session opened on a Mac silently stopped applying
+    its per-run calibrations and scan filters, because ``abspath`` read
+    ``c:\\...`` as a relative name (2026-10-22). Returns the original
+    string unchanged on TypeError (defensive against stray None values
+    from hand-edited YAML).
     """
     if not isinstance(path, str) or not path:
         return path
     try:
+        if os.name != "nt" and _WINDOWS_FORM.match(path):
+            return ntpath.normcase(ntpath.normpath(path))
         return os.path.normcase(os.path.abspath(path))
     except (TypeError, ValueError):
         return path

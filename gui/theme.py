@@ -37,9 +37,10 @@ Depends on: PySide6 only.
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import QEvent, Qt, QObject
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QComboBox, QDial, QSlider, QTabBar, QWidget,
 )
@@ -1201,8 +1202,15 @@ def retro_font() -> QFont:
     antialiasing. Qt 6's DirectWrite backend cannot load the real
     bitmap fonts (Fixedsys/Terminal are raster .fon files and fail
     with CreateFontFaceFromHDC), but NoAntialias on a crisp monospace
-    gives the same jagged-pixel rendering safely."""
-    f = QFont("Lucida Console", 9)
+    gives the same jagged-pixel rendering safely. Where Lucida Console is
+    missing (macOS), the platform's monospace takes over instead of a
+    proportional fallback, with the UI font behind it for glyphs the
+    monospace lacks: Menlo has no subscript n, so "\u03bc\u2099" showed
+    a box (2026-10-22)."""
+    fixed, ui = (QFontDatabase.systemFont(k).family() for k in (
+        QFontDatabase.SystemFont.FixedFont,
+        QFontDatabase.SystemFont.GeneralFont))
+    f = QFont(["Lucida Console", fixed, ui], 9)
     f.setStyleStrategy(QFont.StyleStrategy.NoAntialias)
     return f
 
@@ -1225,6 +1233,12 @@ def apply_theme(app, theme: str = "dark") -> None:
     if not hasattr(app, "_denis_default_font"):
         app._denis_default_font = QFont(app.font())
     app.setStyle("Fusion")
+    # Both themes are dark, so the macOS title bar and native dialogs
+    # should be too; they followed the system's light mode (2026-10-22).
+    # Not on Windows, where the same call also darkens the Windows 11
+    # title bar.
+    if sys.platform == "darwin":
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
     if theme == "win98":
         app.setPalette(build_win98_palette())
         app.setStyleSheet(build_win98_qss())

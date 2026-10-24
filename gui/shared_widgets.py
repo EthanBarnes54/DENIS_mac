@@ -302,8 +302,13 @@ class _AppShortcutFilter(QObject):
         return None
 
     def _commit_pending(self, sb):
-        """Commit any change on ``sb`` since its last focus-in."""
-        if sb is None or self._undo_stack is None:
+        """Commit any change on ``sb`` since its last focus-in. A spin
+        box marked ``_Own_Undo`` records its own undo steps: the voltage
+        estimator's boxes commit to other fields, and tracking them here
+        too left an invisible extra step before the real one (2026-10-22).
+        """
+        if sb is None or self._undo_stack is None or getattr(
+                sb, "_Own_Undo", False):
             return
         old = getattr(sb, "_undo_prev", None)
         if old is None:
@@ -1105,7 +1110,8 @@ class PlotEditorDialog(QDialog):
         self._updating = True
         self._fig_width_spin.setValue(fig.get_figwidth())
         self._fig_height_spin.setValue(fig.get_figheight())
-        self._fig_dpi_spin.setValue(int(fig.get_dpi()))
+        self._fig_dpi_spin.setValue(
+            round(fig.get_dpi() / canvas.device_pixel_ratio))
         self._updating = False
         self._populate_axes_selector()
         self._lines_axes_selector.blockSignals(True)
@@ -1199,7 +1205,8 @@ class PlotEditorDialog(QDialog):
         self._fig_dpi_spin = QSpinBox()
         self._fig_dpi_spin.setRange(72, 600)
         self._fig_dpi_spin.setSingleStep(10)
-        self._fig_dpi_spin.setValue(int(self._figure.get_dpi()))
+        self._fig_dpi_spin.setValue(
+            round(self._figure.get_dpi() / self._canvas.device_pixel_ratio))
         form.addRow("Resolution (DPI):", self._fig_dpi_spin)
 
         size_layout.addLayout(form)
@@ -1311,14 +1318,18 @@ class PlotEditorDialog(QDialog):
         w_in = self._from_display(self._fig_width_spin.value())
         h_in = self._from_display(self._fig_height_spin.value())
         self._figure.set_size_inches(w_in, h_in)
-        dpi = self._figure.get_dpi()
+        dpi = self._figure.get_dpi() / self._canvas.device_pixel_ratio
         self._canvas.setFixedSize(int(w_in * dpi), int(h_in * dpi))
         self._canvas.draw_idle()
 
     def _on_dpi_changed(self, val):
         if self._updating:
             return
-        self._figure.set_dpi(val)
+        # The box shows logical dpi. matplotlib's Qt canvas keeps
+        # figure.dpi at the screen's pixel ratio times that, so on Retina
+        # the box read 200, an 8-in width gave a 1600-px canvas, and a
+        # typed dpi drew the figure at half scale (2026-10-22).
+        self._figure.set_dpi(val * self._canvas.device_pixel_ratio)
         w_in = self._figure.get_figwidth()
         h_in = self._figure.get_figheight()
         self._canvas.setFixedSize(int(w_in * val), int(h_in * val))
@@ -3463,7 +3474,8 @@ class PlotEditorDialog(QDialog):
             self._to_display(self._figure.get_figwidth()))
         self._fig_height_spin.setValue(
             self._to_display(self._figure.get_figheight()))
-        self._fig_dpi_spin.setValue(int(self._figure.get_dpi()))
+        self._fig_dpi_spin.setValue(
+            round(self._figure.get_dpi() / self._canvas.device_pixel_ratio))
         self._updating = False
 
         self._sync_padding_from_figure()
@@ -3579,6 +3591,36 @@ def install_plot_editor_access(app):
         _canvas_editor_filter = _CanvasEditorFilter(app)
         app.installEventFilter(_canvas_editor_filter)
     return _canvas_editor_filter
+
+
+def scroll_zoom(event):
+    """Zoom the hovered plot in/out around the cursor on mouse-wheel.
+
+    Scroll up = zoom in, scroll down = zoom out, centred on the cursor
+    so the point under the pointer stays put; one wheel notch is 1.3x.
+    A trackpad reports a swipe as many small pixel steps instead (as
+    ``step``), and 1.3x on each of them zoomed by orders of magnitude in
+    one gesture on macOS, so pixel steps zoom in proportion, about 50 px
+    to a notch (2026-10-22).
+    """
+    ax = event.inaxes
+    if ax is None or event.xdata is None or event.ydata is None:
+        return
+    ge = event.guiEvent
+    # matplotlib's own test for a pixel step (xcb's are unreliable).
+    if (ge is not None and not ge.pixelDelta().isNull()
+            and QApplication.platformName() != "xcb"):
+        scale = 1.3 ** (-event.step / 50)
+    else:
+        scale = (1.0 / 1.3) if event.button == "up" else 1.3
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    xc, yc = event.xdata, event.ydata
+    # Keep the cursor's data point fixed: shrink/grow each side by
+    # `scale` about (xc, yc).
+    ax.set_xlim(xc - (xc - x0) * scale, xc + (x1 - xc) * scale)
+    ax.set_ylim(yc - (yc - y0) * scale, yc + (y1 - yc) * scale)
+    ax.figure.canvas.draw_idle()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4331,6 +4373,15 @@ def convert_path_for_os(path_str):
             if os.path.exists(candidate) or os.path.exists(
                     os.path.dirname(candidate)):
                 return candidate
+        # macOS mounts a share at /Volumes/<share> and has no /c/ drive
+        # paths, so the rewrite below invented paths that never exist
+        # there. Flipping the slashes is enough: the missing-files dialog
+        # finds a moved file by its path's tail (2026-10-22).
+        if platform.system() == "Darwin":
+            m = re.match(r"^\\\\[^\\]+\\([^\\]+)(.*)", path_str)
+            if m:
+                return "/Volumes/" + m.group(1) + m.group(2).replace("\\", "/")
+            return normalised
         # C:\Users\... → /c/Users/...
         m = re.match(r"^([A-Za-z]):\\(.*)", path_str)
         if m:

@@ -66,7 +66,7 @@ from cls_estimations.constants import C_LIGHT, AMU_TO_KG, E_CHARGE
 from cls_estimations.doppler import beta_from_voltage, nu_seen_by_ion
 from gui.shared_widgets import (
     maybe_convert_path, lucide_icon, _load_settings, _save_settings,
-    AppUndoCommand,
+    AppUndoCommand, scroll_zoom,
 )
 from gui.analysis.vasdf import is_vasdf_path, read_vasdf
 from gui.analysis.binning import (
@@ -6212,27 +6212,9 @@ class PreAnalysisTab(QWidget):
                 f"({len(merged)} total now excluded for "
                 f"{os.path.basename(scan_path)})", 4000)
 
-    @staticmethod
-    def _on_scroll_zoom(event):
-        """Zoom the hovered plot in/out around the cursor on mouse-wheel.
-
-        Scroll up = zoom in, scroll down = zoom out, centred on the
-        cursor so the point under the pointer stays put. Works on
-        whichever axes the cursor is over; no toolbar button needed.
-        """
-        ax = event.inaxes
-        if ax is None or event.xdata is None or event.ydata is None:
-            return
-        base = 1.3
-        scale = (1.0 / base) if event.button == "up" else base
-        x0, x1 = ax.get_xlim()
-        y0, y1 = ax.get_ylim()
-        xc, yc = event.xdata, event.ydata
-        # Keep the cursor's data point fixed: shrink/grow each side by
-        # `scale` about (xc, yc).
-        ax.set_xlim(xc - (xc - x0) * scale, xc + (x1 - xc) * scale)
-        ax.set_ylim(yc - (yc - y0) * scale, yc + (y1 - yc) * scale)
-        ax.figure.canvas.draw_idle()
+    # Wheel zoom around the cursor, on whichever axes it is over; shared
+    # with the voltage estimator's map.
+    _on_scroll_zoom = staticmethod(scroll_zoom)
 
     @staticmethod
     def _apply_ticks(ax):

@@ -30,6 +30,7 @@ from gui.missing_files import (  # noqa: E402
     apply_prefix, derive_prefix, index_folder, match_in_index,
     remap_paths_inplace, suffix_score,
 )
+from gui.shared_widgets import convert_path_for_os  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -144,6 +145,42 @@ class DeepRemapTests(unittest.TestCase):
         self.assertEqual(blk["merged_entries"][0]["source_files"], [new])
         self.assertEqual(list(an["isotope_shifts"]["corrections"]["116Sn"]),
                          [new])
+
+    def test_Windows_Registry_Keys_Follow_A_Move_To_Posix(self):
+        """A Windows session keys its calibrations by Windows' canonical
+        spelling; relocated on a Mac, the key must still find its file
+        entry and move with it (2026-10-22)."""
+        old = "C:/Users/X/Data/01/run_1001.asdf"
+        new = "/Users/x/denis_session/Data/01/run_1001.asdf"
+        spec = {"mode": "coeffs", "coeffs_v": [0.35, 1.0007]}
+        d = {
+            "analysis": {"projects": [{"blocks": [{
+                "type": "Source", "files": [{"path": old}]}]}]},
+            "calibrations": {r"c:\users\x\data\01\run_1001.asdf": spec},
+        }
+        remap_paths_inplace(d, {old: new})
+        self.assertEqual(d["calibrations"], {new: spec})
+
+
+class ConvertPathTests(unittest.TestCase):
+    """Auto-conversion of a path saved on another OS, per host OS."""
+
+    def test_Paths_Convert_For_Each_Host(self):
+        """macOS gets /Volumes/<share> for a UNC path and no invented /c/
+        drive path (2026-10-22); Linux and Windows are as before."""
+        cases = [
+            ("Darwin", r"C:\Users\X\run.asdf", "C:/Users/X/run.asdf"),
+            ("Darwin", r"\\srv\share\Data\run.asdf",
+             "/Volumes/share/Data/run.asdf"),
+            ("Darwin", "/Users/x/run.asdf", "/Users/x/run.asdf"),
+            ("Linux", r"C:\Users\X\run.asdf", "/c/Users/X/run.asdf"),
+            ("Linux", r"\\srv\share\run.asdf", "//srv/share/run.asdf"),
+            ("Windows", "/c/Users/X/run.asdf", r"C:\Users\X\run.asdf"),
+        ]
+        for system, path, want in cases:
+            with self.subTest(system=system, path=path), \
+                    mock.patch("platform.system", return_value=system):
+                self.assertEqual(convert_path_for_os(path), want)
 
 
 class DialogTests(_TreeCase):

@@ -58,7 +58,9 @@ sync_deps() {
     echo "  Installing Python + dependencies via uv sync..."
     echo "-----------------------------------------------------------"
     echo
-    if ! uv sync; then
+    # --managed-python: a venv built on Homebrew's Python broke whenever
+    # "brew upgrade" replaced that interpreter (2026-10-22).
+    if ! uv sync --managed-python; then
         echo
         echo "ERROR: uv sync failed. See output above."
         return 1
@@ -83,12 +85,44 @@ create_shortcut() {
     local SC
     case "$(uname -s)" in
         Darwin)
-            SC="$TARGET/DENIS.command"
+            # A minimal app bundle, linked from the Desktop. The old
+            # DENIS.command opened a Terminal that killed DENIS when it was
+            # closed, and had no icon (2026-10-22).
+            local APP="$HOME/Applications/DENIS.app"
+            local RES="$APP/Contents/Resources"
+            local VER
+            VER="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+            mkdir -p "$APP/Contents/MacOS" "$RES/denis.iconset" || return 1
+            for s in 16 32 128 256 512; do
+                sips -z $s $s "$ICON" --out "$RES/denis.iconset/icon_${s}x${s}.png" >/dev/null
+                [ $s -lt 512 ] && sips -z $((s * 2)) $((s * 2)) "$ICON" \
+                    --out "$RES/denis.iconset/icon_${s}x${s}@2x.png" >/dev/null
+            done
+            iconutil -c icns "$RES/denis.iconset" -o "$RES/denis.icns" || return 1
+            rm -f "$RES"/denis.iconset/icon_*.png && rmdir "$RES/denis.iconset"
+            cat > "$APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>DENIS</string>
+    <key>CFBundleExecutable</key><string>DENIS</string>
+    <key>CFBundleIconFile</key><string>denis</string>
+    <key>CFBundleIdentifier</key><string>io.github.ethanbarnes54.denis</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$VER</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+EOF
+            SC="$APP/Contents/MacOS/DENIS"
             cat > "$SC" <<EOF
 #!/usr/bin/env bash
-cd "$APP_DIR"
-exec "$PYTHON" "$GUI_PY"
+cd "$APP_DIR" && exec "$PYTHON" "$GUI_PY" "\$@"
 EOF
+            chmod +x "$SC"
+            SC="$TARGET/DENIS.app"   # what the user double-clicks
+            ln -sfn "$APP" "$SC"
+            [ -e "$TARGET/DENIS.command" ] &&
+                echo "Note: the old $TARGET/DENIS.command is no longer needed."
             ;;
         *)
             SC="$TARGET/DENIS.desktop"

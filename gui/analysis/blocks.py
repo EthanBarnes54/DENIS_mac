@@ -301,11 +301,15 @@ class AnalysisBlock(QGroupBox):
         self.setTitle(f"{self.BLOCK_TYPE}: {self._block_name}")
         self.setCheckable(True)
         self.setChecked(True)
-        # Scale block width by current font size vs default (9pt)
+        # Scale block width by the font's size in pixels against 12 px (9 pt
+        # at 96 dpi, the size the widths were tuned at). Points don't compare
+        # across platforms (macOS has 72 logical dpi), so scaling by points
+        # made the blocks 44 % wider on a Mac while its text was only 8 %
+        # larger (2026-10-22). At 96 dpi this is exactly pt / 9, as before.
+        from PySide6.QtGui import QFontMetricsF
         from PySide6.QtWidgets import QApplication
-        _base_pt = 9
-        _cur_pt = QApplication.instance().font().pointSize() or _base_pt
-        _scale = _cur_pt / _base_pt
+        _font = QApplication.instance().font()
+        _scale = _font.pointSizeF() * QFontMetricsF(_font).fontDpi() / (72 * 12)
         self._current_width = int(self.BLOCK_WIDTH * _scale)
         self.setFixedWidth(self._current_width)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)

@@ -37,6 +37,8 @@ except Exception:  # pragma: no cover - icons are cosmetic
 
 
 # Document-level stylesheet (Qt rich-text CSS subset) applied to every page.
+# Monospace stacks name Menlo because Qt rich text has no generic
+# ``monospace`` on macOS (see gui.manual.render.code).
 _DOC_CSS = """
 body { color: #d4d4d4; font-family: 'Segoe UI', sans-serif; }
 h1 { color: #ffffff; font-size: 20px; }
@@ -44,7 +46,7 @@ h2 { color: #7fb5e0; font-size: 15px; }
 h3 { color: #9ac4e6; font-size: 13px; }
 p, li, td { font-size: 13px; line-height: 140%; }
 a { color: #4ea1d5; text-decoration: none; }
-code { color: #d7a36a; font-family: Consolas, 'DejaVu Sans Mono', monospace; }
+code { color: #d7a36a; font-family: Consolas, Menlo, 'DejaVu Sans Mono', monospace; }
 ul { margin-left: 6px; }
 """
 

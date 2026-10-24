@@ -12,11 +12,14 @@ styles rather than modern CSS. Internal links use the ``page:<id>`` scheme
 intercepted by the viewer's ``anchorClicked`` handler; external links use
 ``http(s)://`` and open in the system browser.
 
-Depends on: gui.manual.equations, gui.manual.diagrams, gui.manual.structure.
+Depends on: gui.manual.equations, gui.manual.diagrams, gui.manual.structure;
+built on PySide6 (QUrl).
 """
 
 import html as _html
 import os
+
+from PySide6.QtCore import QUrl
 
 from gui.manual import equations as _equations
 from gui.manual import diagrams as _diagrams
@@ -34,8 +37,9 @@ def title_of(page_id):
 
 
 def img_url(path):
-    """Filesystem path -> file:/// URL with forward slashes (Qt-friendly)."""
-    return "file:///" + os.path.abspath(path).replace("\\", "/")
+    """Filesystem path -> file:/// URL. Qt builds it, so a ``#`` or ``%`` in
+    the path is escaped and macOS gets three slashes, not four (2026-10-22)."""
+    return QUrl.fromLocalFile(os.path.abspath(path)).toString()
 
 
 # ── Inline / block primitives ────────────────────────────────────
@@ -63,14 +67,18 @@ def diagram(name, caption=None):
 
 
 def code(src, caption=None):
-    """Monospace code/snippet block (content is HTML-escaped)."""
+    """Monospace code/snippet block (content is HTML-escaped).
+
+    Menlo is in the stack because Qt rich text has no generic ``monospace``
+    on macOS: code fell back to the proportional system font (2026-10-22).
+    """
     body = _html.escape(src.rstrip("\n"))
     cap = (f'<div style="color:#9aa0a6; font-size:9pt; margin-bottom:2px;">'
            f'{_html.escape(caption)}</div>') if caption else ""
     return (
         f'{cap}<table width="100%" cellpadding="8" cellspacing="0" '
         f'bgcolor="#1e1f22"><tr><td>'
-        f'<pre style="margin:0; color:#dcdcdc; font-family:Consolas,'
+        f'<pre style="margin:0; color:#dcdcdc; font-family:Consolas,Menlo,'
         f'\'DejaVu Sans Mono\',monospace; font-size:9.5pt; '
         f'white-space:pre-wrap;">{body}</pre>'
         f'</td></tr></table>'
@@ -143,5 +151,5 @@ def related(page_ids):
 
 def code_ref(text):
     """Inline reference to a source location, e.g. cls_estimations/doppler.py:47."""
-    return (f'<span style="color:#9aa0a6; font-family:Consolas,monospace; '
+    return (f'<span style="color:#9aa0a6; font-family:Consolas,Menlo,monospace; '
             f'font-size:9pt;">{_html.escape(text)}</span>')

@@ -94,7 +94,8 @@ rather than reading the registry, and the map is passed whole rather
 than per-file so that a ``borrow`` spec can still resolve its donor.
 In-process callers pass ``get_registry().to_dict()``.
 
-Depends on: numpy, PySide6; asdf and pandas imported lazily.
+Depends on: numpy, PySide6, gui.scan_filter (canonical_path); asdf and
+pandas imported lazily.
 """
 
 from __future__ import annotations
@@ -108,6 +109,10 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 import numpy as np
 
 from PySide6.QtCore import QObject, Signal
+
+# One implementation, so that the calibration and scan-filter registries
+# agree on what "the same file" means.
+from gui.scan_filter import canonical_path
 
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -154,22 +159,6 @@ class CalibrationError(RuntimeError):
     point of the feature is that the calibration in force is the one the
     user chose.
     """
-
-
-# ── Path normalization ───────────────────────────────────────────────
-
-def canonical_path(path: str) -> str:
-    """Normalize a file path to a single registry key.
-
-    Same rule as ``gui.scan_filter.canonical_path`` so that the two
-    registries agree on what "the same file" means.
-    """
-    if not isinstance(path, str) or not path:
-        return path
-    try:
-        return os.path.normcase(os.path.abspath(path))
-    except (TypeError, ValueError):
-        return path
 
 
 # ── Reading the calibration table ────────────────────────────────────

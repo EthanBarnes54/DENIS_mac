@@ -122,7 +122,8 @@ non-interactively.</p>
   <li><b>Windows</b> &mdash; uses <code>pythonw.exe</code> so no console window
       appears (falls back to <code>python.exe</code> if <code>pythonw</code> is
       missing). Icon: <code>icons/denis.ico</code>.</li>
-  <li><b>macOS</b> &mdash; a <code>DENIS.command</code> launcher on the Desktop.</li>
+  <li><b>macOS</b> &mdash; a <code>DENIS.app</code> in <code>~/Applications</code>,
+      linked from the Desktop. Icon: <code>icons/denis_512.png</code>.</li>
   <li><b>Linux</b> &mdash; a <code>DENIS.desktop</code> entry.</li>
 </ul>
 

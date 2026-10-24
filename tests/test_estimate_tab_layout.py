@@ -6,9 +6,12 @@ Author:  Arda Kayaalp <arda.kayaalp@kuleuven.be>
 
 Pins the single-surface Estimate tab: no sub-tabs; a horizontal
 three-column splitter (Element/Transition | Isotope list | Run column);
-the run column stacks Run Options, the plots panel and a shortened log
-in a vertical splitter; the ⛶ toggle expands the plots over the whole
-tab; isotope panels carry per-position color stripes that survive
+Run Options sit under the isotope list, and the run column stacks the
+plots panel, the Voltage Range Estimator and a shortened log in a
+vertical splitter; the ⛶ toggle expands the plots over the whole tab;
+the plots canvas fits its column on Retina and scrolls with the wheel;
+the estimator agrees with the pipeline and writes back only Laser and
+Scan; isotope panels carry per-position color stripes that survive
 reference toggling; and the historical ``run_tab`` / ``plots_tab``
 handles keep working (main_window relies on them).
 
@@ -109,20 +112,25 @@ class EstimateTabStructureTests(unittest.TestCase):
                 f"x={right} (viewport {viewport.width()})")
         tab.close()
 
-    def test_run_column_hosts_options_plots_log(self):
-        """Column 3: options at natural height, then plots|log splitter
-        (options in a splitter pane left dead space under Run)."""
-        from gui.estimate_tab import EstimateTab, PlotsTab
+    def test_Run_Column_Hosts_Plots_Estimator_Log(self):
+        """Column 3: plots | voltage estimator | log splitter. Run Options
+        moved under the isotope list, fixed below its scroll area."""
+        from gui.estimate_tab import (
+            EstimateTab, PlotsTab, Voltage_Range_Estimator)
         tab = EstimateTab()
         vs = tab.run_tab._vsplit
-        self.assertEqual(vs.count(), 2)
+        self.assertEqual(vs.count(), 3)
         self.assertIsInstance(vs.widget(0), PlotsTab)
-        self.assertIs(vs.widget(1), tab.run_tab._log_host)
-        # Options host sits OUTSIDE the splitter, above it.
+        self.assertIsInstance(vs.widget(1), Voltage_Range_Estimator)
+        self.assertIs(vs.widget(2), tab.run_tab._log_host)
+        # Options host sits OUTSIDE the splitter, under the isotope list.
+        il = tab.params_tab.isotope_list
+        lay = il.layout()
         self.assertNotIn(tab.run_tab._top_host,
                          [vs.widget(i) for i in range(vs.count())])
-        self.assertTrue(
-            tab.run_tab.isAncestorOf(tab.run_tab._top_host))
+        self.assertTrue(il.isAncestorOf(tab.run_tab._top_host))
+        self.assertGreater(lay.indexOf(tab.run_tab._top_host),
+                           lay.indexOf(il._scroll))
         self.assertTrue(hasattr(tab.run_tab, "load_requested"))
         self.assertTrue(
             tab.run_tab._log_host.isAncestorOf(tab.run_tab.log_text))
@@ -151,6 +159,7 @@ class EstimateTabStructureTests(unittest.TestCase):
         self.assertFalse(tab.params_tab.isotope_list.isVisible())
         self.assertFalse(tab.run_tab._top_host.isVisible())
         self.assertFalse(tab.run_tab._log_host.isVisible())
+        self.assertFalse(tab.Voltage_Estimator.isVisible())
         self.assertTrue(tab.plots_tab.isVisible())
         tab.plots_tab.expand_btn.setChecked(False)
         QApplication.processEvents()
@@ -221,6 +230,163 @@ class PdfFallbackTests(unittest.TestCase):
             pt.display_results(d, "cfg", "_60Co", "default")
             self.assertEqual(pt._stack.currentIndex(), 0)
             self.assertFalse(pt.figure.axes[0].get_images())
+
+
+class PlotCanvasTests(unittest.TestCase):
+    """The plots canvas in its scroll area (2026-10-22)."""
+
+    def setUp(self):
+        _ensure_app()
+        import numpy as np
+        from gui.estimate_tab import EstimateTab
+        self.tab = EstimateTab()
+        self.tab.resize(1500, 950)
+        self.tab.show()
+        QApplication.processEvents()
+        self.pt = self.tab.plots_tab
+        dv = np.linspace(-500, 500, 200)
+        self.spectra = [{"label": lbl, "dV_array": dv,
+                         "intensity_array": np.exp(-(dv - c) ** 2 / 800)}
+                        for lbl, c in (("59Co", -100), ("60Co", 120))]
+
+    def tearDown(self):
+        self.tab.close()
+
+    def test_Plots_Fit_Viewport_At_Pixel_Ratio_2(self):
+        """On a Retina screen matplotlib doubles figure.dpi; the canvas
+        came out 1000x1200 in a ~780-px column, legend and axis cut off.
+        The private setter is the only way to get ratio 2 offscreen."""
+        self.pt.canvas._set_device_pixel_ratio(2.0)
+        self.pt.set_plot_data(self.spectra)
+        self.pt.plot_selector.setCurrentIndex(1)            # Overview
+        self.assertLessEqual(self.pt.canvas.width(),
+                             self.pt.scroll.viewport().width())
+        self.assertEqual(self.pt.canvas.height(), 600)
+
+    def test_Wheel_Over_Plot_Scrolls(self):
+        """matplotlib swallowed the wheel as a scroll_event, so neither
+        a mouse wheel nor a trackpad moved a plot taller than its
+        column."""
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        self.pt.set_plot_data(self.spectra * 3)             # 6 subplots
+        bar = self.pt.scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        bar.setValue(0)
+        pos = QPointF(50, 50)
+        ev = QWheelEvent(pos, self.pt.canvas.mapToGlobal(pos), QPoint(),
+                         QPoint(0, -120), Qt.MouseButton.NoButton,
+                         Qt.KeyboardModifier.NoModifier,
+                         Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(self.pt.canvas, ev)
+        self.assertGreater(bar.value(), 0)
+
+
+class VoltageEstimatorTests(unittest.TestCase):
+    """F1, the Voltage Range Estimator (2026-10-22)."""
+
+    def setUp(self):
+        _ensure_app()
+        import os
+        import yaml
+        from gui.estimate_tab import EstimateTab
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "configs", "example_cobalt.yaml")) as fh:
+            self.cfg = yaml.safe_load(fh)
+        self.tab = EstimateTab()
+        self.est = self.tab.Voltage_Estimator
+
+    def tearDown(self):
+        self.tab.close()
+
+    def _Build(self, cfg):
+        """Feed ``cfg`` as the config source and wait for the build (the
+        first one is deferred a tick while satlas2 imports)."""
+        import copy
+        self.est.Config_Source = lambda: copy.deepcopy(cfg)
+        self.tab.show()
+        self.est._Refresh()
+        for _ in range(100):
+            QApplication.processEvents()
+            if self.est._Cfg is not None:
+                break
+        self.assertIsNotNone(self.est._Cfg)
+
+    def test_Estimator_Matches_Pipeline_Peak_Voltages(self):
+        """Physics guard: every component's dV at the setpoint equals the
+        pipeline's, with a setpoint and with an anchored laser."""
+        import copy
+        import logging
+        import os
+        import shutil
+        import tempfile
+        import yaml
+        import cls_estimate
+        anchored = {"harmonic": 4, "anchor": {"isotope": "59Co", "dV": 50}}
+        for name, laser in (("setpoint", None), ("anchor", anchored)):
+            with self.subTest(laser=name):
+                cfg = copy.deepcopy(self.cfg)
+                if laser:
+                    cfg["laser"] = laser
+                self._Build(cfg)
+                est = self.est
+                mine = [d for st in est._States
+                        for d in est._Peak_Dvs(st, est._S)]
+                tmp = tempfile.mkdtemp()
+                try:
+                    path = os.path.join(tmp, "cfg.yaml")
+                    with open(path, "w") as fh:
+                        yaml.safe_dump(cfg, fh)
+                    _plots, peaks = cls_estimate.run(path, tmp, no_plot=True)
+                finally:
+                    # Windows holds the log file open until the handlers go.
+                    logger = logging.getLogger("cls_estimate")
+                    for h in list(logger.handlers):
+                        h.close()
+                        logger.removeHandler(h)
+                    shutil.rmtree(tmp, ignore_errors=True)
+                self.assertEqual(len(mine), len(peaks))
+                for d, pk in zip(mine, peaks):
+                    self.assertAlmostEqual(d, pk["dV"], delta=1e-9)
+
+    def test_Estimator_Zoom_Survives_Commit_And_Rings_Mark_The_Band(self):
+        """A wheel zoom on the map survives a commit's full redraw, and
+        the red rings sit only on crossings inside +/-dV (2026-10-24)."""
+        from types import SimpleNamespace
+        self._Build(self.cfg)
+        est = self.est
+        x0, x1 = est._Map.get_xlim()
+        est._On_Scroll(SimpleNamespace(inaxes=est._Map, xdata=est._S,
+                                       ydata=0.0, step=1, button="up",
+                                       guiEvent=None))     # one notch in
+        view = (est._Map.get_xlim(), est._Map.get_ylim())
+        self.assertLess(view[0][1] - view[0][0], x1 - x0)
+        est.Dv_Box.setValue(300)
+        est.Dv_Box.editingFinished.emit()                  # full redraw
+        self.assertEqual((est._Map.get_xlim(), est._Map.get_ylim()), view)
+        dvs = [d for st in est._States for d in est._Peak_Dvs(st, est._S)]
+        inside = sorted(d for d in dvs if d is not None and abs(d) <= 300)
+        self.assertTrue(inside)
+        self.assertEqual(sorted(est._Rings.get_ydata()), inside)
+
+    def test_Estimator_Commit_Writes_Laser_And_Scan(self):
+        """A setpoint commit in anchor mode switches to Setpoint mode; a
+        dV of 150 writes a 300 V range; the plots are left alone."""
+        from unittest import mock
+        gp = self.tab.params_tab.global_params
+        gp.laser_anchor_radio.setChecked(True)
+        pt = self.tab.plots_tab
+        with mock.patch.object(pt, "set_plot_data") as spy:
+            self.est.Setpoint_Box.setValue(10920.5)
+            self.est.Setpoint_Box.editingFinished.emit()
+            self.est.Dv_Box.setValue(150)
+            self.est.Dv_Box.editingFinished.emit()
+        self.assertTrue(gp.laser_setpoint_radio.isChecked())
+        self.assertEqual(gp.setpoint_cm.value(), 10920.5)
+        self.assertEqual(gp.scan_range.value(), 300)
+        spy.assert_not_called()
+        self.assertIsNone(pt._plot_results)
+        self.assertFalse(pt.edit_plot_btn.isEnabled())   # still placeholder
 
 
 class IsotopeColorCodingTests(unittest.TestCase):

@@ -665,7 +665,8 @@ class ReferenceCorrectionPanel(QGroupBox):
                 cxx = pytensor.config.cxx
             if not (cxx or "").strip():
                 note = (
-                    "  ⚠ No C compiler (g++) on PATH, so PyMC "
+                    "  ⚠ No C compiler (g++, or clang++ on macOS) "
+                    "on PATH, so PyMC "
                     "computes in pure Python: same answer, a few "
                     "times slower for a MAP fit and much slower for "
                     "MCMC. Harmless -- see the ? button.")
@@ -760,19 +761,20 @@ class ReferenceCorrectionPanel(QGroupBox):
             "that the first fit after installing a compiler is slow "
             "(a minute or two) while PyTensor builds and caches the C "
             "code; later fits are fast.</p>"
-            "<p><b>It has to be g++.</b> PyTensor runs "
+            "<p><b>It has to be g++</b> (clang++ on macOS). PyTensor runs "
             "<code>g++ -v</code> and, failing that, looks inside the "
             "Python environment at "
             "<code>Scripts\\Library\\mingw-w64\\bin\\g++</code>. It "
             "has no MSVC code path at all, so <i>Visual Studio and "
             "the MSVC Build Tools will not satisfy it</i> no matter "
             "how complete the install.</p>"
-            "<p>On Windows, either of these puts MinGW-w64 g++ on "
-            "PATH:</p>"
+            "<p>On Windows, either of the first two puts MinGW-w64 g++ "
+            "on PATH; on macOS, the third installs clang++:</p>"
             "<ul>"
             "<li><code>choco install mingw</code> (admin shell)</li>"
             "<li><code>winget install "
             "BrechtSanders.WinLibs.POSIX.UCRT</code></li>"
+            "<li><code>xcode-select --install</code> (macOS)</li>"
             "</ul>"
             "<p>Restart DENIS afterwards: the check runs once per "
             "session and the result is cached.</p>"

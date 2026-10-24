@@ -7,21 +7,26 @@ Author:  Arda Kayaalp <arda.kayaalp@kuleuven.be>
 Builds the Estimate tab of the DENIS app. Provides the parameter
 entry widgets (element/transition, beam, laser, scan, statistics),
 the per-isotope/isomer configuration panels with Schmidt-moment
-auto-fill, the run options + log column, and the Plots view that
-renders simulated hyperfine spectra and a peak table on a
-matplotlib canvas. Serialises all inputs to/from the project config
-dict used by the estimation pipeline.
+auto-fill, the run options, the Plots view that renders simulated
+hyperfine spectra and a peak table on a matplotlib canvas, the
+Voltage Range Estimator (a live setpoint map that writes the chosen
+setpoint and sweep back into Laser and Scan), and the log.
+Serialises all inputs to/from the project config dict used by the
+estimation pipeline.
 
 Depends on: gui.shared_widgets (spinbox factories, log highlighter,
 plot editor, palettes), gui.analysis.helpers (scrollable info
 dialog), cls_estimations.mass_lookup (element/mass tables),
-cls_estimations.plotting (palettes, spectrum rendering), and
-cls_estimations.schmidt (shell-model magnetic moment); built on
-PySide6 and matplotlib.
+cls_estimations.plotting (palettes, spectrum rendering),
+cls_estimations.schmidt (shell-model magnetic moment), and, for the
+estimator, cls_estimations.doppler / hfs_model / config_parser plus
+cls_estimate's A/B and peak-voltage helpers (imported lazily); built
+on PySide6 and matplotlib.
 """
 
 import os
 import re
+import sys
 
 import numpy as np
 
@@ -31,9 +36,12 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QRadioButton, QButtonGroup, QPushButton,
     QPlainTextEdit, QScrollArea, QSplitter, QFileDialog, QMessageBox,
     QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
+    QAbstractButton, QAbstractSpinBox, QApplication,
 )
-from PySide6.QtCore import Qt, Signal, QLocale, QTimer
-from PySide6.QtGui import QFont, QValidator
+from PySide6.QtCore import (
+    Qt, Signal, QLocale, QTimer, QUrl, QCoreApplication, QEvent,
+)
+from PySide6.QtGui import QDesktopServices, QFont, QValidator
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
@@ -42,12 +50,23 @@ from gui.shared_widgets import (
     ScientificSpinBox, LogHighlighter, PlotEditorDialog,
     ORBITAL_NAMES, _make_double, _make_int, _make_sci,
     LEGEND_LOCATIONS, LINESTYLE_MAP, lucide_icon,
-    _SpinBoxCommand,
+    _SpinBoxCommand, scroll_zoom,
 )
 from cls_estimations.mass_lookup import (
     ELEMENT_Z, Z_TO_ELEMENT, load_mass_table, get_mass,
 )
 from cls_estimations.plotting import PALETTES
+from cls_estimations.constants import CM_TO_HZ
+from cls_estimations.doppler import (
+    generate_voltage_spectrum, laser_frequency_for_resonance,
+    transition_frequency_MHz,
+)
+from cls_estimations.hfs_model import compute_hfs_lines
+
+# Monospace for the log and the estimator readout: a stylesheet, because
+# the zoom stamps fonts straight onto widgets and would undo a setFont.
+_MONO_QSS = ("QPlainTextEdit { font-family: 'Consolas', 'Courier New',"
+             " 'Liberation Mono', monospace; }")
 
 
 # code review 2026-06-02, estimate-peak-table-na-sort: sort numeric Peak
@@ -259,6 +278,29 @@ class SchmidtWidget(QWidget):
         # Don't fire _emit_moment here -- the saved YAML's ``mu``
         # field was already restored by the parent panel before
         # this method ran. Auto-fill only when the user interacts.
+
+
+def _Set_Spin_Undoable(spin, value, owner):
+    """Set ``spin`` to ``value`` and record it on the global undo stack
+    so Ctrl-Z reverts to the previous value. Skips the push (direct
+    ``setValue``) when the value is unchanged, when ``owner`` is in a
+    config-restore window (``owner._bypass_undo``), or when no undo
+    stack is reachable from ``owner.window()`` (headless / test mode)."""
+    old = float(spin.value())
+    new = float(value)
+    if old == new:
+        return
+    undo_stack = getattr(owner.window(), "_undo_stack", None)
+    if getattr(owner, "_bypass_undo", False) or undo_stack is None:
+        spin.setValue(new)
+        return
+    # Set the value first, then push the command: _SpinBoxCommand's
+    # initial redo() is a no-op, so the value must already be set
+    # before pushing for the undo stack to capture old -> new.
+    spin.blockSignals(True)
+    spin.setValue(new)
+    spin.blockSignals(False)
+    undo_stack.push(_SpinBoxCommand(spin, old, new))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -478,30 +520,8 @@ class IsomerPanel(QWidget):
             self._bypass_undo = False
 
     def _apply_schmidt_moment(self, value):
-        """Apply a Schmidt-computed μ to ``iso_mu`` and record it on
-        the global undo stack so Ctrl-Z reverts to the pre-Schmidt
-        value. Falls back to a direct ``setValue`` when no undo
-        stack is reachable (headless / test mode) or when the panel
-        is in a config-restore window (``_bypass_undo``)."""
-        old = float(self.iso_mu.value())
-        new = float(value)
-        if old == new:
-            return
-        if getattr(self, "_bypass_undo", False):
-            self.iso_mu.setValue(new)
-            return
-        main_win = self.window()
-        undo_stack = getattr(main_win, "_undo_stack", None)
-        if undo_stack is None:
-            self.iso_mu.setValue(new)
-            return
-        # Set the value first, then push the command: _SpinBoxCommand's
-        # initial redo() is a no-op, so the value must already be set
-        # before pushing for the undo stack to capture old -> new.
-        self.iso_mu.blockSignals(True)
-        self.iso_mu.setValue(new)
-        self.iso_mu.blockSignals(False)
-        undo_stack.push(_SpinBoxCommand(self.iso_mu, old, new))
+        """Apply a Schmidt-computed μ to ``iso_mu``, undoably."""
+        _Set_Spin_Undoable(self.iso_mu, value, self)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -854,27 +874,8 @@ class IsotopePanel(QGroupBox):
         self.set_color_index(index)
 
     def _apply_schmidt_moment(self, value):
-        """Apply a Schmidt-computed μ to ``iso_mu`` and record it on the
-        global undo stack so Ctrl-Z reverts to the previous value. Skips
-        the push (direct ``setValue``) when the value is unchanged, when
-        a config restore is in progress (``_bypass_undo``), or when no
-        undo stack is reachable (headless / test mode)."""
-        old = float(self.iso_mu.value())
-        new = float(value)
-        if old == new:
-            return
-        if getattr(self, "_bypass_undo", False):
-            self.iso_mu.setValue(new)
-            return
-        main_win = self.window()
-        undo_stack = getattr(main_win, "_undo_stack", None)
-        if undo_stack is None:
-            self.iso_mu.setValue(new)
-            return
-        self.iso_mu.blockSignals(True)
-        self.iso_mu.setValue(new)
-        self.iso_mu.blockSignals(False)
-        undo_stack.push(_SpinBoxCommand(self.iso_mu, old, new))
+        """Apply a Schmidt-computed μ to ``iso_mu``, undoably."""
+        _Set_Spin_Undoable(self.iso_mu, value, self)
 
     def to_dict(self):
         d = {
@@ -1037,6 +1038,8 @@ class _IsotopeDropContainer(QWidget):
 class IsotopeListWidget(QWidget):
     """Container for dynamic list of IsotopePanel widgets."""
 
+    # Any change to the list: add, remove, clear, reorder, or a new
+    # reference (the voltage estimator rebuilds on it).
     order_changed = Signal()
 
     def __init__(self, parent=None):
@@ -1100,9 +1103,10 @@ class IsotopeListWidget(QWidget):
             QStyle.PixelMetric.PM_ScrollBarExtent, None, self._scroll)
         m = self.layout().contentsMargins()
         pm = self.panel_layout.contentsMargins()
-        return (need + pm.left() + pm.right()
-                + sbw + 2 * self._scroll.frameWidth()
-                + m.left() + m.right())
+        # The Run Options group under the scroll area must not clip either.
+        return max(need + pm.left() + pm.right()
+                   + sbw + 2 * self._scroll.frameWidth()
+                   + m.left() + m.right(), self.minimumSizeHint().width())
 
     def set_z(self, z):
         self._z = int(z) if z else 0
@@ -1165,6 +1169,7 @@ class IsotopeListWidget(QWidget):
         else:
             if self._reference_panel is panel:
                 self._reference_panel = None
+        self.order_changed.emit()
 
     def get_reference_panel(self):
         """Return the panel currently marked as reference, or None."""
@@ -1199,6 +1204,7 @@ class IsotopeListWidget(QWidget):
     def _update_count(self):
         n = len(self.panels)
         self.count_label.setText(f"{n} isotope{'s' if n != 1 else ''}")
+        self.order_changed.emit()
 
     def set_spectrum_only(self, spectrum_only):
         self._spectrum_only = spectrum_only
@@ -1608,10 +1614,11 @@ class GlobalParamsWidget(QWidget):
 #  Parameters Tab (combines global + isotope list)
 # ══════════════════════════════════════════════════════════════════
 class ParametersTab(QWidget):
-    """Three-column working surface: Element/Transition, Isotope list,
-    and Run/Log. The user can configure, kick off, and watch a run on a
-    single surface without tab-switching. All three columns are
-    independently resizable via the splitter handles."""
+    """Three-column working surface: Element/Transition, Isotope list
+    with Run Options under it, and Plots / Voltage Range Estimator / Log.
+    The user can configure, kick off, and watch a run on a single surface
+    without tab-switching. All three columns are independently resizable
+    via the splitter handles."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1631,23 +1638,27 @@ class ParametersTab(QWidget):
         self.global_params.setMaximumWidth(col1_need + 44)
         splitter.addWidget(self.global_params)
 
-        # Column 2: Isotope list — same measured-band treatment as
-        # column 1 (a hardcoded 320-460 band clipped the TOF-gate row
-        # and the Remove button); the per-panel fields carry their own
-        # 160 px limit too.
+        # Column 2: Isotope list, with RunTab's Run Options group fixed
+        # under its scroll area. Same measured-band treatment as column 1
+        # (a hardcoded 320-460 band clipped the TOF-gate row and the
+        # Remove button); the per-panel fields carry their own 160 px
+        # limit too.
         self.isotope_list = IsotopeListWidget()
+        self.run_tab = RunTab()
+        self.isotope_list.layout().addWidget(self.run_tab._top_host)
         col2_need = self.isotope_list.preferred_width()
         self.isotope_list.setMinimumWidth(col2_need)
         self.isotope_list.setMaximumWidth(col2_need + 80)
         splitter.addWidget(self.isotope_list)
 
-        # Column 3: Run options + plots + log. The plots panel lives
-        # between the options and the (shortened) log, so the freed
-        # width from columns 1-2 goes to the plot display.
-        self.run_tab = RunTab()
+        # Column 3: plots, the voltage range estimator and the
+        # (shortened) log, so the freed width from columns 1-2 goes to
+        # the plot display.
         self.run_tab.setMinimumWidth(380)
         self.plots_panel = PlotsTab()
-        self.run_tab.set_plots_panel(self.plots_panel)
+        self.Voltage_Estimator = Voltage_Range_Estimator(
+            self.global_params, self.isotope_list)
+        self.run_tab.set_plots_panel(self.plots_panel, self.Voltage_Estimator)
         splitter.addWidget(self.run_tab)
 
         # Column 3 (plots) soaks up extra width; columns 1-2 are
@@ -1711,11 +1722,11 @@ class ParametersTab(QWidget):
 #  Run & Log Tab
 # ══════════════════════════════════════════════════════════════════
 class RunTab(QWidget):
-    """Column 3 of the Estimate surface: run options + run button on
-    top, the plots panel in the middle (inserted via
-    :meth:`set_plots_panel`), and the log at the bottom — all three in
-    a vertical splitter so the user decides how much room the log gets
-    (it no longer eats the whole column)."""
+    """Column 3 of the Estimate surface: the plots panel and the voltage
+    range estimator (inserted via :meth:`set_plots_panel`) over the log,
+    in a vertical splitter so the user decides how much room each gets.
+    Also builds the Run Options group (``_top_host``), which
+    ParametersTab hosts under the isotope list."""
     run_requested = Signal()
     load_requested = Signal()
 
@@ -1724,10 +1735,9 @@ class RunTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # Options + Run button live ABOVE the splitter at their natural
-        # (content) height — putting them in a splitter pane left a band
-        # of dead space under the Run button that the plots could not
-        # claim.
+        # Options + Run button at their natural (content) height. Built
+        # here so run_btn, output_dir & co. stay RunTab handles; the
+        # group itself sits under the isotope list (ParametersTab).
         self._top_host = QWidget()
         top_layout = QVBoxLayout(self._top_host)
         top_layout.setContentsMargins(0, 0, 0, 0)
@@ -1786,9 +1796,8 @@ class RunTab(QWidget):
         opts_form.addRow(btn_row)
 
         top_layout.addWidget(opts)
-        layout.addWidget(self._top_host)
 
-        # Splitter below: plots (stretch) over the log.
+        # Splitter: plots (stretch), the estimator, then the log.
         self._vsplit = QSplitter(Qt.Orientation.Vertical)
         layout.addWidget(self._vsplit, 1)
 
@@ -1806,23 +1815,21 @@ class RunTab(QWidget):
 
         self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
-        # Stylesheet forces monospace even when app zoom overrides fonts
-        self.log_text.setStyleSheet(
-            "QPlainTextEdit { font-family: 'Consolas', 'Courier New',"
-            " 'Liberation Mono', monospace; }")
+        self.log_text.setStyleSheet(_MONO_QSS)
         self.log_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._highlighter = LogHighlighter(self.log_text.document())
         log_layout.addWidget(self.log_text)
         self._log_host.setMinimumHeight(80)
         self._vsplit.addWidget(self._log_host)
 
-    def set_plots_panel(self, panel):
-        """Insert the plots panel between the run options and the log
-        and hand it the stretch."""
+    def set_plots_panel(self, panel, estimator):
+        """Stack the plots panel and the voltage estimator above the log;
+        the plots take the stretch."""
         self._vsplit.insertWidget(0, panel)
-        self._vsplit.setStretchFactor(0, 1)
-        self._vsplit.setStretchFactor(1, 0)
-        self._vsplit.setSizes([620, 170])
+        self._vsplit.insertWidget(1, estimator)
+        for i, stretch in enumerate((1, 0, 0)):
+            self._vsplit.setStretchFactor(i, stretch)
+        self._vsplit.setSizes([420, 340, 120])
 
     def _browse_dir(self):
         from gui.shared_widgets import get_last_dir, remember_last_dir
@@ -1902,6 +1909,10 @@ class PlotsTab(QWidget):
         self.scroll.setWidget(self.canvas)
         self.scroll.setWidgetResizable(False)
         pl.addWidget(self.scroll)
+        # matplotlib accepts every wheel event as a scroll_event, which
+        # nothing here listens to, so the wheel or trackpad over a plot
+        # never scrolled it (2026-10-22). eventFilter hands it on.
+        self.canvas.installEventFilter(self)
         self._stack.addWidget(plot_page)
 
         # Page 1: Peak list table
@@ -1943,10 +1954,27 @@ class PlotsTab(QWidget):
         super().resizeEvent(event)
         self._resize_timer.start()
 
+    def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() == QEvent.Type.Wheel:
+            QCoreApplication.sendEvent(self.scroll.viewport(), event)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _Fit_Canvas(self):
+        """Size the canvas widget to the figure. Inches convert to widget
+        pixels at the *logical* dpi: matplotlib's Qt canvas sets
+        ``figure.dpi`` to 100 times the screen's pixel ratio, so the raw
+        dpi doubled every plot on a Retina screen and grew them at
+        125-150 % scaling on Windows (2026-10-22)."""
+        dpi = self.figure.get_dpi() / self.canvas.device_pixel_ratio
+        self.canvas.setFixedSize(int(self.figure.get_figwidth() * dpi),
+                                 int(self.figure.get_figheight() * dpi))
+
     def _fig_width_inches(self):
         """Figure width that fills the scroll viewport (no horizontal
-        scrolling in the embedded column; grows in expand mode)."""
-        dpi = self.figure.get_dpi() or 100
+        scrolling in the embedded column; grows in expand mode). Logical
+        dpi, as in _Fit_Canvas."""
+        dpi = self.figure.get_dpi() / self.canvas.device_pixel_ratio
         vw = self.scroll.viewport().width()
         if vw < 50:  # not laid out yet
             vw = 900
@@ -1961,9 +1989,7 @@ class PlotsTab(QWidget):
         self.figure.clear()
         # Reset figure size for placeholder
         self.figure.set_size_inches(self._fig_width_inches(), 6)
-        self.canvas.setFixedSize(
-            int(self.figure.get_figwidth() * self.figure.get_dpi()),
-            int(self.figure.get_figheight() * self.figure.get_dpi()))
+        self._Fit_Canvas()
         ax = self.figure.add_subplot(111)
         ax.text(0.5, 0.5, "Run a calculation to see plots here",
                 ha="center", va="center", fontsize=14, color="gray",
@@ -2090,9 +2116,7 @@ class PlotsTab(QWidget):
             color_idx += 2
 
         self.figure.tight_layout()
-        self.canvas.setFixedSize(
-            int(self.figure.get_figwidth() * self.figure.get_dpi()),
-            int(self.figure.get_figheight() * self.figure.get_dpi()))
+        self._Fit_Canvas()
         self.canvas.draw()
         self.edit_plot_btn.setEnabled(True)
         if (self._editor_dialog is not None
@@ -2138,9 +2162,7 @@ class PlotsTab(QWidget):
         ax.set_ylabel("Normalised intensity")
         ax.legend()
         self.figure.tight_layout()
-        self.canvas.setFixedSize(
-            int(self.figure.get_figwidth() * self.figure.get_dpi()),
-            int(self.figure.get_figheight() * self.figure.get_dpi()))
+        self._Fit_Canvas()
         self.canvas.draw()
         self.edit_plot_btn.setEnabled(True)
         if (self._editor_dialog is not None
@@ -2193,8 +2215,7 @@ class PlotsTab(QWidget):
         if not pages:
             return False
 
-        dpi = self.figure.get_dpi() or 100
-        fig_w = vw / dpi
+        fig_w = vw * self.canvas.device_pixel_ratio / self.figure.get_dpi()
         # Each page keeps its own aspect ratio at full column width.
         heights = [fig_w * (a.shape[0] / a.shape[1]) for a in pages]
         self.figure.clear()
@@ -2206,9 +2227,7 @@ class PlotsTab(QWidget):
         for ax, arr in zip(axes.flatten(), pages):
             ax.imshow(arr, aspect="auto")
             ax.set_axis_off()
-        self.canvas.setFixedSize(
-            int(self.figure.get_figwidth() * dpi),
-            int(self.figure.get_figheight() * dpi))
+        self._Fit_Canvas()
         self.canvas.draw()
         return True
 
@@ -2252,18 +2271,15 @@ class PlotsTab(QWidget):
             for spine in ax.spines.values():
                 spine.set_visible(False)
             self.canvas.draw()
+        else:
+            # Refit to the column after a resize or the expand toggle.
+            self._show_placeholder()
 
     def _open_current_pdf(self):
         idx = self.plot_selector.currentIndex()
         path = self._pdf_paths.get(idx, "")
         if path and os.path.exists(path):
-            import subprocess, sys
-            if sys.platform == "win32":
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _open_editor(self):
         if (self._editor_dialog is not None
@@ -2277,18 +2293,484 @@ class PlotsTab(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  Voltage Range Estimator
+# ══════════════════════════════════════════════════════════════════
+class Voltage_Range_Estimator(QGroupBox):
+    """Setpoint map: where each hyperfine component resonates (dV from
+    the beam voltage) as the laser setpoint moves, which components fall
+    inside the +/-dV sweep, and the spectrum at the setpoint.
+
+    Every number comes from the pipeline's own functions, fed the dict
+    Run feeds it (``Config_Source``, i.e. MainWindow._build_estimate_dict),
+    so the map agrees with Run Estimation. A finished edit (Enter or
+    focus-out, drag release, 400 ms after the last arrow key) writes
+    Laser > Setpoint or Scan > Voltage range = 2*dV, undoably. Nothing
+    here starts a run or touches the Plots panel or the log. The map
+    zooms with the wheel and pans when dragged off the bar; that view
+    survives commits and refreshes until a double-click refits it.
+    """
+
+    def __init__(self, global_params, isotope_list, parent=None):
+        super().__init__("Voltage Range Estimator", parent)
+        self.Config_Source = None
+        self._Global_Params = global_params
+        self._Isotope_List = isotope_list
+        self._Snapshot = None
+        self._Cfg = None            # parsed config of the last build
+        self._Hfs_Cache = {}        # compute_hfs_lines results, by input
+        self._Mass_Table = isotope_list._mass_table   # load_mass_table()
+        self._Dirty = True          # build on first show
+        self._Dragging = False
+        self._Pan = None            # (x, y, xlim, ylim) at the press
+        self._Zoom = None           # user's (xlim, ylim) on the map
+        self._S = 0.0               # setpoint on the map (cm-1)
+
+        self.figure = Figure(layout="constrained")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        for name, slot in (("button_press_event", self._On_Press),
+                           ("motion_notify_event", self._On_Motion),
+                           ("button_release_event", self._On_Release),
+                           ("scroll_event", self._On_Scroll),
+                           ("key_press_event", self._On_Key)):
+            self.canvas.mpl_connect(name, slot)
+
+        self.Show_Combo = QComboBox()
+        self.Setpoint_Box = _make_double(0, 0, 200000, 6, 0.001)
+        self.Dv_Box = _make_double(50, 0.05, 50000, 2, 10)
+        self.Window_Box = _make_double(0, 0, 100000, 1, 50)
+        self.Window_Box.setSpecialValueText("auto")
+        for box in (self.Setpoint_Box, self.Dv_Box, self.Window_Box):
+            box.setKeyboardTracking(False)
+            box._Own_Undo = True    # commits push their own undo step
+        hint = QLabel("Drag the red bar, or click the map and use \u2190 "
+                      "\u2192 (\u00b10.001, Shift \u00b10.01). Wheel zooms, "
+                      "dragging pans, double-click refits. Enter applies.",
+                      wordWrap=True)
+        self.Readout = QPlainTextEdit(
+            readOnly=True, styleSheet=_MONO_QSS,
+            lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap)
+
+        form = QFormLayout()
+        form.addRow("Show:", self.Show_Combo)
+        form.addRow("Setpoint (cm\u207b\u00b9):", self.Setpoint_Box)
+        form.addRow("dV (\u00b1V):", self.Dv_Box)
+        form.addRow("Window (\u00b1V):", self.Window_Box)
+        side = QVBoxLayout()
+        side.addLayout(form)
+        side.addWidget(hint)
+        side.addWidget(self.Readout, 1)
+        row = QHBoxLayout(self)
+        row.addWidget(self.canvas, 1)
+        row.addLayout(side)
+
+        self.Show_Combo.currentIndexChanged.connect(self._Reset_View)
+        self.Setpoint_Box.editingFinished.connect(self._On_Setpoint_Edited)
+        self.Dv_Box.editingFinished.connect(self._Commit_Dv)
+        self.Window_Box.valueChanged.connect(self._Reset_View)
+        self._Refresh_Timer = QTimer(self, singleShot=True, interval=250,
+                                     timeout=self._Refresh)
+        self._Key_Timer = QTimer(self, singleShot=True, interval=400,
+                                 timeout=self._Commit_Setpoint)
+        self._Hook(global_params)
+        isotope_list.order_changed.connect(self._On_Isotopes_Changed)
+        self._Show_Placeholder("")
+
+    # ── Refresh from the parameters ─────────────────────────────
+
+    def _Hook(self, root):
+        """Refresh after any finished edit under ``root``, once per root."""
+        if getattr(root, "_Estimator_Hooked", False):
+            return
+        root._Estimator_Hooked = True
+        for w in (root.findChildren(QAbstractSpinBox)
+                  + root.findChildren(QLineEdit)):
+            w.editingFinished.connect(self.Schedule_Refresh)
+        for w in root.findChildren(QComboBox):
+            w.currentIndexChanged.connect(self.Schedule_Refresh)
+        for w in root.findChildren(QAbstractButton):
+            if w.isCheckable():
+                w.toggled.connect(self.Schedule_Refresh)
+
+    def _On_Isotopes_Changed(self):
+        for panel in self._Isotope_List.panels:
+            self._Hook(panel)
+        self.Schedule_Refresh()
+
+    def Schedule_Refresh(self, *_):
+        """Rebuild from the parameters 250 ms after the last trigger,
+        only if they changed, and not while the pane is hidden."""
+        self._Refresh_Timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._Dirty:
+            self._Dirty = False
+            self.Schedule_Refresh()
+
+    def _Refresh(self):
+        if self.Config_Source is None:
+            return
+        if not self.isVisible():
+            self._Dirty = True
+            return
+        d = self.Config_Source()
+        d.pop("last_run", None)
+        if d == self._Snapshot:
+            return
+        self._Snapshot = d
+        if "satlas2" in sys.modules or "reference" not in d:
+            self._Rebuild()
+        else:
+            # The first real build imports satlas2 (about 2 s, once):
+            # paint a note first, then build on the next tick.
+            self._Show_Placeholder("Preparing hyperfine model...")
+            QTimer.singleShot(0, self._Rebuild)
+
+    def _Rebuild(self):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._Build_Model(self._Snapshot)
+        except Exception as exc:  # noqa: BLE001 -- any incomplete config
+            self._Cfg = None
+            self._Show_Placeholder(
+                "Needs an element, a transition, at least one isotope and "
+                f"a reference isotope.\n\n{type(exc).__name__}: {exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        combo, keep = self.Show_Combo, self.Show_Combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(["All"] + [st["label"] for st in self._States])
+        combo.setCurrentIndex(max(0, combo.findText(keep)))
+        combo.blockSignals(False)
+        self._S = self._Cfg.laser.setpoint_cm
+        for box, value in ((self.Setpoint_Box, self._S),
+                           (self.Dv_Box, self._Cfg.scan.voltage_range_V / 2)):
+            if not box.hasFocus():
+                box.blockSignals(True)
+                box.setValue(value)
+                box.blockSignals(False)
+        self._Draw_View()
+
+    def _Build_Model(self, d):
+        """Parse ``d`` as Run does and collect each state's components."""
+        import tempfile
+        import yaml
+        # The pipeline's single source of the A/B scaling and the peak
+        # voltages; copying them would fork the physics.
+        from cls_estimate import _get_hfs_params
+        from cls_estimations.config_parser import load_config
+        # load_config takes only a path. Close the descriptor before
+        # loading: Windows can't reopen a file that is still open.
+        fd, path = tempfile.mkstemp(suffix=".yaml")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                yaml.safe_dump(d, fh)
+            cfg = load_config(path)
+        finally:
+            os.unlink(path)
+        tr = cfg.transition
+        nu0 = transition_frequency_MHz(tr.lower_level_cm, tr.upper_level_cm)
+        self._Cfg, self._V0 = cfg, cfg.beam.voltage_kV * 1e3  # V0 as in run()
+        self._States = []
+        for i, iso in enumerate(cfg.isotopes):
+            # Ground state solid, isomer dashed, labelled as run() does.
+            for isomer in [None] + [iso.isomer] * (iso.isomer is not None):
+                A_l, B_l, A_u, B_u = _get_hfs_params(
+                    iso, cfg.reference, is_isomer=isomer is not None,
+                    isomer_cfg=isomer, g_s_factor=cfg.g_s_factor)[:4]
+                state = isomer or iso
+                key = (state.I, tr.J_lower, tr.J_upper, A_l, B_l, A_u, B_u)
+                if key not in self._Hfs_Cache:
+                    self._Hfs_Cache[key] = compute_hfs_lines(*key)
+                self._States.append(dict(
+                    label=(iso.label if iso.isomer is None
+                           else f"{iso.label} (g.s.)" if isomer is None
+                           else f"{iso.label} (isomer, I={isomer.I})"),
+                    ls="--" if isomer else "-",
+                    mass=get_mass(self._Mass_Table, cfg.Z, iso.A),
+                    color=ISOTOPE_COLORS[i % len(ISOTOPE_COLORS)],
+                    # centroid = nu0 + isotope (or isomer) shift, as in run()
+                    centroid=nu0 + state.isotope_shift_MHz,
+                    offsets=self._Hfs_Cache[key][0],
+                    intens=self._Hfs_Cache[key][1]))
+        if cfg.laser.setpoint_cm is None:
+            # Mirrors the "Resolve anchor" block of cls_estimate.run().
+            anchor = next((iso for iso in cfg.isotopes
+                           if iso.label == cfg.laser.anchor_isotope), None)
+            state = anchor and (anchor.isomer if cfg.laser.anchor_state
+                                == "isomer" else anchor)
+            if state is None:
+                raise ValueError(f"Anchor '{cfg.laser.anchor_isotope}' "
+                                 f"({cfg.laser.anchor_state}) not found.")
+            cfg.laser.setpoint_cm = self._Setpoint_For(
+                nu0 + state.isotope_shift_MHz, self._V0 - cfg.laser.anchor_dV,
+                get_mass(self._Mass_Table, cfg.Z, anchor.A))
+
+    # ── Physics, through the pipeline's functions ───────────────
+
+    def _Nu_Laser(self, s):
+        """nu_laser_MHz at setpoint ``s``, as in cls_estimate.run()."""
+        return s * self._Cfg.laser.harmonic * CM_TO_HZ / 1e6
+
+    def _Setpoint_For(self, nu_rest, v_acc, mass):
+        """Setpoint that puts ``nu_rest`` in resonance at ``v_acc``: the
+        anchor conversion of cls_estimate.run()."""
+        cfg = self._Cfg
+        nu = float(laser_frequency_for_resonance(
+            nu_rest, v_acc, mass, cfg.beam.charge_state, cfg.beam.geometry))
+        return nu * 1e6 / (cfg.laser.harmonic * CM_TO_HZ)
+
+    def _Peak_Dvs(self, st, s):
+        from cls_estimate import _compute_peak_voltages
+        cfg = self._Cfg
+        return _compute_peak_voltages(
+            st["offsets"], st["centroid"], self._Nu_Laser(s), st["mass"],
+            cfg.beam.charge_state, self._V0, cfg.beam.geometry)
+
+    def _Shown(self):
+        i = self.Show_Combo.currentIndex()
+        return self._States if i <= 0 else self._States[i - 1:i]
+
+    # ── Drawing ─────────────────────────────────────────────────
+
+    def _Show_Placeholder(self, text):
+        self._Map = None
+        self.figure.clear()
+        self.figure.text(0.5, 0.5, text, ha="center", va="center",
+                         color="gray", wrap=True)
+        self.canvas.draw_idle()
+        self.Readout.clear()
+
+    def _Draw_View(self, *_):
+        """Full redraw. The x-limits span the setpoints where the shown
+        components enter and leave +/-Window, plus 5 %, and always the
+        setpoint. Window "auto" fits the components at the setpoint with
+        a 10 % margin and is never narrower than +/-2*dV."""
+        if self._Cfg is None:
+            return
+        shown, s, dv = self._Shown(), self._S, self.Dv_Box.value()
+        win = self.Window_Box.value()
+        if not win:
+            dvs = [abs(v) for st in shown for v in self._Peak_Dvs(st, s)
+                   if v is not None]
+            win = max(1.1 * max(dvs, default=0.0), 2 * dv)
+        xs = [s] + [self._Setpoint_For(st["centroid"] + off, self._V0 + w,
+                                       st["mass"])
+                    for st in shown for off in st["offsets"]
+                    for w in (-win, win)]
+        pad = 0.05 * (max(xs) - min(xs)) or 1e-3
+        fit = (min(xs) - pad, max(xs) + pad)
+        # The lines also cover a zoomed-out or panned view. They are near
+        # straight, so 60 points stay accurate (to ~0.03 V) at any zoom.
+        self._Span = (min(fit[0], self._Zoom[0][0]) if self._Zoom else fit[0],
+                      max(fit[1], self._Zoom[0][1]) if self._Zoom else fit[1])
+        grid = np.linspace(*self._Span, 60)
+        self.figure.clear()
+        self._Map, spec = self.figure.subplots(
+            1, 2, sharey=True, gridspec_kw={"width_ratios": (3, 1)})
+        self._Centres = []
+        for st in shown:
+            lines = [[np.nan if v is None else v
+                      for v in self._Peak_Dvs(st, x)] for x in grid]
+            self._Map.plot(grid, lines, color=st["color"], ls=st["ls"], lw=1)
+            x_c = self._Setpoint_For(st["centroid"], self._V0, st["mass"])
+            self._Centres.append(x_c)
+            self._Map.axvline(x_c, color=st["color"], ls=":", lw=0.8)
+            # Clipped, or a label zoomed out of view was still drawn and
+            # the layout squeezed the axes to make room for it.
+            self._Map.text(x_c, 0.98, f" centre {st['label']}",
+                           transform=self._Map.get_xaxis_transform(),
+                           rotation=90, va="top", fontsize="x-small",
+                           color=st["color"], clip_on=True)
+        for ax in (self._Map, spec):
+            ax.axhspan(-dv, dv, color="gold", alpha=0.2)
+        self._Map.set_xlim(self._Zoom[0] if self._Zoom else fit)
+        # Setpoint ticks are long: few of them, and no offset text, which
+        # landed on the axis label.
+        self._Map.locator_params(axis="x", nbins=4)
+        self._Map.ticklabel_format(axis="x", useOffset=False)
+        self._Map.set_ylim(self._Zoom[1] if self._Zoom else (-win, win))
+        self._Map.set_xlabel("Setpoint (cm$^{-1}$, laser = "
+                             f"x{self._Cfg.laser.harmonic})")
+        self._Map.set_ylabel("dV (V)")
+        spec.set_xlim(0, 1.05)
+        spec.set_xlabel("Intensity")
+        self._Bar = self._Map.axvline(s, color="red", lw=1.5)
+        self._Rings = self._Map.plot([], [], "o", ms=9, mfc="none", mec="red",
+                                     mew=1.5, zorder=3)[0]
+        self._Spectra = [spec.plot([], [], color=st["color"], ls=st["ls"])[0]
+                         for st in shown]
+        self._Draw_At(s)
+
+    def _Draw_At(self, s):
+        """Move the bar to setpoint ``s``; rings, spectrum and readout
+        follow live (no satlas2 call, no rescale). Red rings mark only the
+        crossings inside +/-dV; the spectrum is sampled over the visible
+        dV range, so it stays sharp when the map is zoomed."""
+        cfg, self._S, dv = self._Cfg, s, self.Dv_Box.value()
+        self._Bar.set_xdata([s, s])
+        rows, inside = [], []
+        for st, line in zip(self._Shown(), self._Spectra):
+            dvs = self._Peak_Dvs(st, s)
+            inside += [d for d in dvs if d is not None and abs(d) <= dv]
+            v, y = generate_voltage_spectrum(
+                st["offsets"], st["intens"], st["centroid"],
+                self._Nu_Laser(s), st["mass"], cfg.beam.charge_state,
+                self._V0, cfg.beam.geometry, cfg.linewidth_fwhm_MHz,
+                self._Map.get_ylim(), v_steps=600)
+            line.set_data(y, v)
+            rows += [(st["label"], off, amp, d)
+                     for off, amp, d in zip(st["offsets"], st["intens"], dvs)]
+        self._Rings.set_data([s] * len(inside), inside)
+        self._Write_Readout(s, rows)
+        self.canvas.draw_idle()
+
+    def _Write_Readout(self, s, rows):
+        cfg, dv = self._Cfg, self.Dv_Box.value()
+        h, w = cfg.laser.harmonic, max([5] + [len(r[0]) for r in rows])
+        nm = [f"{1e7 / cm:.3f} nm" if cm else "-" for cm in (s, s * h)]
+        text = [f"Setpoint {s:.6f} cm-1  {nm[0]}",
+                f"x{h:<7} {s * h:.6f} cm-1  {nm[1]}",
+                f"Laser    {self._Nu_Laser(s) / 1e6:.6f} THz",
+                f"V0       {self._V0:.1f} V  {cfg.beam.geometry}",
+                f"Sweep    \u00b1{dv:.2f} V (scan range {2 * dv:.1f} V)",
+                "", f"{'State':<{w}}{'MHz':>9}{'dV (V)':>10}{'Int':>8}"]
+        n_in = 0
+        for label, off, amp, d in sorted(
+                rows, key=lambda r: np.inf if r[3] is None else r[3]):
+            ok = d is not None and abs(d) <= dv
+            n_in += ok
+            d_txt = "N/A" if d is None else f"{d:+.3f}"
+            text.append(f"{label:<{w}}{off:>+9.1f}{d_txt:>10}{amp:>8.4f}"
+                        f"  {'in' if ok else 'OUT'}")
+        text.append(f"{n_in}/{len(rows)} components within \u00b1{dv:.2f} V")
+        self.Readout.setPlainText("\n".join(text))
+        # Wide enough for the longest line (frame, margins, scrollbar).
+        fm = self.Readout.fontMetrics()
+        self.Readout.setMinimumWidth(
+            32 + max(fm.horizontalAdvance(t) for t in text))
+
+    # ── Interaction and write-back ──────────────────────────────
+
+    def _On_Press(self, event):
+        if (self._Map is None or event.inaxes is not self._Map
+                or event.button != 1):
+            return
+        if event.dblclick:
+            self._Reset_View()
+            return
+        # Within 6 px of the bar: drag it; of a centre marker: snap to it;
+        # elsewhere: pan. matplotlib reports event positions in physical
+        # pixels, hence the pixel ratio.
+        tol = 6 * self.canvas.device_pixel_ratio
+
+        def near(x):
+            return abs(self._Map.transData.transform((x, 0))[0]
+                       - event.x) <= tol
+        if near(self._S):
+            self._Dragging = True
+            return
+        for x_c in self._Centres:
+            if near(x_c):
+                self._Draw_At(x_c)
+                self._Commit_Setpoint()
+                return
+        self._Pan = (event.x, event.y, self._Map.get_xlim(),
+                     self._Map.get_ylim())
+
+    def _On_Motion(self, event):
+        if self._Dragging and event.inaxes is self._Map:
+            self._Draw_At(event.xdata)
+        elif self._Pan:
+            px, py, (x0, x1), (y0, y1) = self._Pan
+            bb = self._Map.bbox
+            dx = (event.x - px) * (x1 - x0) / bb.width
+            dy = (event.y - py) * (y1 - y0) / bb.height
+            self._Map.set_xlim(x0 - dx, x1 - dx)
+            self._Map.set_ylim(y0 - dy, y1 - dy)
+            self.canvas.draw_idle()
+
+    def _On_Release(self, _event):
+        if self._Dragging:
+            self._Dragging = False
+            self._Commit_Setpoint()
+        elif self._Pan:
+            moved = self._Map.get_xlim() != self._Pan[2]
+            moved |= self._Map.get_ylim() != self._Pan[3]
+            self._Pan = None
+            if moved:
+                self._Keep_View()
+
+    def _On_Scroll(self, event):
+        if event.inaxes is self._Map:
+            scroll_zoom(event)
+            self._Keep_View()
+
+    def _Keep_View(self):
+        """Keep the user's zoom or pan through later redraws; redraw the
+        lines when the view has left the span they cover."""
+        x0, x1 = self._Map.get_xlim()
+        self._Zoom = ((x0, x1), self._Map.get_ylim())
+        if x0 < self._Span[0] or x1 > self._Span[1]:
+            self._Draw_View()
+        else:
+            self._Draw_At(self._S)
+
+    def _Reset_View(self, *_):
+        """Back to the fitted view (double-click, or a Window or Show
+        change)."""
+        self._Zoom = None
+        self._Draw_View()
+
+    def _On_Key(self, event):
+        step = {"left": -1e-3, "right": 1e-3,
+                "shift+left": -1e-2, "shift+right": 1e-2}.get(event.key)
+        if step and self._Map is not None:
+            self._Draw_At(self._S + step)
+            self._Key_Timer.start()     # one commit, one undo step, per burst
+
+    def _On_Setpoint_Edited(self):
+        if self.Setpoint_Box.value() != round(self._S, 6):
+            self._S = self.Setpoint_Box.value()
+            self._Commit_Setpoint()
+
+    def _Commit_Setpoint(self):
+        """Write the setpoint to Laser > Setpoint, undoably. In anchor
+        mode this ticks the Setpoint radio; the anchor fields keep their
+        values, and undo restores the value only."""
+        gp = self._Global_Params
+        self._S = round(self._S, 6)
+        if gp.laser_anchor_radio.isChecked():
+            gp.laser_setpoint_radio.setChecked(True)
+        _Set_Spin_Undoable(gp.setpoint_cm, self._S, self)
+        self.Setpoint_Box.setValue(self._S)
+        self._Draw_View()
+
+    def _Commit_Dv(self):
+        """Write Scan > Voltage range = 2*dV, undoably."""
+        _Set_Spin_Undoable(self._Global_Params.scan_range,
+                           2 * self.Dv_Box.value(), self)
+        self._Draw_View()
+
+
+# ══════════════════════════════════════════════════════════════════
 #  Estimate Tab (wrapper combining Parameters, Run & Log, Plots)
 # ══════════════════════════════════════════════════════════════════
 class EstimateTab(QWidget):
     """Top-level Estimate tab — one surface, no sub-tabs.
 
     Three resizable columns (see :class:`ParametersTab`): element /
-    transition parameters, the isotope list, and a right column
-    stacking Run Options, the plots panel, and a shortened log. The
-    plots can be expanded over the whole tab with the ⛶ toggle.
+    transition parameters, the isotope list with Run Options under it,
+    and a right column stacking the plots panel, the Voltage Range
+    Estimator and a shortened log. The plots can be expanded over the
+    whole tab with the ⛶ toggle.
 
-    Stable handles for callers: ``run_tab`` (the RunTab in column 3)
-    and ``plots_tab`` (the plots panel hosted inside it).
+    Stable handles for callers: ``run_tab`` (the RunTab in column 3),
+    ``plots_tab`` (the plots panel hosted inside it) and
+    ``Voltage_Estimator``.
     """
     run_requested = Signal()
 
@@ -2307,6 +2789,7 @@ class EstimateTab(QWidget):
         self.run_tab.run_requested.connect(self.run_requested.emit)
         self.plots_tab = self.params_tab.plots_panel
         self.plots_tab.expand_btn.toggled.connect(self.set_plots_expanded)
+        self.Voltage_Estimator = self.params_tab.Voltage_Estimator
 
         # Bottom bar
         bottom = QHBoxLayout()
@@ -2337,6 +2820,7 @@ class EstimateTab(QWidget):
         pt.global_params.setVisible(not expanded)
         pt.isotope_list.setVisible(not expanded)
         self.run_tab._top_host.setVisible(not expanded)
+        self.Voltage_Estimator.setVisible(not expanded)
         self.run_tab._log_host.setVisible(not expanded)
         # Redraw at the new width once the layout has settled.
         QTimer.singleShot(0, self.plots_tab.refresh_current)
@@ -2347,8 +2831,9 @@ class EstimateTab(QWidget):
             "Predict CLS measurement times and simulated HFS spectra for "
             "one or more isotopes. The tab is a single surface with "
             "three resizable columns: element / transition on the left, "
-            "isotope list in the middle, and run options + plots + log "
-            "on the right. Drag the column dividers to resize; the "
+            "the isotope list with the run options under it in the "
+            "middle, and plots + voltage range estimator + log on the "
+            "right. Drag the dividers to resize; the "
             "⛶ button expands the plots over the whole tab.<br><br>"
 
             "<h4>Element &amp; Transition</h4>"
@@ -2416,9 +2901,9 @@ class EstimateTab(QWidget):
             "Configure the unpaired nucleon type, orbital, and "
             "coupling.<br><br>"
 
-            "<h4>Run &amp; Log</h4>"
-            "\u2022 Set the output directory and colour palette, and toggle "
-            "<b>Generate plots</b>.<br>"
+            "<h4>Run Options &amp; Log</h4>"
+            "\u2022 Under the isotope list: set the output directory and "
+            "colour palette, and toggle <b>Generate plots</b>.<br>"
             "\u2022 Click <b>Run Estimation</b> to start the calculation. "
             "Progress and results appear in the log panel.<br><br>"
 
@@ -2431,6 +2916,30 @@ class EstimateTab(QWidget):
             "isotope, state, shift, offset, voltage, and intensity.<br>"
             "\u2022 Use <b>Edit Plot</b> to customise titles, labels, "
             "colours, and line styles, then export as PNG, PDF, or SVG."
+            "<br><br>"
+
+            "<h4>Voltage Range Estimator</h4>"
+            "A live map of where every hyperfine component resonates "
+            "(\u0394V from the beam voltage, one line per component; "
+            "isomers dashed) as the laser setpoint moves, the spectrum at "
+            "the current setpoint, and a readout of which components fall "
+            "inside the \u00b1dV sweep. It uses the same physics as Run "
+            "Estimation.<br>"
+            "\u2022 Drag the red bar, or click the map and use the arrow "
+            "keys (Shift for bigger steps); click a <i>centre</i> marker to "
+            "snap to it. Red rings mark the crossings inside \u00b1dV.<br>"
+            "\u2022 The mouse wheel zooms the map around the cursor, "
+            "dragging away from the bar pans it, and a double-click "
+            "refits it.<br>"
+            "\u2022 Releasing the bar, or pressing Enter in <b>Setpoint</b>, "
+            "writes Laser \u25b8 Setpoint (anchor mode switches to "
+            "Setpoint). <b>dV</b> writes Scan \u25b8 Voltage range = 2 "
+            "\u00d7 dV. Both can be undone.<br>"
+            "\u2022 <b>Window</b> only sets the plotted voltage range "
+            "(auto fits the components); <b>Show</b> picks one state or "
+            "all.<br>"
+            "\u2022 The plots and the log change only when you press "
+            "<b>Run Estimation</b>."
         )
         from gui.analysis.helpers import _show_scrollable_info
         _show_scrollable_info(self, "Estimate Tab \u2013 Information", text)

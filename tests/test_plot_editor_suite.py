@@ -369,5 +369,26 @@ class QuickPlotEditorAccessTests(unittest.TestCase):
             dlg.close()
 
 
+class PixelRatioTests(unittest.TestCase):
+    def setUp(self):
+        _ensure_app()
+
+    def test_Dpi_Box_Is_Logical_At_Pixel_Ratio_2(self):
+        """On Retina matplotlib doubles figure.dpi: the box read 200 and
+        an 8-in width gave a 1600-px canvas (2026-10-22). The private
+        setter is the only way to get ratio 2 offscreen."""
+        from gui.shared_widgets import PlotEditorDialog
+        canvas, fig, _ax = _make_canvas()
+        canvas._set_device_pixel_ratio(2.0)
+        dlg = PlotEditorDialog(fig, canvas)
+        try:
+            self.assertEqual(dlg._fig_dpi_spin.value(), 100)
+            dlg._unit_combo.setCurrentText("in")
+            dlg._fig_width_spin.setValue(8)
+            self.assertEqual(canvas.width(), 800)
+        finally:
+            dlg.close()
+
+
 if __name__ == "__main__":
     unittest.main()

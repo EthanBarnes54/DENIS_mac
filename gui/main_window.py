@@ -37,10 +37,10 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QComboBox, QCheckBox, QDialogButtonBox, QGroupBox,
     QLineEdit, QPushButton, QLabel, QScrollArea, QWidget, QSplashScreen,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction, QKeySequence, QShortcut, QIcon, QPixmap, QFont,
-    QUndoStack, QColor,
+    QUndoStack, QColor, QDesktopServices,
 )
 
 from gui.shared_widgets import (
@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
         self.estimate_tab.run_requested.connect(self._on_run)
         self.estimate_tab.run_tab.load_requested.connect(
             self._on_load_estimation)
+        self.estimate_tab.Voltage_Estimator.Config_Source = (
+            self._build_estimate_dict)
         self.tabs.addTab(self.estimate_tab, _icon("sigma"), "Estimate")
 
         # Tab 2: Pre-Analysis
@@ -153,6 +155,9 @@ class MainWindow(QMainWindow):
         # Undo/Redo stack
         self._undo_stack = QUndoStack(self)
         self._undo_stack.setUndoLimit(200)
+        # Undo, redo and the Schmidt auto-fill change the estimator's input.
+        self._undo_stack.indexChanged.connect(
+            self.estimate_tab.Voltage_Estimator.Schedule_Refresh)
 
         # Application-wide Ctrl+C/V/Z/Y + spinbox undo tracking. The
         # filter snapshots spinbox values on focus-in and pushes
@@ -229,6 +234,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         settings_action = QAction(_icon("settings"), "Settings...", self)
+        settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
         settings_action.triggered.connect(self._open_settings)
         file_menu.addAction(settings_action)
 
@@ -236,6 +242,7 @@ class MainWindow(QMainWindow):
 
         exit_action = QAction(_icon("x"), "Exit", self)
         exit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        exit_action.setMenuRole(QAction.MenuRole.QuitRole)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
@@ -249,7 +256,9 @@ class MainWindow(QMainWindow):
 
         redo_action = self._undo_stack.createRedoAction(self, "Redo")
         redo_action.setIcon(_icon("refresh-cw"))
-        redo_action.setShortcut(QKeySequence("Ctrl+Y"))
+        # Cmd+Shift+Z is the Mac's redo; the menu showed Cmd+Y (2026-10-22).
+        redo_action.setShortcut(QKeySequence(
+            "Ctrl+Shift+Z" if sys.platform == "darwin" else "Ctrl+Y"))
         edit_menu.addAction(redo_action)
 
         edit_menu.addSeparator()
@@ -365,6 +374,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(manual_action)
         help_menu.addSeparator()
         about_action = QAction(_icon("atom"), "About", self)
+        about_action.setMenuRole(QAction.MenuRole.AboutRole)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
@@ -533,6 +543,7 @@ class MainWindow(QMainWindow):
         last_run = data.get("last_run")
         if isinstance(last_run, dict):
             self._restore_estimate_outputs(last_run)
+        et.Voltage_Estimator.Schedule_Refresh()
 
     def _restore_preanalysis(self, data):
         """Populate the Pre-Analysis tab from a dict."""
@@ -1677,14 +1688,7 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
         if os.path.isdir(output_dir):
-            import subprocess
-            import platform
-            if platform.system() == "Linux":
-                subprocess.Popen(["xdg-open", output_dir])
-            elif platform.system() == "Darwin":
-                subprocess.Popen(["open", output_dir])
-            else:
-                subprocess.Popen(["explorer", os.path.normpath(output_dir)])
+            QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
         else:
             QMessageBox.information(
                 self, "Info",
@@ -1913,7 +1917,7 @@ class SettingsDialog(QDialog):
         settings_dir_row.addWidget(open_dir_btn)
         gen_form.addRow("Settings directory:", settings_dir_row)
 
-        self._auto_path = QCheckBox("Auto-convert paths (Linux/Windows)")
+        self._auto_path = QCheckBox("Auto-convert paths (Windows/macOS/Linux)")
         self._auto_path.setChecked(settings.get("auto_path_conversion", True))
         self._auto_path.setToolTip(
             "Automatically convert file paths when loading save files "
@@ -2327,15 +2331,9 @@ class SettingsDialog(QDialog):
 
     def _open_folder(self, path):
         """Open a folder in the system file explorer."""
-        import subprocess, sys as _sys
         if not os.path.isdir(path):
             os.makedirs(path, exist_ok=True)
-        if _sys.platform == "win32":
-            os.startfile(path)
-        elif _sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _browse_output(self):
         d = QFileDialog.getExistingDirectory(
@@ -2657,20 +2655,26 @@ def main():
     if os.path.exists(_splash_path) and not _new_window_flag:
         splash_pix = QPixmap(_splash_path)
         # Build splash with version text
-        from PySide6.QtGui import QPainter
+        from PySide6.QtGui import QFontDatabase, QPainter
         canvas = QPixmap(540, 600)
         canvas.fill(QColor(24, 24, 30))
         painter = QPainter(canvas)
         # Center the logo
         x_off = (540 - splash_pix.width()) // 2
         painter.drawPixmap(x_off, 20, splash_pix)
-        # Title and version below logo
+        # Title and version below logo, in the platform's UI font and sized
+        # for 96 dpi, because the canvas is laid out in pixels. A literal
+        # "Segoe UI" fell back with a font-alias warning on macOS, whose
+        # 72 dpi also shrank the text (2026-10-22).
+        Ui_Family = QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.GeneralFont).family()
+        Pt_Scale = 96 / canvas.logicalDpiY()
         painter.setPen(QColor(220, 220, 220))
-        font = QFont("Segoe UI", 18, QFont.Weight.Bold)
+        font = QFont(Ui_Family, round(18 * Pt_Scale), QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(0, 545, 540, 30,
                          Qt.AlignmentFlag.AlignCenter, "DENIS")
-        font2 = QFont("Segoe UI", 10)
+        font2 = QFont(Ui_Family, round(10 * Pt_Scale))
         painter.setFont(font2)
         painter.setPen(QColor(160, 160, 170))
         painter.drawText(0, 572, 540, 20,
@@ -2722,9 +2726,12 @@ def main():
 
         def _maybe_load():
             data = bytes(conn.readAll()).decode("utf-8", "ignore").strip()
-            if data and os.path.isfile(data):
-                window._load_from_path(data)
             conn.disconnectFromServer()
+            # Load once this signal has returned: the load's progress window
+            # pumps the event loop, which deleted the socket mid-signal, and
+            # handing a file to a running DENIS crashed it (2026-10-24).
+            if data and os.path.isfile(data):
+                QTimer.singleShot(0, lambda: window._load_from_path(data))
         conn.readyRead.connect(_maybe_load)
         conn.disconnected.connect(conn.deleteLater)
     if _single_server is not None:
