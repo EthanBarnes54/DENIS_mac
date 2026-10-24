@@ -193,6 +193,27 @@ class RunLoadRowTests(unittest.TestCase):
             abs(rt.run_btn.geometry().y() - rt.load_btn.geometry().y()), 4)
         tab.hide()
 
+    def test_Run_Save_Load_Buttons_Equal_And_Flush(self):
+        """F2: Run / Save / Load share the row at equal widths and span
+        the group's contents; Save waits for a run (2026-10-24)."""
+        from gui.estimate_tab import EstimateTab
+        tab = EstimateTab()
+        rt = tab.run_tab
+        tab.resize(1500, 900)
+        tab.show()
+        QApplication.processEvents()
+        btns = (rt.run_btn, rt.Save_Btn, rt.load_btn)
+        widths = [b.width() for b in btns]       # leftover px go somewhere
+        self.assertLessEqual(max(widths) - min(widths), 1)
+        group = rt.run_btn.parentWidget()
+        inner = group.contentsRect().marginsRemoved(
+            group.layout().contentsMargins())
+        self.assertLessEqual(abs(rt.run_btn.x() - inner.left()), 1)
+        self.assertLessEqual(abs(rt.load_btn.geometry().right()
+                                 - inner.right()), 1)
+        self.assertFalse(rt.Save_Btn.isEnabled())
+        tab.close()
+
 
 class PdfFallbackTests(unittest.TestCase):
     def setUp(self):
@@ -304,6 +325,7 @@ class VoltageEstimatorTests(unittest.TestCase):
         first one is deferred a tick while satlas2 imports)."""
         import copy
         self.est.Config_Source = lambda: copy.deepcopy(cfg)
+        self.est.Live = True                # as after the first Run
         self.tab.show()
         self.est._Refresh()
         for _ in range(100):
@@ -351,7 +373,7 @@ class VoltageEstimatorTests(unittest.TestCase):
 
     def test_Estimator_Zoom_Survives_Commit_And_Rings_Mark_The_Band(self):
         """A wheel zoom on the map survives a commit's full redraw, and
-        the red rings sit only on crossings inside +/-dV (2026-10-24)."""
+        the red rings sit only on selected crossings inside +/-dV (2026-10-24)."""
         from types import SimpleNamespace
         self._Build(self.cfg)
         est = self.est
@@ -364,10 +386,145 @@ class VoltageEstimatorTests(unittest.TestCase):
         est.Dv_Box.setValue(300)
         est.Dv_Box.editingFinished.emit()                  # full redraw
         self.assertEqual((est._Map.get_xlim(), est._Map.get_ylim()), view)
-        dvs = [d for st in est._States for d in est._Peak_Dvs(st, est._S)]
+        # Rings mark only the selected peaks (2026-10-24).
+        dvs = [d for st in est._States
+               for k, d in enumerate(est._Peak_Dvs(st, est._S))
+               if k in est._Selected(st)]
         inside = sorted(d for d in dvs if d is not None and abs(d) <= 300)
         self.assertTrue(inside)
         self.assertEqual(sorted(est._Rings.get_ydata()), inside)
+
+    def test_Estimator_Waits_For_Run(self):
+        """F2: before the first Run a refresh reports the change but shows
+        the placeholder without building; once live, it builds
+        (2026-10-24)."""
+        import copy
+        from unittest import mock
+        est = self.est
+        est.Config_Source = lambda: copy.deepcopy(self.cfg)
+        self.tab.show()
+        seen = []
+        est.Config_Changed.connect(lambda: seen.append(1))
+        with mock.patch.object(est, "_Rebuild") as build:
+            est._Refresh()
+            QApplication.processEvents()
+            build.assert_not_called()
+            self.assertEqual(seen, [1])
+            self.assertIsNone(est._Map)
+            est.Live = True
+            est._Refresh()
+            QApplication.processEvents()
+            build.assert_called_once()
+
+    def test_Estimator_Peak_Heights_Stable(self):
+        """Each in-range peak of the spectrum keeps its height as the
+        setpoint moves, and the strongest reads 1; a 600-step grid let
+        the heights jump (2026-10-24). Overlapping tails make a weak
+        peak read above its bare intensity, so heights are compared
+        between setpoints rather than with ``intens``."""
+        import numpy as np
+        self._Build(self.cfg)
+        est = self.est
+        lo, hi = est._Map.get_ylim()
+        heights = []
+        for s in (est._S, est._S + 4e-4):
+            est._Draw_At(s)
+            h = {}
+            for st, line in zip(est._Shown(), est._Spectra):
+                y, v = (np.asarray(a) for a in line.get_data())
+                self.assertAlmostEqual(y.max(), 1.0, delta=0.02)
+                for i, d in enumerate(est._Peak_Dvs(st, s)):
+                    if d is not None and lo <= d <= hi:
+                        h[st["label"], i] = np.interp(d, v, y)
+            heights.append(h)
+        common = heights[0].keys() & heights[1].keys()
+        self.assertGreater(len(common), 3)
+        for k in common:
+            self.assertAlmostEqual(heights[0][k], heights[1][k], delta=0.02)
+
+    def test_Estimator_Selects_Peaks_To_Measure(self):
+        """By default the selection is each state's strongest "Peaks to
+        measure", as the pipeline times them; ticking a component makes
+        an explicit selection from there (2026-10-24)."""
+        self._Build(self.cfg)
+        est = self.est
+        st = est._States[0]                     # 59Co, peaks_to_measure 3
+        top3 = sorted(range(len(st["intens"])),
+                      key=lambda k: -st["intens"][k])[:3]
+        self.assertEqual(est._Selected(st), set(top3))
+        self.assertTrue(est.Peaks_Btn.text().startswith("To measure"))
+        weak = min(range(len(st["intens"])), key=lambda k: st["intens"][k])
+        est._Toggle_Peak(st, weak, True)
+        self.assertEqual(est._Selected(st), set(top3) | {weak})
+        self.assertTrue(est.Peaks_Btn.text().startswith("Selected"))
+        est._Pick(None)
+        self.assertEqual(est._Selected(st), set(top3))
+
+    def test_Estimator_Optimise_Covers_Selected_Peaks(self):
+        """Optimise centres the selected peaks of the shown state in the
+        narrowest sweep that keeps the margin (100 V by default, set with
+        the gear), rounded up
+        to whole steps, and writes Laser and Scan (2026-10-24)."""
+        self._Build(self.cfg)
+        est, gp = self.est, self.tab.params_tab.global_params
+        est.Show_Combo.setCurrentIndex(1)       # 59Co only
+        st = est._Shown()[0]
+        ks = sorted(est._Selected(st))
+        est._Optimise()
+        s, rng = gp.setpoint_cm.value(), gp.scan_range.value()
+        self.assertEqual(est._S, s)
+        steps = rng / gp.scan_step.value()
+        self.assertAlmostEqual(steps, round(steps), places=6)
+
+        def worst(x):
+            dvs = est._Peak_Dvs(st, x)
+            return max(abs(dvs[k]) for k in ks)
+        self.assertEqual(est.Margin_Box.value(), 100.0)
+        need = worst(s) + 100.0
+        self.assertGreaterEqual(rng / 2, need)
+        self.assertLess(rng / 2 - need, gp.scan_step.value())
+        est.Margin_Box.setValue(40.0)           # a tighter margin
+        est._Optimise()
+        self.assertAlmostEqual(gp.scan_range.value() / 2 - (worst(s) + 40.0),
+                               0.0, delta=gp.scan_step.value())
+        for ds in (-1e-4, 1e-4):                # no nearby setpoint is better
+            self.assertGreaterEqual(worst(s + ds), worst(s) - 1e-6)
+
+    def test_Estimate_States_Become_PreAnalysis_Models(self):
+        """Point 8: Add Model > From Estimate lays each state of the last
+        run over Pre-Analysis data: spin, J, A/B as the pipeline scaled
+        them, the isotope shift as centroid, and (on request) the
+        Estimate transition. Nothing to offer before a Run (2026-10-24)."""
+        from unittest import mock
+        from PySide6.QtWidgets import QMessageBox
+        from gui.preanalysis_tab import PreAnalysisTab
+        self.assertIsNone(self.est.Model_Source())     # not run yet
+        self._Build(self.cfg)
+        cfg, states = self.est.Model_Source()
+        pa = PreAnalysisTab()
+        with mock.patch.object(QMessageBox, "question",
+                               return_value=QMessageBox.StandardButton.Yes):
+            pa._Add_Estimate_Models(cfg, states)
+        self.assertEqual((pa._e_lower.value(), pa._e_upper.value(),
+                          pa._harmonic.value()), (3350.494, 47078.494, 4))
+        self.assertEqual(len(pa._model_panels), len(states))
+        for st, panel in zip(states, pa._model_panels):
+            p = panel.get_model_params()
+            self.assertEqual(p["I"], st["I"])
+            self.assertEqual((p["Jl"], p["Ju"]), (5.0, 6.0))
+            for key, value in zip(("Al", "Au", "Bl", "Bu"), st["hfs"]):
+                self.assertAlmostEqual(p[key], value, places=2)
+            self.assertAlmostEqual(p["centroid"], st["shift"], places=2)
+        self.assertAlmostEqual(
+            pa._model_panels[0].get_model_params()["Al"], 1056.8, places=2)
+        # The menu route: "Blank model", then one entry per state.
+        pa._Fill_Model_Menu()            # no window: no Estimate to offer
+        acts = pa._Add_Model_Btn.menu().actions()
+        self.assertEqual(acts[0].text(), "Blank model")
+        self.assertFalse(acts[-1].isEnabled())
+        n = len(pa._model_panels)
+        acts[0].trigger()
+        self.assertEqual(len(pa._model_panels), n + 1)
 
     def test_Estimator_Commit_Writes_Laser_And_Scan(self):
         """A setpoint commit in anchor mode switches to Setpoint mode; a

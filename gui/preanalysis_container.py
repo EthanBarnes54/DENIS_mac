@@ -52,9 +52,9 @@ class PreAnalysisContainer(QWidget):
         try:
             from gui.shared_widgets import _load_settings
             self._pa_dark_mode = bool(
-                _load_settings().get("pa_dark_plots", False))
+                _load_settings().get("pa_dark_plots", True))
         except Exception:
-            self._pa_dark_mode = False
+            self._pa_dark_mode = True
         # Session-global spectrum-tab grid toggles.
         self._pa_grid_x = False
         self._pa_grid_y = False

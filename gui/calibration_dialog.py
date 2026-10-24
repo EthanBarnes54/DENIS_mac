@@ -796,10 +796,10 @@ class CalibrationDialog(QDialog):
         try:
             s = _load_settings()
         except Exception:                                 # noqa: BLE001
-            return False
+            return True
         if DARK_SETTING in s:
             return bool(s.get(DARK_SETTING))
-        return bool(s.get("pa_dark_plots", False))
+        return bool(s.get("pa_dark_plots", True))
 
     def _update_dark_tip(self):
         self._dark_btn.setToolTip(

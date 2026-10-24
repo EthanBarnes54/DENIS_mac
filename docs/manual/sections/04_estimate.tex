@@ -123,9 +123,13 @@ spectrum and its own row to the timing table.
 
 \subsection{Running the estimation}
 
-Click \app{Run Estimation} in the \app{Run Options} group (under the
-isotope list). The log streams in real time and, on completion, contains
-in order:
+Click \app{Run} in the \app{Run Options} group (under the isotope
+list). The plots, the log, and the voltage range estimator stay empty
+until then. From the first run on, every change (an edit, an undo, an
+estimator commit, the palette, \app{Generate plots}) re-runs the
+estimation about half a second after the last edit and updates all
+three; an incomplete configuration is reported in the status bar and
+the log, and the last good plots stay up. The log contains, in order:
 
 \begin{enumerate}
     \item A header summarising the inputs and, in anchor mode, the
@@ -142,14 +146,13 @@ in order:
         isomer.
 \end{enumerate}
 
-The log is also written verbatim to a \code{.log} file in the run's
-output folder (\code{cls\_<timestamp>} under the chosen
-\app{Output directory}); the YAML used for the run is preserved
-alongside it for reproducibility. The run additionally persists its
-plot arrays and peak table (\code{estimate\_results.npz},
-\code{peaks.csv}), and the save file records the run folder --- so a
-saved session restores its plots, peak table, and log on load without
-re-running.
+Runs go to a temporary folder that is deleted when DENIS closes.
+\app{Save} copies the latest run into the chosen \app{Output directory}
+as a \code{cls\_<timestamp>} folder: the log written verbatim to a
+\code{.log} file, the plot PDFs, and the plot arrays and peak table
+(\code{estimate\_results.npz}, \code{peaks.csv}). The session save
+file records the saved folder --- so a saved session restores its
+plots, peak table, and log on load without re-running.
 
 \subsection{Simulated spectra}
 
@@ -165,12 +168,12 @@ reveals the exported PDF in the system file viewer.
 \subsection{Voltage range estimator}
 
 The \app{Voltage Range Estimator} picks a laser setpoint and a sweep
-interactively, using the same physics as \app{Run Estimation}. Its map
+interactively, using the same physics as \app{Run}. Its map
 plots, against the fundamental setpoint, the voltage offset $\Delta V$
 at which every hyperfine component resonates: one line per component,
 solid for ground states and dashed for isomers, in each isotope's
 colour. A red bar marks the current setpoint, with a red ring where it
-crosses a line inside the sweep; a shaded band marks the $\pm$\app{dV}
+crosses a selected peak's line inside the sweep; a shaded band marks the $\pm$\app{dV}
 sweep; thin
 \emph{centre} markers show the setpoint that puts each state's centroid
 at $\Delta V = 0$. Beside the map, the spectrum at the current setpoint
@@ -188,16 +191,25 @@ written to \app{Laser} $\rightarrow$ \app{Setpoint}; in anchor mode the
 \app{Setpoint} radio is selected and the anchor fields keep their
 values. Entering \app{dV} writes \app{Scan} $\rightarrow$
 \app{Voltage range} $= 2\,$\app{dV}. Both writes can be undone.
+\app{Peaks} picks the components the sweep must cover: by default
+each state's strongest \app{Peaks to measure} (the ones the run time
+counts), all components, or any ticked per state; selected components
+are drawn bold and marked in the readout. \app{Optimise} then sets the
+setpoint and the smallest \app{dV} that keep the selected peaks of the
+shown states inside the sweep, with 100\,V of baseline on each side
+(the gear button beside it changes this), rounding the scan range up to whole steps; it is one undo step.
+With \app{Show} on a single state it optimises for that state alone.
 \app{Window} only sets the plotted $\Delta V$ range (\app{auto} fits
 the components), and \app{Show} limits the view to one state. The
-estimator never starts a run: the plots and the log change only on
-\app{Run Estimation}.
+estimator appears after the first \app{Run}; its commits then re-run
+the estimation like any other change.
 
 \subsection{Loading a previous estimation}
 
-\app{Load Estimation\dots} (next to \app{Run Estimation}) reopens any
-previous \code{cls\_<timestamp>} run folder for viewing --- plots,
+\app{Load\dots} (next to \app{Run} and \app{Save}) reopens any
+saved \code{cls\_<timestamp>} run folder for viewing --- plots,
 peak table, and log are restored without re-running and without
-creating new output. Runs from before the \code{.npz} persistence
+creating new output. A loaded run, like a loaded configuration, stays
+a static view until \app{Run} is pressed. Runs from before the \code{.npz} persistence
 existed hold only PDFs; their pages are rendered onto the live
 matplotlib canvas, so pan/zoom/save still work.

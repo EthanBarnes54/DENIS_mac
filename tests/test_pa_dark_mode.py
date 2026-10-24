@@ -203,6 +203,27 @@ class DarkModeTests(unittest.TestCase):
             PreAnalysisTab._update_models = orig
         self.assertFalse(calls)
 
+    def test_Spectrum_Legend_Follows_Models(self):
+        """The legend lists exactly the drawn models and keeps the dark
+        theme: it kept a removed model, and model edits turned it light
+        on dark plots (2026-10-24)."""
+        pa = self.pa
+        pa._set_dark_mode(True, replot=False)
+
+        def legend():
+            leg = pa._ax.get_legend()
+            return None if leg is None else [t.get_text()
+                                             for t in leg.get_texts()]
+        pa._add_model()
+        self.assertEqual(legend(), ["Model 1"])
+        leg = pa._ax.get_legend()
+        self.assertEqual({t.get_color() for t in leg.get_texts()}, {"white"})
+        pa._model_panels[0].setChecked(False)
+        self.assertIsNone(legend())
+        pa._model_panels[0].setChecked(True)
+        pa._remove_checked_models()
+        self.assertIsNone(legend())
+
     def test_grid_toggles_and_dark_colour(self):
         # Buttons exist between layout and dark button; toggling sets
         # state and the grid colour tracks the theme.

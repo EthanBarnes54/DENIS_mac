@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QRadioButton, QButtonGroup, QPushButton,
     QPlainTextEdit, QScrollArea, QSplitter, QFileDialog, QMessageBox,
     QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
-    QAbstractButton, QAbstractSpinBox, QApplication,
+    QAbstractButton, QAbstractSpinBox, QApplication, QMenu, QWidgetAction,
 )
 from PySide6.QtCore import (
     Qt, Signal, QLocale, QTimer, QUrl, QCoreApplication, QEvent,
@@ -65,6 +65,10 @@ from cls_estimations.hfs_model import compute_hfs_lines
 
 # Monospace for the log and the estimator readout: a stylesheet, because
 # the zoom stamps fonts straight onto widgets and would undo a setFont.
+# Default baseline Optimise leaves beyond the outermost selected peaks (V),
+# so each line's wings and some background are scanned; the gear changes it.
+OPTIMISE_MARGIN_V = 100.0
+
 _MONO_QSS = ("QPlainTextEdit { font-family: 'Consolas', 'Courier New',"
              " 'Liberation Mono', monospace; }")
 
@@ -1728,6 +1732,7 @@ class RunTab(QWidget):
     Also builds the Run Options group (``_top_host``), which
     ParametersTab hosts under the isotope list."""
     run_requested = Signal()
+    save_requested = Signal()
     load_requested = Signal()
 
     def __init__(self, parent=None):
@@ -1774,25 +1779,31 @@ class RunTab(QWidget):
         self.gen_plots.setToolTip("Generate HFS spectra and overview plots")
         opts_form.addRow(self.gen_plots)
 
-        # Run + Load: regular-sized buttons on one row INSIDE the
-        # options group (the oversized full-width pair below the group
-        # dominated the column).
+        # Run / Save / Load: one row INSIDE the options group, equal
+        # widths spanning the group (the natural-width pair with a
+        # trailing stretch matched neither each other nor the edge,
+        # 2026-10-24). Short labels fit column 2; the tooltips say more.
         btn_row = QHBoxLayout()
-        self.run_btn = QPushButton("Run Estimation")
-        self.run_btn.setToolTip("Start the run time estimation calculation")
-        self.run_btn.clicked.connect(self.run_requested.emit)
-        btn_row.addWidget(self.run_btn)
-
+        self.run_btn = QPushButton("Run")
+        self.run_btn.setToolTip(
+            "Run the estimation. From then on, every change re-runs it and "
+            "updates the plots, the log and the estimator.")
+        self.Save_Btn = QPushButton("Save", enabled=False)
+        self.Save_Btn.setToolTip(
+            "Save the latest run (plots, peak table, log) to the output "
+            "directory as a cls_<timestamp> folder.")
         # Load a previous run for viewing — no re-run, no new output
         # folder.
-        self.load_btn = QPushButton("Load Estimation...")
+        self.load_btn = QPushButton("Load...")
         self.load_btn.setToolTip(
             "Load a previous estimation run's folder (cls_<timestamp> "
             "under the output directory): its plots, peak table and log "
             "are restored for viewing without re-running.")
-        self.load_btn.clicked.connect(self.load_requested.emit)
-        btn_row.addWidget(self.load_btn)
-        btn_row.addStretch()
+        for btn, sig in ((self.run_btn, self.run_requested),
+                         (self.Save_Btn, self.save_requested),
+                         (self.load_btn, self.load_requested)):
+            btn.clicked.connect(sig.emit)
+            btn_row.addWidget(btn, 1)
         opts_form.addRow(btn_row)
 
         top_layout.addWidget(opts)
@@ -2302,13 +2313,17 @@ class Voltage_Range_Estimator(QGroupBox):
 
     Every number comes from the pipeline's own functions, fed the dict
     Run feeds it (``Config_Source``, i.e. MainWindow._build_estimate_dict),
-    so the map agrees with Run Estimation. A finished edit (Enter or
+    so the map agrees with Run. A finished edit (Enter or
     focus-out, drag release, 400 ms after the last arrow key) writes
-    Laser > Setpoint or Scan > Voltage range = 2*dV, undoably. Nothing
-    here starts a run or touches the Plots panel or the log. The map
+    Laser > Setpoint or Scan > Voltage range = 2*dV, undoably. It builds
+    only while ``Live`` (after the first Run); until then it shows a
+    placeholder. Any parameter change emits ``Config_Changed``, which
+    MainWindow uses to re-run the pipeline live. Optimise fits the
+    setpoint and sweep to the peaks chosen under Peaks. The map
     zooms with the wheel and pans when dragged off the bar; that view
     survives commits and refreshes until a double-click refits it.
     """
+    Config_Changed = Signal()
 
     def __init__(self, global_params, isotope_list, parent=None):
         super().__init__("Voltage Range Estimator", parent)
@@ -2328,6 +2343,10 @@ class Voltage_Range_Estimator(QGroupBox):
         self.figure = Figure(layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.canvas.setToolTip(
+            "Drag the red bar to move the setpoint, or click the map and use "
+            "the arrow keys (Shift for larger steps). Scroll to zoom, drag "
+            "elsewhere to pan, double-click to refit.")
         for name, slot in (("button_press_event", self._On_Press),
                            ("motion_notify_event", self._On_Motion),
                            ("button_release_event", self._On_Release),
@@ -2336,6 +2355,41 @@ class Voltage_Range_Estimator(QGroupBox):
             self.canvas.mpl_connect(name, slot)
 
         self.Show_Combo = QComboBox()
+        # The peaks Optimise must cover: the pipeline's own choice (each
+        # state's strongest "Peaks to measure", the ones the run time
+        # counts) until components are ticked in the menu.
+        self._Picked = None         # None, or {(state label, index)}
+        self.Peaks_Btn = QPushButton(enabled=False)
+        self.Peaks_Btn.setMenu(QMenu(self.Peaks_Btn,
+                                     aboutToShow=self._Fill_Peaks_Menu))
+        self.Peaks_Btn.setToolTip(
+            "The peaks the sweep must cover: each state's strongest "
+            "\"Peaks to measure\" (the ones the run time counts), all "
+            "components, or the components you tick per state.")
+        self.Optimise_Btn = QPushButton("Optimise", enabled=False,
+                                        clicked=self._Optimise)
+        # The gear: the baseline Optimise leaves beyond the outer peaks, in
+        # a popover rather than another form row.
+        self.Margin_Box = _make_double(OPTIMISE_MARGIN_V, 0, 10000, 1, 10)
+        self.Margin_Box.setSuffix(" V")
+        self.Margin_Box.setKeyboardTracking(False)
+        self.Margin_Box._Own_Undo = True    # a preference, not a parameter
+        self.Margin_Box.valueChanged.connect(self._Optimise_Tip)
+        margin = QWidget()
+        margin_row = QHBoxLayout(margin)
+        margin_row.setContentsMargins(10, 6, 10, 6)
+        margin_row.addWidget(QLabel("Margin beyond the outer peaks (\u00b1):"))
+        margin_row.addWidget(self.Margin_Box)
+        margin_menu = QMenu(self)
+        act = QWidgetAction(margin_menu)
+        act.setDefaultWidget(margin)
+        margin_menu.addAction(act)
+        self.Margin_Btn = QPushButton(lucide_icon("settings"), "",
+                                      toolTip="Optimise margin")
+        self.Margin_Btn.setFixedWidth(self.Margin_Btn.sizeHint().height())
+        self.Margin_Btn.clicked.connect(lambda: margin_menu.exec(
+            self.Margin_Btn.mapToGlobal(self.Margin_Btn.rect().bottomLeft())))
+        self._Optimise_Tip()
         self.Setpoint_Box = _make_double(0, 0, 200000, 6, 0.001)
         self.Dv_Box = _make_double(50, 0.05, 50000, 2, 10)
         self.Window_Box = _make_double(0, 0, 100000, 1, 50)
@@ -2343,22 +2397,22 @@ class Voltage_Range_Estimator(QGroupBox):
         for box in (self.Setpoint_Box, self.Dv_Box, self.Window_Box):
             box.setKeyboardTracking(False)
             box._Own_Undo = True    # commits push their own undo step
-        hint = QLabel("Drag the red bar, or click the map and use \u2190 "
-                      "\u2192 (\u00b10.001, Shift \u00b10.01). Wheel zooms, "
-                      "dragging pans, double-click refits. Enter applies.",
-                      wordWrap=True)
         self.Readout = QPlainTextEdit(
             readOnly=True, styleSheet=_MONO_QSS,
             lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap)
 
         form = QFormLayout()
         form.addRow("Show:", self.Show_Combo)
+        peaks_row = QHBoxLayout()
+        peaks_row.addWidget(self.Peaks_Btn, 1)
+        peaks_row.addWidget(self.Optimise_Btn)
+        peaks_row.addWidget(self.Margin_Btn)
+        form.addRow("Peaks:", peaks_row)
         form.addRow("Setpoint (cm\u207b\u00b9):", self.Setpoint_Box)
         form.addRow("dV (\u00b1V):", self.Dv_Box)
         form.addRow("Window (\u00b1V):", self.Window_Box)
         side = QVBoxLayout()
         side.addLayout(form)
-        side.addWidget(hint)
         side.addWidget(self.Readout, 1)
         row = QHBoxLayout(self)
         row.addWidget(self.canvas, 1)
@@ -2374,7 +2428,7 @@ class Voltage_Range_Estimator(QGroupBox):
                                  timeout=self._Commit_Setpoint)
         self._Hook(global_params)
         isotope_list.order_changed.connect(self._On_Isotopes_Changed)
-        self._Show_Placeholder("")
+        self.Set_Live(False)
 
     # ── Refresh from the parameters ─────────────────────────────
 
@@ -2402,23 +2456,35 @@ class Voltage_Range_Estimator(QGroupBox):
         only if they changed, and not while the pane is hidden."""
         self._Refresh_Timer.start()
 
+    def Set_Live(self, on):
+        """Build from the parameters (after a Run), or show the "press
+        Run" placeholder (at start, and after a Load or a config load)."""
+        self.Live, self._Dirty = on, True
+        if on:
+            self.Schedule_Refresh()
+        else:
+            self._Show_Placeholder(
+                "Press Run to show the voltage range estimator.")
+
     def showEvent(self, event):
         super().showEvent(event)
         if self._Dirty:
-            self._Dirty = False
             self.Schedule_Refresh()
 
     def _Refresh(self):
+        """Emit Config_Changed when the parameters changed, before the
+        visibility check: an undo while the plots are expanded must still
+        reach the live run. Build only while live and shown."""
         if self.Config_Source is None:
-            return
-        if not self.isVisible():
-            self._Dirty = True
             return
         d = self.Config_Source()
         d.pop("last_run", None)
-        if d == self._Snapshot:
+        if d != self._Snapshot:
+            self._Snapshot, self._Dirty = d, True
+            self.Config_Changed.emit()
+        if not (self._Dirty and self.Live and self.isVisible()):
             return
-        self._Snapshot = d
+        self._Dirty = False
         if "satlas2" in sys.modules or "reference" not in d:
             self._Rebuild()
         else:
@@ -2495,7 +2561,10 @@ class Voltage_Range_Estimator(QGroupBox):
                     # centroid = nu0 + isotope (or isomer) shift, as in run()
                     centroid=nu0 + state.isotope_shift_MHz,
                     offsets=self._Hfs_Cache[key][0],
-                    intens=self._Hfs_Cache[key][1]))
+                    intens=self._Hfs_Cache[key][1],
+                    n_meas=state.peaks_to_measure,
+                    I=state.I, shift=state.isotope_shift_MHz,
+                    hfs=(A_l, A_u, B_l, B_u)))
         if cfg.laser.setpoint_cm is None:
             # Mirrors the "Resolve anchor" block of cls_estimate.run().
             anchor = next((iso for iso in cfg.isotopes
@@ -2534,10 +2603,134 @@ class Voltage_Range_Estimator(QGroupBox):
         i = self.Show_Combo.currentIndex()
         return self._States if i <= 0 else self._States[i - 1:i]
 
+    def Model_Source(self):
+        """``(parsed config, states)`` of the last build while live, for
+        Pre-Analysis's "Add Model" menu; None before the first Run."""
+        if self.Live and self._Cfg is not None:
+            return self._Cfg, self._States
+        return None
+
+    def _Selected(self, st):
+        """Indices of ``st``'s components Optimise must cover. By default
+        the strongest "Peaks to measure", in the order the pipeline's
+        estimate_isotope_timing picks them; no count means all."""
+        if self._Picked is None:
+            i, n = st["intens"], st["n_meas"]
+            return set(sorted(range(len(i)), key=lambda k: i[k],
+                              reverse=True)[:len(i) if n is None else n])
+        return {k for label, k in self._Picked if label == st["label"]}
+
+    # ── Peak selection and Optimise ─────────────────────────────
+
+    def _Fill_Peaks_Menu(self):
+        """The pipeline's choice, all components, or components ticked per
+        shown state, strongest first."""
+        menu = self.Peaks_Btn.menu()
+        for sub in menu.findChildren(QMenu):
+            sub.deleteLater()
+        menu.clear()
+        default = menu.addAction("Peaks to measure", lambda: self._Pick(None))
+        default.setCheckable(True)
+        default.setChecked(self._Picked is None)
+        menu.addAction("All components", lambda: self._Pick(
+            {(st["label"], k) for st in self._States
+             for k in range(len(st["offsets"]))}))
+        menu.addSeparator()
+        for st in self._Shown():
+            # Parented explicitly: PySide deleted a submenu made by
+            # addMenu(title) once its action wrapper was collected.
+            sub = QMenu(st["label"], menu)
+            menu.addMenu(sub)
+            sub.installEventFilter(self)    # stays open while ticking
+            sel = self._Selected(st)
+            for k in sorted(range(len(st["intens"])),
+                            key=lambda k: -st["intens"][k]):
+                act = sub.addAction(f"{st['offsets'][k]:+.1f} MHz   "
+                                    f"{st['intens'][k]:.3f}")
+                act.setCheckable(True)
+                act.setChecked(k in sel)
+                act.toggled.connect(
+                    lambda on, st=st, k=k: self._Toggle_Peak(st, k, on))
+
+    def eventFilter(self, obj, event):
+        """Tick a Peaks submenu entry without closing the menu."""
+        if (isinstance(obj, QMenu)
+                and event.type() == QEvent.Type.MouseButtonRelease):
+            act = obj.activeAction()
+            if act is not None and act.isCheckable():
+                act.trigger()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _Pick(self, picked):
+        self._Picked = picked
+        self._Draw_View()
+
+    def _Toggle_Peak(self, st, k, on):
+        if self._Picked is None:    # start from the pipeline's choice
+            self._Picked = {(s["label"], j) for s in self._States
+                            for j in self._Selected(s)}
+        (self._Picked.add if on else self._Picked.discard)((st["label"], k))
+        self._Draw_View()
+
+    def _Optimise_Tip(self, *_):
+        self.Optimise_Btn.setToolTip(
+            "Set the setpoint and the smallest dV that keep the selected "
+            "peaks of the shown states inside the sweep, with "
+            f"{self.Margin_Box.value():g} V to spare on each side (the gear "
+            "changes it). Use Show to optimise for one state.")
+
+    def _Optimise(self):
+        """Setpoint and smallest sweep that keep the selected peaks of the
+        shown states inside +/-dV, Margin_Box volts to spare (100 V by
+        default), the scan range rounded up to whole steps; one undo step.
+        The worst |dV| over the peaks is convex in the setpoint, so a
+        golden-section search between the setpoints that centre each
+        peak finds its minimum. Every dV comes from the pipeline."""
+        picks = [(st, sorted(self._Selected(st))) for st in self._Shown()]
+        picks = [(st, ks) for st, ks in picks if ks]
+        if self._Map is None or not picks:
+            return
+
+        def worst(s):
+            out = 0.0
+            for st, ks in picks:
+                dvs = self._Peak_Dvs(st, s)
+                if any(dvs[k] is None for k in ks):
+                    return np.inf
+                out = max([out] + [abs(dvs[k]) for k in ks])
+            return out
+        xs = [self._Setpoint_For(st["centroid"] + st["offsets"][k],
+                                 self._V0, st["mass"])
+              for st, ks in picks for k in ks]
+        lo, hi, g = min(xs), max(xs), (np.sqrt(5) - 1) / 2
+        for _ in range(60):
+            a, b = hi - g * (hi - lo), lo + g * (hi - lo)
+            lo, hi = (lo, b) if worst(a) <= worst(b) else (a, hi)
+        s = round((lo + hi) / 2, 6)
+        gp = self._Global_Params
+        step = gp.scan_step.value()
+        rng = min(gp.scan_range.maximum(), step * np.ceil(2 * (
+            worst(s) + self.Margin_Box.value()) / step))
+        if not np.isfinite(rng):
+            return
+        stack = getattr(self.window(), "_undo_stack", None)
+        if stack is not None:
+            stack.beginMacro("Optimise sweep")
+        self._S = s
+        self._Commit_Setpoint()     # anchor mode -> Setpoint, as a drag does
+        _Set_Spin_Undoable(gp.scan_range, float(rng), self)
+        if stack is not None:
+            stack.endMacro()
+        self.Dv_Box.setValue(rng / 2)
+        self._Reset_View()
+
     # ── Drawing ─────────────────────────────────────────────────
 
     def _Show_Placeholder(self, text):
         self._Map = None
+        self.Peaks_Btn.setEnabled(False)
+        self.Optimise_Btn.setEnabled(False)
         self.figure.clear()
         self.figure.text(0.5, 0.5, text, ha="center", va="center",
                          color="gray", wrap=True)
@@ -2563,6 +2756,13 @@ class Voltage_Range_Estimator(QGroupBox):
                     for w in (-win, win)]
         pad = 0.05 * (max(xs) - min(xs)) or 1e-3
         fit = (min(xs) - pad, max(xs) + pad)
+        # The FWHM in volts, through the pipeline's conversion, so _Draw_At
+        # samples finely enough to resolve every peak.
+        f = self._Cfg.linewidth_fwhm_MHz / 2
+        fws = [abs(a - b) for a, b in (self._Peak_Dvs(dict(
+            st, offsets=[st["offsets"][0] - f, st["offsets"][0] + f]), s)
+            for st in shown) if a is not None and b is not None]
+        self._Fwhm_V = min(fws, default=0.0)
         # The lines also cover a zoomed-out or panned view. They are near
         # straight, so 60 points stay accurate (to ~0.03 V) at any zoom.
         self._Span = (min(fit[0], self._Zoom[0][0]) if self._Zoom else fit[0],
@@ -2575,7 +2775,11 @@ class Voltage_Range_Estimator(QGroupBox):
         for st in shown:
             lines = [[np.nan if v is None else v
                       for v in self._Peak_Dvs(st, x)] for x in grid]
-            self._Map.plot(grid, lines, color=st["color"], ls=st["ls"], lw=1)
+            sel = self._Selected(st)
+            for k, ln in enumerate(self._Map.plot(
+                    grid, lines, color=st["color"], ls=st["ls"], lw=1)):
+                # Unselected lines stay traceable but read as background.
+                ln.set(**({"lw": 1.8} if k in sel else {"alpha": 0.1}))
             x_c = self._Setpoint_For(st["centroid"], self._V0, st["mass"])
             self._Centres.append(x_c)
             self._Map.axvline(x_c, color=st["color"], ls=":", lw=0.8)
@@ -2597,33 +2801,49 @@ class Voltage_Range_Estimator(QGroupBox):
                              f"x{self._Cfg.laser.harmonic})")
         self._Map.set_ylabel("dV (V)")
         spec.set_xlim(0, 1.05)
-        spec.set_xlabel("Intensity")
+        # On top: below, it collided with the map's wide setpoint label.
+        spec.set_xlabel("Relative\nintensity", fontsize="small")
+        spec.xaxis.set_label_position("top")
         self._Bar = self._Map.axvline(s, color="red", lw=1.5)
         self._Rings = self._Map.plot([], [], "o", ms=9, mfc="none", mec="red",
                                      mew=1.5, zorder=3)[0]
         self._Spectra = [spec.plot([], [], color=st["color"], ls=st["ls"])[0]
                          for st in shown]
+        n = sum(len(self._Selected(st)) for st in shown)
+        self.Peaks_Btn.setText(
+            f"To measure ({n})" if self._Picked is None else
+            f"All ({n})" if n == sum(len(st["offsets"]) for st in shown)
+            else f"Selected ({n})")
+        self.Peaks_Btn.setEnabled(True)
+        self.Optimise_Btn.setEnabled(n > 0)
         self._Draw_At(s)
 
     def _Draw_At(self, s):
         """Move the bar to setpoint ``s``; rings, spectrum and readout
         follow live (no satlas2 call, no rescale). Red rings mark only the
-        crossings inside +/-dV; the spectrum is sampled over the visible
-        dV range, so it stays sharp when the map is zoomed."""
+        selected peaks' crossings inside +/-dV. The spectrum is sampled over the visible dV
+        range and every component, at a tenth of the FWHM: on a 600-step
+        grid of the visible range alone, the peak heights jumped as the
+        setpoint moved (2026-10-24)."""
         cfg, self._S, dv = self._Cfg, s, self.Dv_Box.value()
         self._Bar.set_xdata([s, s])
         rows, inside = [], []
+        lo, hi, fw = *self._Map.get_ylim(), self._Fwhm_V
         for st, line in zip(self._Shown(), self._Spectra):
-            dvs = self._Peak_Dvs(st, s)
-            inside += [d for d in dvs if d is not None and abs(d) <= dv]
+            dvs, sel = self._Peak_Dvs(st, s), self._Selected(st)
+            inside += [d for k, d in enumerate(dvs)
+                       if k in sel and d is not None and abs(d) <= dv]
+            pk = [d for d in dvs if d is not None]
+            rng = (min([lo] + pk) - 3 * fw, max([hi] + pk) + 3 * fw)
             v, y = generate_voltage_spectrum(
                 st["offsets"], st["intens"], st["centroid"],
                 self._Nu_Laser(s), st["mass"], cfg.beam.charge_state,
-                self._V0, cfg.beam.geometry, cfg.linewidth_fwhm_MHz,
-                self._Map.get_ylim(), v_steps=600)
+                self._V0, cfg.beam.geometry, cfg.linewidth_fwhm_MHz, rng,
+                v_steps=int(min(20000, max(
+                    600, 10 * (rng[1] - rng[0]) / (fw or np.inf)))))
             line.set_data(y, v)
-            rows += [(st["label"], off, amp, d)
-                     for off, amp, d in zip(st["offsets"], st["intens"], dvs)]
+            rows += [(st["label"], off, amp, d, k in sel) for k, (off, amp, d)
+                     in enumerate(zip(st["offsets"], st["intens"], dvs))]
         self._Rings.set_data([s] * len(inside), inside)
         self._Write_Readout(s, rows)
         self.canvas.draw_idle()
@@ -2637,16 +2857,18 @@ class Voltage_Range_Estimator(QGroupBox):
                 f"Laser    {self._Nu_Laser(s) / 1e6:.6f} THz",
                 f"V0       {self._V0:.1f} V  {cfg.beam.geometry}",
                 f"Sweep    \u00b1{dv:.2f} V (scan range {2 * dv:.1f} V)",
-                "", f"{'State':<{w}}{'MHz':>9}{'dV (V)':>10}{'Int':>8}"]
-        n_in = 0
-        for label, off, amp, d in sorted(
+                "", f"  {'State':<{w}}{'MHz':>9}{'dV (V)':>10}{'Int':>8}"]
+        n_in = n_sel = sel_in = 0
+        for label, off, amp, d, sel in sorted(
                 rows, key=lambda r: np.inf if r[3] is None else r[3]):
             ok = d is not None and abs(d) <= dv
-            n_in += ok
+            n_in, n_sel, sel_in = n_in + ok, n_sel + sel, sel_in + (ok and sel)
             d_txt = "N/A" if d is None else f"{d:+.3f}"
-            text.append(f"{label:<{w}}{off:>+9.1f}{d_txt:>10}{amp:>8.4f}"
-                        f"  {'in' if ok else 'OUT'}")
-        text.append(f"{n_in}/{len(rows)} components within \u00b1{dv:.2f} V")
+            mark = "\u2022" if sel else " "    # the peaks Optimise covers
+            text.append(f"{mark} {label:<{w}}{off:>+9.1f}"
+                        f"{d_txt:>10}{amp:>8.4f}  {'in' if ok else 'OUT'}")
+        text.append(f"{n_in}/{len(rows)} components within \u00b1{dv:.2f} V, "
+                    f"{sel_in}/{n_sel} selected")
         self.Readout.setPlainText("\n".join(text))
         # Wide enough for the longest line (frame, margins, scrollbar).
         fm = self.Readout.fontMetrics()
@@ -2904,8 +3126,15 @@ class EstimateTab(QWidget):
             "<h4>Run Options &amp; Log</h4>"
             "\u2022 Under the isotope list: set the output directory and "
             "colour palette, and toggle <b>Generate plots</b>.<br>"
-            "\u2022 Click <b>Run Estimation</b> to start the calculation. "
-            "Progress and results appear in the log panel.<br><br>"
+            "\u2022 <b>Run</b> starts the calculation; the plots, the log "
+            "and the voltage range estimator appear once it finishes. From "
+            "then on every change (including undo and the estimator) re-runs "
+            "it and updates them live; pressing <b>Run</b> again re-runs at "
+            "once.<br>"
+            "\u2022 Live runs are temporary. <b>Save</b> copies the latest "
+            "run into the output directory as a <i>cls_&lt;timestamp&gt;</i> "
+            "folder; <b>Load...</b> opens a saved run for viewing until the "
+            "next <b>Run</b>.<br><br>"
 
             "<h4>Plots</h4>"
             "\u2022 <b>Individual Spectra</b> \u2013 Simulated HFS spectrum "
@@ -2923,23 +3152,34 @@ class EstimateTab(QWidget):
             "(\u0394V from the beam voltage, one line per component; "
             "isomers dashed) as the laser setpoint moves, the spectrum at "
             "the current setpoint, and a readout of which components fall "
-            "inside the \u00b1dV sweep. It uses the same physics as Run "
-            "Estimation.<br>"
+            "inside the \u00b1dV sweep. It uses the same physics as "
+            "<b>Run</b>.<br>"
             "\u2022 Drag the red bar, or click the map and use the arrow "
-            "keys (Shift for bigger steps); click a <i>centre</i> marker to "
-            "snap to it. Red rings mark the crossings inside \u00b1dV.<br>"
+            "keys (0.001 cm⁻¹ per press, 0.01 with Shift); click a "
+            "<i>centre</i> marker to "
+            "snap to it. Red rings mark where the selected peaks (see "
+            "<b>Peaks</b>) cross the bar inside \u00b1dV.<br>"
             "\u2022 The mouse wheel zooms the map around the cursor, "
             "dragging away from the bar pans it, and a double-click "
             "refits it.<br>"
             "\u2022 Releasing the bar, or pressing Enter in <b>Setpoint</b>, "
             "writes Laser \u25b8 Setpoint (anchor mode switches to "
-            "Setpoint). <b>dV</b> writes Scan \u25b8 Voltage range = 2 "
-            "\u00d7 dV. Both can be undone.<br>"
+            "Setpoint). Pressing Enter in <b>dV</b> writes Scan \u25b8 "
+            "Voltage range = 2 \u00d7 dV. Both can be undone.<br>"
+            "\u2022 <b>Peaks</b> picks the components the sweep must "
+            "cover: by default each state's strongest <i>Peaks to "
+            "measure</i> (the ones the run time counts), all components, "
+            "or any you tick per state. Selected components are drawn bold "
+            "and marked \u2022 in the readout. <b>Optimise</b> then sets the "
+            "setpoint and the smallest dV that keep them inside the sweep "
+            "with 100 V to spare on each side (the gear beside "
+            "<b>Optimise</b> changes it), rounded up to whole steps (one undo step). With <b>Show</b> on one state it "
+            "optimises for that state alone.<br>"
             "\u2022 <b>Window</b> only sets the plotted voltage range "
             "(auto fits the components); <b>Show</b> picks one state or "
             "all.<br>"
-            "\u2022 The plots and the log change only when you press "
-            "<b>Run Estimation</b>."
+            "\u2022 It appears after the first <b>Run</b> and follows every "
+            "change from then on."
         )
         from gui.analysis.helpers import _show_scrollable_info
         _show_scrollable_info(self, "Estimate Tab \u2013 Information", text)

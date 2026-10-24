@@ -125,6 +125,19 @@ class MainWindow(QMainWindow):
             self._on_load_estimation)
         self.estimate_tab.Voltage_Estimator.Config_Source = (
             self._build_estimate_dict)
+        # Live mode (after the first Run): any change re-runs the pipeline
+        # 400 ms after the last edit, into a per-session temp folder; Save
+        # copies the latest run to the output directory (2026-10-24).
+        rt = self.estimate_tab.run_tab
+        rt.save_requested.connect(self._On_Save_Estimation)
+        self._Estimate_Run = None       # latest run in the temp folder
+        self._Estimate_Tmp = None       # tempfile.mkdtemp, made lazily
+        self._Live_Pending = False      # a change arrived mid-run
+        self._Live_Timer = QTimer(self, singleShot=True, interval=400,
+                                  timeout=lambda: self._Start_Estimate_Run(True))
+        for sig in (self.estimate_tab.Voltage_Estimator.Config_Changed,
+                    rt.palette_combo.currentIndexChanged, rt.gen_plots.toggled):
+            sig.connect(self._Schedule_Live_Run)
         self.tabs.addTab(self.estimate_tab, _icon("sigma"), "Estimate")
 
         # Tab 2: Pre-Analysis
@@ -523,6 +536,7 @@ class MainWindow(QMainWindow):
     def _restore_estimate(self, data):
         """Populate the Estimate tab from a dict."""
         et = self.estimate_tab
+        self._Set_Estimate_Live(False)          # back to "press Run"
         et.params_tab.global_params.from_dict(data)
         et.params_tab.isotope_list.clear_all()
         for iso_dict in data.get("isotopes", []):
@@ -1368,52 +1382,80 @@ class MainWindow(QMainWindow):
     # ── Run ──────────────────────────────────────────────────────
 
     def _on_run(self):
+        """Run button: the checks with dialogs, then a run that turns on
+        live mode when it succeeds. In live mode it re-runs at once."""
         if self._worker is not None and self._worker.isRunning():
+            if self.estimate_tab.Voltage_Estimator.Live:
+                self._Live_Pending = True
+                return
             QMessageBox.warning(self, "Busy",
                                 "A calculation is already running.")
             return
+        # Switch to the Estimate tab (single surface — the run column
+        # with its log is always visible there).
+        self.tabs.setCurrentWidget(self.estimate_tab)
+        problem = self._Start_Estimate_Run(live=False)
+        if problem:
+            QMessageBox.warning(self, "Validation Error", problem)
 
+    def _Schedule_Live_Run(self, *_):
+        if self.estimate_tab.Voltage_Estimator.Live:
+            self._Live_Timer.start()
+
+    def _Set_Estimate_Live(self, on):
+        self.estimate_tab.Voltage_Estimator.Set_Live(on)
+        self.estimate_tab.run_tab.Save_Btn.setEnabled(on)
+
+    def _Start_Estimate_Run(self, live):
+        """Run the pipeline into the session's temp folder. Returns the
+        problem instead of running when the config is incomplete; a live
+        run never pops a dialog, it reports to the status bar and log and
+        leaves the last good plots up. One run at a time: a change made
+        mid-run starts another when this one finishes."""
+        if self._worker is not None and self._worker.isRunning():
+            self._Live_Pending = True
+            return None
         et = self.estimate_tab
-
-        # Validate
-        gp = et.params_tab.global_params
-        if not gp.element_edit.text().strip():
-            QMessageBox.warning(self, "Validation Error",
-                                "Element symbol is required.")
-            return
-        if len(et.params_tab.isotope_list.panels) == 0:
-            QMessageBox.warning(self, "Validation Error",
-                                "At least one isotope is required.")
-            return
-        if et.params_tab.isotope_list.get_reference_panel() is None:
-            QMessageBox.warning(self, "Validation Error",
-                                "No reference isotope selected.\n"
-                                "Please mark one isotope as the reference.")
-            return
+        gp, il = et.params_tab.global_params, et.params_tab.isotope_list
+        problem = ("Element symbol is required."
+                   if not gp.element_edit.text().strip()
+                   else "At least one isotope is required." if not il.panels
+                   else "No reference isotope selected.\nPlease mark one "
+                   "isotope as the reference."
+                   if il.get_reference_panel() is None else None)
 
         # Build config and write to temp file
-        yaml_dict = self._build_estimate_dict()
-        try:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            tmp_path = os.path.join(
-                tempfile.gettempdir(), f"cls_{timestamp}.yaml")
-            with open(tmp_path, "w") as tmp:
-                yaml.dump(yaml_dict, tmp, default_flow_style=False,
-                          sort_keys=False, allow_unicode=True)
-            self._tmp_config = tmp_path
-        except Exception as e:
-            QMessageBox.critical(self, "Error",
-                                 f"Failed to write temp config:\n{e}")
-            return
+        if not problem:
+            try:
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                tmp_path = os.path.join(
+                    tempfile.gettempdir(), f"cls_{timestamp}.yaml")
+                with open(tmp_path, "w") as tmp:
+                    yaml.dump(self._build_estimate_dict(), tmp,
+                              default_flow_style=False, sort_keys=False,
+                              allow_unicode=True)
+                self._tmp_config = tmp_path
+            except Exception as e:
+                problem = f"Failed to write temp config:\n{e}"
+        if problem:
+            if live:
+                self.status.show("Live update skipped: "
+                                 + problem.splitlines()[0])
+                et.run_tab.append_log(problem)
+            return problem
+        if self._Estimate_Tmp is None:
+            import atexit
+            import shutil
+            self._Estimate_Tmp = tempfile.mkdtemp(prefix="denis_estimate_")
+            # Live runs are throwaway until Save; nothing is left behind.
+            atexit.register(shutil.rmtree, self._Estimate_Tmp, True)
+        self._Run_Is_Live = live
 
         # Get run options
         opts = et.run_tab.get_options()
 
         # Clear log
         et.run_tab.log_text.clear()
-        # Switch to the Estimate tab (single surface — the run column
-        # with its log is always visible there).
-        self.tabs.setCurrentWidget(et)
 
         # Store config name for plot loading
         self._run_config_name = os.path.splitext(
@@ -1427,14 +1469,14 @@ class MainWindow(QMainWindow):
                 seen.append(label)
         self._run_file_tag = "_" + "_".join(seen) if seen else ""
 
-        # Disable run button
-        et.run_tab.run_btn.setEnabled(False)
+        # Disable run button (not for live runs, so nothing flickers)
+        et.run_tab.run_btn.setEnabled(live)
         self.status.show_persistent("Estimation running...")
 
         # Start worker
         self._worker = WorkerThread(
             config_path=self._tmp_config,
-            output_dir=opts["output_dir"],
+            output_dir=self._Estimate_Tmp,
             no_plot=opts["no_plot"],
             palette=opts["palette"],
         )
@@ -1471,21 +1513,68 @@ class MainWindow(QMainWindow):
             et.run_tab.palette_combo.currentText(),
         )
 
-        # Persist the plotted arrays next to the PDFs and remember the
-        # run so Save records it and a later load can restore the plots
-        # without re-running (and without re-bloating the output dir).
+        # Persist the plotted arrays next to the PDFs now, while this
+        # run's worker still holds them (a later failed live run replaces
+        # it), and remember the run for Save. Only Save and Load set
+        # _last_estimate_run, so a session points at saved output only.
         palette = et.run_tab.palette_combo.currentText()
         try:
             self._persist_estimate_outputs(actual_output)
         except Exception:
             logging.getLogger("denis").exception(
                 "could not persist estimate arrays to %s", actual_output)
-        self._last_estimate_run = {
+        prev = self._Estimate_Run
+        self._Estimate_Run = {
             "run_dir": actual_output,
             "config_name": config_name,
             "file_tag": self._run_file_tag,
             "palette": palette,
         }
+        self._Drop_Estimate_Run(prev)
+        if not et.Voltage_Estimator.Live:
+            self._Set_Estimate_Live(True)
+        if self._Live_Pending:
+            self._Live_Pending = False
+            self._Live_Timer.start()
+
+    def _Drop_Estimate_Run(self, prev):
+        """Close the pipeline's log (Windows can't delete an open file),
+        then delete the previous temp run unless it is the current one."""
+        logger = logging.getLogger("cls_estimate")
+        for h in list(logger.handlers):
+            h.close()
+            logger.removeHandler(h)
+        if prev and prev["run_dir"] != (self._Estimate_Run or {}).get(
+                "run_dir"):
+            import shutil
+            shutil.rmtree(prev["run_dir"], ignore_errors=True)
+
+    def _On_Save_Estimation(self):
+        """Copy the latest temp run to the output directory, keeping its
+        cls_<timestamp> name (Load finds the files by that prefix)."""
+        import shutil
+        from gui.shared_widgets import get_estimates_dir
+        run = self._Estimate_Run
+        if run is None or not os.path.isdir(run["run_dir"]):
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self.status.show("Estimation running -- save once it finishes")
+            return
+        dest = os.path.join(
+            self.estimate_tab.run_tab.output_dir.text().strip()
+            or get_estimates_dir(), os.path.basename(run["run_dir"]))
+        if (self._last_estimate_run or {}).get("run_dir") == dest \
+                and os.path.isdir(dest):
+            self.status.show("Already saved")
+            return
+        try:
+            shutil.copytree(run["run_dir"], dest, dirs_exist_ok=True)
+        except OSError as e:
+            QMessageBox.critical(self, "Save Estimation",
+                                 f"Could not save to {dest}:\n{e}")
+            return
+        self._last_estimate_run = dict(run, run_dir=dest)
+        self.status.show(f"Saved estimation to {dest}")
 
     def _persist_estimate_outputs(self, run_dir):
         """Write the in-memory run results into the run folder:
@@ -1598,6 +1687,7 @@ class MainWindow(QMainWindow):
                 "cls_<date>_<time>) inside the output directory — it "
                 "holds the run's PDFs, log and results file.")
             return
+        self._Set_Estimate_Live(False)          # a static view until Run
         self._restore_estimate_outputs({
             "run_dir": d,
             "config_name": cfg_name,
@@ -1624,17 +1714,27 @@ class MainWindow(QMainWindow):
     def _on_run_error(self, error_msg):
         et = self.estimate_tab
         et.run_tab.run_btn.setEnabled(True)
-        self.status.show("Estimation failed -- see error dialog")
+        live = getattr(self, "_Run_Is_Live", False)
+        self.status.show("Estimation failed -- see the log" if live
+                         else "Estimation failed -- see error dialog")
         # code review 2026-06-02, worker-thread-exceptions-not-logged:
         # also record the failure in the session log so a trace survives
         # after the dialog is dismissed.
         logging.getLogger("denis").error(
             "Estimation run failed: %s", error_msg)
-        QMessageBox.critical(self, "Calculation Error", error_msg)
+        if live:
+            et.run_tab.append_log(error_msg)
+        else:
+            QMessageBox.critical(self, "Calculation Error", error_msg)
 
         # Clean up temp file
         if hasattr(self, "_tmp_config") and os.path.exists(self._tmp_config):
             os.unlink(self._tmp_config)
+        self._Drop_Estimate_Run({"run_dir": os.path.join(
+            self._Estimate_Tmp, self._run_config_name)})
+        if self._Live_Pending:
+            self._Live_Pending = False
+            self._Live_Timer.start()
 
     # ── Misc ─────────────────────────────────────────────────────
 

@@ -57,7 +57,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QPushButton, QScrollArea, QSplitter,
     QFileDialog, QMessageBox, QColorDialog, QSizePolicy,
     QSlider, QToolButton, QGridLayout, QTabWidget, QDialog,
-    QDialogButtonBox, QApplication,
+    QDialogButtonBox, QApplication, QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QLocale, QEvent
 from PySide6.QtGui import QColor, QPixmap, QIcon
@@ -623,14 +623,51 @@ class FileEntry(QWidget):
         self._name_label = QLabel(f"<b>run_{run_number}</b>")
         card.addWidget(self._name_label)
 
-        # Line 2: voltage, laser, run time (updated after data load)
+        # Line 2: date and run time (updated after data load); line 3
+        # shows the voltage and laser, so they are not repeated here.
         date_str = str(date)[:16] if date else "?"
-        self._detail_label = QLabel(
-            f"V={cooler_v:.1f}  |  "
-            f"\u03bb={laser_sp:.4f} cm\u207b\u00b9  |  "
-            f"{date_str}")
+        self._detail_label = QLabel(date_str)
         self._detail_label.setStyleSheet("color: gray; font-size: 11px;")
         card.addWidget(self._detail_label)
+
+        # Line 3: this run's own Laser / Cooler, mirroring the global
+        # override rows in Options. A ticked value beats the global one,
+        # so runs with missing or wrong metadata can share one plot
+        # (2026-10-24). Unticked, a box shows the file's value, disabled.
+        self.Override_Row = QWidget()
+        self.Override_Row.setStyleSheet(
+            "QCheckBox, QLabel { color: gray; font-size: 11px; }"
+            " QDoubleSpinBox { font-size: 11px; }")
+        row = QHBoxLayout(self.Override_Row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._Overrides = {}
+        for key, name, unit, own, dec, step in (
+                ("laser", "Laser", "cm\u207b\u00b9", laser_sp, 6, 0.1),
+                ("cooler", "Cooler", "V", cooler_v, 2, 1.0)):
+            tick, box = QCheckBox(name), _NoScrollDouble()
+            box.setRange(0, 100000)
+            box.setDecimals(dec)
+            box.setSingleStep(step)
+            box.setValue(own or 0)
+            box.setEnabled(False)
+            box.setKeyboardTracking(False)
+            # No arrows: the card must fit the 380 px column; the arrow
+            # keys still step the value.
+            box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            for w in (tick, box):
+                w.setToolTip(f"Use this value for this run only. It "
+                             f"overrides the global {name} setting in "
+                             f"Options.")
+            tick.toggled.connect(box.setEnabled)
+            tick.toggled.connect(self._On_Override_Changed)
+            box.valueChanged.connect(self._On_Override_Changed)
+            self._Overrides[key] = (tick, box, name, unit, f".{dec}f")
+            row.addWidget(tick)
+            row.addWidget(box)
+            row.addWidget(QLabel(unit))
+        row.addStretch()
+        card.addWidget(self.Override_Row)
 
         outer.addLayout(card, 1)
 
@@ -1066,10 +1103,29 @@ class FileEntry(QWidget):
         else:
             rt_str = f"{self.run_time_s:.0f} s"
 
-        self._detail_label.setText(
-            f"V={self.cooler_v:.1f}  |  "
-            f"\u03bb={self.laser_sp:.4f} cm\u207b\u00b9  |  "
-            f"t={rt_str}")
+        date_str = str(self.date)[:16] if self.date else "?"
+        self._detail_label.setText(f"{date_str}  |  t={rt_str}")
+
+    def _Override(self, key):
+        """This run's own value for ``key`` while ticked, else None."""
+        tick, box = self._Overrides[key][:2]
+        return box.value() if tick.isChecked() else None
+
+    Laser_Override = property(lambda self: self._Override("laser"))
+    Cooler_Override = property(lambda self: self._Override("cooler"))
+
+    def _On_Override_Changed(self, *_):
+        """Show the run's own value next to the file's in the tooltip,
+        then replot through the existing ``toggled`` wiring."""
+        lines = self.toolTip().split("\n")
+        for key, own in (("laser", self.laser_sp), ("cooler", self.cooler_v)):
+            _t, _b, name, unit, fmt = self._Overrides[key]
+            ov = self._Override(key)
+            lines = [f"{name}: {own:{fmt}} {unit}" + (
+                "" if ov is None else f" (file), {ov:{fmt}} {unit} (this run)")
+                if ln.startswith(name + ":") else ln for ln in lines]
+        self.setToolTip("\n".join(lines))
+        self.toggled.emit()
 
     @property
     def is_loaded(self):
@@ -1209,6 +1265,8 @@ class MergedFileEntry(FileEntry):
         # inherited reload button so the icon doesn't tease an
         # action that would crash.
         self.reload_btn.hide()
+        # A merged axis is fixed at merge time: no per-run values.
+        self.Override_Row.hide()
 
         # Override label
         n = len(self.source_info)
@@ -2414,12 +2472,13 @@ class PreAnalysisTab(QWidget):
         # Dark-mode plots: default from the global settings file so the
         # choice persists across sessions (a loaded save may override).
         # Set BEFORE the UI is built so the toggle button and first draw
-        # reflect it.
+        # reflect it. Dark until the user picks, to match the always-dark
+        # UI: a fresh install opened with white plots (2026-10-24).
         try:
             self._dark_mode = bool(
-                _load_settings().get("pa_dark_plots", False))
+                _load_settings().get("pa_dark_plots", True))
         except Exception:
-            self._dark_mode = False
+            self._dark_mode = True
         # Spectrum-tab grid toggles (x / y independently), session-global.
         self._grid_x = False
         self._grid_y = False
@@ -2691,7 +2750,7 @@ class PreAnalysisTab(QWidget):
         cooler_layout.setSpacing(4)
         self._cooler_override_enabled = QCheckBox()
         self._cooler_override_enabled.setToolTip(
-            "Override cooler voltage for all files.\n"
+            "Override cooler voltage for every run without its own value.\n"
             "When unticked, each file uses its own value.")
         cooler_layout.addWidget(self._cooler_override_enabled)
         self._cooler_override = _make_double(
@@ -2714,7 +2773,7 @@ class PreAnalysisTab(QWidget):
         laser_layout.setSpacing(4)
         self._laser_override_enabled = QCheckBox()
         self._laser_override_enabled.setToolTip(
-            "Override laser setpoint for all files.\n"
+            "Override laser setpoint for every run without its own value.\n"
             "When unticked, each file uses its own value.")
         laser_layout.addWidget(self._laser_override_enabled)
         self._laser_override = _make_double(
@@ -3398,8 +3457,16 @@ class PreAnalysisTab(QWidget):
 
         # Two rows so the longer "Duplicate checked" / "Remove checked"
         # labels never clip.
+        # A menu: a blank model, or the Estimate tab's isotopes so the
+        # plan can be laid over the data (2026-10-24). A push button: the
+        # theme draws tool buttons flat, and the split arrow went unseen.
         add_model_btn = QPushButton("+ Add Model")
-        add_model_btn.clicked.connect(self._add_model)
+        add_model_btn.setToolTip(
+            "Add a blank model, or the Estimate tab's isotopes with the "
+            "hyperfine constants and shifts of its last run.")
+        add_model_btn.setMenu(QMenu(add_model_btn,
+                                    aboutToShow=self._Fill_Model_Menu))
+        self._Add_Model_Btn = add_model_btn
         left_layout.addWidget(add_model_btn)
 
         model_btn_row = QHBoxLayout()
@@ -5298,13 +5365,17 @@ class PreAnalysisTab(QWidget):
         """Copy laser setpoint from the selected file entry."""
         fe = self._get_selected_entry()
         if fe:
-            self._laser_override.setValue(fe.laser_sp)
+            self._laser_override.setValue(
+                fe.laser_sp if fe.Laser_Override is None
+                else fe.Laser_Override)
 
     def _auto_fill_cooler(self):
         """Copy cooler voltage from the selected file entry."""
         fe = self._get_selected_entry()
         if fe:
-            self._cooler_override.setValue(fe.cooler_v)
+            self._cooler_override.setValue(
+                fe.cooler_v if fe.Cooler_Override is None
+                else fe.Cooler_Override)
 
     def _on_cooler_override_toggled(self, checked):
         """Enable/disable the cooler voltage field based on its tick."""
@@ -5345,7 +5416,9 @@ class PreAnalysisTab(QWidget):
     def _cooler_for_entry(self, entry):
         """Cooler voltage to use for this entry: override if its tick is
         on, else the file's own value (falling back to override if file
-        value is missing)."""
+        value is missing). The run's own tick beats all of these."""
+        if getattr(entry, "Cooler_Override", None) is not None:
+            return entry.Cooler_Override
         if self._cooler_override_enabled.isChecked():
             return self._cooler_override.value()
         val = getattr(entry, 'cooler_v', 0) or 0
@@ -5361,7 +5434,9 @@ class PreAnalysisTab(QWidget):
     def _laser_for_entry(self, entry):
         """Laser setpoint to use for this entry: override if its tick is
         on, else the file's own value (falling back to override if file
-        value is missing)."""
+        value is missing). The run's own tick beats all of these."""
+        if getattr(entry, "Laser_Override", None) is not None:
+            return entry.Laser_Override
         if self._laser_override_enabled.isChecked():
             return self._laser_override.value()
         val = getattr(entry, 'laser_sp', 0) or 0
@@ -5398,13 +5473,19 @@ class PreAnalysisTab(QWidget):
         overlays, merged entries shown in voltage modes). Each parameter
         independently follows its own override tick."""
         fe = self._default_file_for_axis()
-        if self._cooler_override_enabled.isChecked():
+        own_c = getattr(fe, "Cooler_Override", None)
+        own_l = getattr(fe, "Laser_Override", None)
+        if own_c is not None:
+            cooler = own_c
+        elif self._cooler_override_enabled.isChecked():
             cooler = self._cooler_override.value()
         elif fe is not None and fe.cooler_v > 0:
             cooler = fe.cooler_v
         else:
             cooler = self._cooler_override.value()
-        if self._laser_override_enabled.isChecked():
+        if own_l is not None:
+            laser = own_l
+        elif self._laser_override_enabled.isChecked():
             laser = self._laser_override.value()
         elif fe is not None and fe.laser_sp > 0:
             laser = fe.laser_sp
@@ -6245,9 +6326,7 @@ class PreAnalysisTab(QWidget):
         self._ax.set_ylabel("Normalized" if normalize else "Counts")
 
         if spectrum_only:
-            if any(fe.check.isChecked() for fe in self._file_entries):
-                self._ax.legend(fontsize=8)
-            self._update_models()
+            self._update_models()               # also rebuilds the legend
             if self._ax.has_data():
                 self._ax.margins(x=0.0, y=0.05)
                 self._ax.autoscale_view()
@@ -6264,10 +6343,7 @@ class PreAnalysisTab(QWidget):
         self._ts_ax.set_ylabel("Events", fontsize=8)
         self._ts_ax.tick_params(labelsize=7)
 
-        if any(fe.check.isChecked() for fe in self._file_entries):
-            self._ax.legend(fontsize=8)
-
-        self._update_models()
+        self._update_models()                   # also rebuilds the legend
 
         # Hug the data: no horizontal padding (spectrum drawn edge-to-
         # edge), a little vertical headroom so peaks aren't clipped.
@@ -6973,8 +7049,14 @@ class PreAnalysisTab(QWidget):
                 _log.warning("HFS model overlay '%s' could not be drawn",
                              getattr(panel, "name", "?"), exc_info=True)
 
-        if self._model_panels:
+        # The legend lists exactly what is drawn now. Rebuilt only while a
+        # model panel existed, it kept the last model after its removal,
+        # and came back light-themed on dark plots (2026-10-24).
+        if self._ax.get_legend_handles_labels()[0]:
             self._ax.legend(fontsize=8)
+        elif self._ax.get_legend() is not None:
+            self._ax.get_legend().remove()
+        self._apply_plot_theme([(self._fig, self._canvas)])
         self._ax.relim()
         self._ax.autoscale_view()
         # Model curves/labels live in the fast-path blit background, and
@@ -6996,6 +7078,65 @@ class PreAnalysisTab(QWidget):
         panel.params_changed.connect(self._update_models)
         self._model_panels.append(panel)
         self._model_list_layout.addWidget(panel)
+        self._update_models()
+        return panel
+
+    def _Fill_Model_Menu(self):
+        """A blank model, then one entry per state of the Estimate tab's
+        last run."""
+        menu = self._Add_Model_Btn.menu()
+        menu.clear()
+        menu.addAction("Blank model", self._add_model)
+        menu.addSeparator()
+        est = getattr(getattr(self.window(), "estimate_tab", None),
+                      "Voltage_Estimator", None)
+        src = est.Model_Source() if est is not None else None
+        if src is None:
+            menu.addAction("Run the Estimate tab to add its isotopes"
+                           ).setEnabled(False)
+            return
+        cfg, states = src
+        for st in states:
+            menu.addAction(f"{st['label']} from Estimate",
+                           lambda st=st: self._Add_Estimate_Models(cfg, [st]))
+        if len(states) > 1:
+            menu.addSeparator()
+            menu.addAction("All from Estimate",
+                           lambda: self._Add_Estimate_Models(cfg, states))
+
+    def _Add_Estimate_Models(self, cfg, states):
+        """Models of Estimate states: spin, J, A/B as the pipeline scaled
+        them, centred on the isotope shift, at the Estimate linewidth.
+        Centroids are relative to this tab's transition, so offer to adopt
+        the Estimate tab's when they differ."""
+        tr, h = cfg.transition, cfg.laser.harmonic
+        theirs = (tr.lower_level_cm, tr.upper_level_cm, h)
+        if (self._e_lower.value(), self._e_upper.value(),
+                self._harmonic.value()) != theirs and QMessageBox.question(
+                    self, "Add Model",
+                    "Use the Estimate tab's transition here too "
+                    f"({theirs[0]} \u2192 {theirs[1]} cm\u207b\u00b9, "
+                    f"harmonic {h})?\nThe models are placed relative to "
+                    "it.") == QMessageBox.StandardButton.Yes:
+            for box, value in zip((self._e_lower, self._e_upper,
+                                   self._harmonic), theirs):
+                box.setValue(value)
+        for st in states:
+            hfs = dict(zip(("Al", "Au", "Bl", "Bu"), st["hfs"]))
+            # Quiet while filled: the overlay redrew at each field, through
+            # unphysical in-between spins that satlas2 rejects.
+            panel = self._add_model()
+            panel.blockSignals(True)
+            panel.from_dict(dict(
+                hfs, name=st["label"], color=st["color"],
+                dark_color=st["color"],
+                linestyle="Dashed" if st["ls"] == "--" else "Solid",
+                I=st["I"], Jl=tr.J_lower, Ju=tr.J_upper,
+                centroid=st["shift"], fwhm_g=cfg.linewidth_fwhm_MHz,
+                fwhm_l=1.0, slider_ranges={
+                    k: [-max(500.0, 1.5 * abs(v)), max(500.0, 1.5 * abs(v))]
+                    for k, v in hfs.items()}))
+            panel.blockSignals(False)
         self._update_models()
 
     def _duplicate_checked_models(self):
@@ -7784,6 +7925,9 @@ class PreAnalysisTab(QWidget):
                     # unchanged.
                     "centroid_offset_mhz":
                         float(getattr(fe, "centroid_offset_mhz", 0.0)),
+                    # This run's own values while ticked, else null.
+                    "laser_override": fe.Laser_Override,
+                    "cooler_override": fe.Cooler_Override,
                 })
 
         pmt_gate = [i + 1 for i, cb in enumerate(self._channels)
@@ -8003,6 +8147,12 @@ class PreAnalysisTab(QWidget):
                 # the key is missing (older YAML).
                 fe.centroid_offset_mhz = float(
                     file_cfg.get("centroid_offset_mhz", 0.0))
+                # Per-run Laser / Cooler; older YAMLs load unticked.
+                for key in ("laser", "cooler"):
+                    value = file_cfg.get(f"{key}_override")
+                    if value is not None:
+                        fe._Overrides[key][1].setValue(float(value))
+                        fe._Overrides[key][0].setChecked(True)
 
         # `or []` covers two pathological inputs both seen in the wild:
         # a hand-edited YAML with `merged_entries: null`, and an older

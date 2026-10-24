@@ -112,5 +112,76 @@ class PaReloadHandlerTests(unittest.TestCase):
             mock_replot.assert_called_once()
 
 
+class RunOverrideTests(unittest.TestCase):
+    """F3: each run card carries its own Laser / Cooler ticks, which beat
+    the global override rows (2026-10-24)."""
+
+    def setUp(self):
+        _ensure_app()
+        from gui.preanalysis_tab import PreAnalysisTab, FileEntry
+        self.pa = PreAnalysisTab()
+        self.Entry = lambda: FileEntry(
+            filepath="/data/run_X.asdf", run_number="X", cooler_v=29999.9,
+            date="2026-01-01", laser_sp=20000.0, mass_amu=100.0)
+
+    def test_Run_Override_Precedence(self):
+        pa, fe = self.pa, self.Entry()
+        for key, file_val, get in (
+                ("laser", 20000.0, pa._laser_for_entry),
+                ("cooler", 29999.9, pa._cooler_for_entry)):
+            tick, box = fe._Overrides[key][:2]
+            g_tick = getattr(pa, f"_{key}_override_enabled")
+            g_box = getattr(pa, f"_{key}_override")
+            g_box.setValue(123.0)
+            box.setValue(456.0)
+            for run_on, glob_on, want in ((False, False, file_val),
+                                          (False, True, 123.0),
+                                          (True, False, 456.0),
+                                          (True, True, 456.0)):
+                tick.setChecked(run_on)
+                g_tick.setChecked(glob_on)
+                self.assertAlmostEqual(get(fe), want, places=6,
+                                       msg=(key, run_on, glob_on))
+            tick.setChecked(False)
+            g_tick.setChecked(False)
+            setattr(fe, "laser_sp" if key == "laser" else "cooler_v", 0)
+            self.assertAlmostEqual(get(fe), 123.0)          # fallback
+            tick.setChecked(True)
+            self.assertAlmostEqual(get(fe), 456.0)
+
+    def test_Run_Override_Round_Trips(self):
+        pa = self.pa
+        a, b = self.Entry(), self.Entry()
+        b.filepath = "/data/run_Y.asdf"
+        a._Overrides["laser"][1].setValue(20000.5)
+        a._Overrides["laser"][0].setChecked(True)
+        pa._file_entries += [a, b]
+        files = pa._build_config_dict()["preanalysis"]["files"]
+        self.assertEqual([f["laser_override"] for f in files],
+                         [20000.5, None])
+        self.assertEqual([f["cooler_override"] for f in files], [None, None])
+        pa._file_entries.clear()
+        with patch("gui.preanalysis_tab.os.path.isfile", return_value=True), \
+                patch.object(pa, "_load_file", side_effect=lambda p: (
+                    pa._file_entries.append(self.Entry()))):
+            pa._restore_from_dict({"files": files})
+        a2, b2 = pa._file_entries[-2:]
+        self.assertAlmostEqual(a2.Laser_Override, 20000.5)
+        self.assertIsNone(a2.Cooler_Override)
+        self.assertIsNone(b2.Laser_Override)
+        self.assertAlmostEqual(pa._laser_for_entry(a2), 20000.5)
+        self.assertAlmostEqual(pa._laser_for_entry(b2), 20000.0)
+
+    def test_Run_Override_Hidden_On_Merged(self):
+        from gui.preanalysis_tab import MergedFileEntry
+        mfe = MergedFileEntry(
+            name="m", merged_x=np.array([0.0, 1.0]),
+            merged_y=np.array([1.0, 2.0]), merge_domain="voltage",
+            source_info=[("a", "/p/a"), ("b", "/p/b")])
+        self.assertFalse(mfe.Override_Row.isVisibleTo(mfe))
+        fe = self.Entry()
+        self.assertTrue(fe.Override_Row.isVisibleTo(fe))
+
+
 if __name__ == "__main__":
     unittest.main()

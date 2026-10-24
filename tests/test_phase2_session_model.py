@@ -215,6 +215,37 @@ class EstimateRunPersistenceTests(unittest.TestCase):
                           et.run_tab.log_text.toPlainText())
             self.assertEqual(self.win._last_estimate_run["run_dir"], run_dir)
 
+    def test_Save_Copies_Run_Folder(self):
+        """F2: runs land in a temp folder; Save copies the latest one to
+        the output directory under its own name, with the arrays the run
+        persisted, and only then records it for the session
+        (2026-10-24)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = os.path.join(td, "tmp", "cls_2026-10-24_12-00-00")
+            os.makedirs(run_dir)
+            for name in ("cls_x_cls_estimate_116Sn.log",
+                         "cls_x_hfs_spectra_116Sn.pdf"):
+                with open(os.path.join(run_dir, name), "w") as f:
+                    f.write("x")
+            self.win._worker = self._fake_worker()
+            self.win._persist_estimate_outputs(run_dir)     # as on finish
+            self.win._Estimate_Run = {
+                "run_dir": run_dir, "config_name": "cls_x",
+                "file_tag": "_116Sn", "palette": "default"}
+            self.win._last_estimate_run = None
+            out = os.path.join(td, "out")
+            self.win.estimate_tab.run_tab.output_dir.setText(out)
+            self.win._worker = None
+            self.win._On_Save_Estimation()
+            dest = os.path.join(out, "cls_2026-10-24_12-00-00")
+            self.assertTrue(os.path.isfile(
+                os.path.join(dest, "estimate_results.npz")))
+            self.assertEqual(self.win._last_estimate_run["run_dir"], dest)
+            self.win._On_Save_Estimation()                  # "Already saved"
+            self.assertEqual(os.listdir(out), ["cls_2026-10-24_12-00-00"])
+            self.win._Estimate_Run = self.win._last_estimate_run = None
+
     def test_restore_missing_dir_is_quiet(self):
         self.win._last_estimate_run = None
         self.win._restore_estimate_outputs({
