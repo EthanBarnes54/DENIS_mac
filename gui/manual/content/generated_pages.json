@@ -605,7 +605,7 @@
    "items": [
     "<b>Column 1 - global parameters</b>: Element && Transition, Beam, Laser, Linewidth, Scan, Statistics (Timing Mode), and Advanced groups in a scroll area. Its width band is <i>measured</i> from the content at runtime (so labels never clip at any font/DPI). See [[est-global-params-groups]].",
     "<b>Column 2 - isotope list</b>: a dynamic, scrollable list of isotope panels added with <b>+ Add Isotope</b>, color-striped by position. The Run Options group sits fixed under the list. See [[est-isotope-list]].",
-    "<b>Column 3 - plots, estimator && log</b>: a vertical splitter holds the plot panel, the Voltage Range Estimator (a live setpoint map that writes the chosen setpoint and sweep back into Laser and Scan; the Info button explains it) and the log. See [[est-run-options]] and [[est-plots-subtab]]."
+    "<b>Column 3 - plots, estimator && log</b>: a vertical splitter holds the plot panel, the Voltage Range Estimator (a live setpoint map that writes the chosen setpoint and sweep back into Laser and Scan) tabbed with the Saturation Estimator (the laser power that maximises S/B or a significance, from a fitted saturation curve) and the Efficiency Estimator (detected counts per ion on resonance; the Info button explains all three), and the log. See [[est-run-options]] and [[est-plots-subtab]]."
    ]
   },
   {
@@ -1435,7 +1435,7 @@
      "Where results are written; defaults to <code>&lt;output_root&gt;/estimates</code>. Use <b>Browse...</b> to change it."
     ],
     [
-     "Color palette",
+     "Colour palette",
      "Palette for spectrum colours: <b>default</b>, <b>pastel</b>, <b>vibrant</b>, <b>muted</b>, <b>high_contrast</b>."
     ],
     [
@@ -1450,7 +1450,7 @@
   },
   {
    "type": "p",
-   "text": "<b>Run</b>, <b>Save</b> and <b>Load...</b> sit on one row inside the Run Options group. Run starts the calculation: a read-only, monospaced, syntax-highlighted log at the bottom of the column streams progress and results; <b>Clear</b> empties it. From the first run on, every change re-runs the estimation live into a temporary folder. <b>Save</b> copies the latest run into the output directory as a <code>cls_&lt;timestamp&gt;</code> folder: the <code>.log</code> file, the plot PDFs, the plot data (<code>estimate_results.npz</code>), the peak table (<code>peaks.csv</code>) and every input the run used (<code>estimate_config.yaml</code>). The log's <i>Plots saved</i> and <i>Log saved</i> lines appear when Save writes them."
+   "text": "<b>Run</b>, <b>Save</b> and <b>Load...</b> sit on one row inside the Run Options group. Run starts the estimation: a read-only, monospaced, syntax-highlighted log at the bottom of the column streams progress and results; <b>Clear</b> empties it. From the first run on, every change re-runs the estimation live into a temporary folder. <b>Save</b> copies the latest run into the output directory as a <code>cls_&lt;timestamp&gt;</code> folder: the <code>.log</code> file, the plot PDFs, the plot data (<code>estimate_results.npz</code>), the peak table (<code>peaks.csv</code>) and every input the run used (<code>estimate_config.yaml</code>). The log's <i>Plots saved</i> and <i>Log saved</i> lines appear when Save writes them."
   },
   {
    "type": "h2",
@@ -1477,7 +1477,7 @@
   {
    "type": "screenshot",
    "file": "estimate_run_options_log.png",
-   "caption": "Column 3 showing the Run Options group (output directory + Browse, color palette, Generate plots), the Run / Save / Load buttons, and the syntax-highlighted log with a Grand Total and a peak list visible."
+   "caption": "Column 3 showing the Run Options group (output directory + Browse, colour palette, Generate plots), the Run / Save / Load buttons, and the syntax-highlighted log with a Grand Total and a peak list visible."
   },
   {
    "type": "related",
@@ -1492,7 +1492,7 @@
  "est-plots-subtab": [
   {
    "type": "p",
-   "text": "The plot panel (column 3) renders the simulated spectra natively on an embedded matplotlib canvas with a navigation toolbar. Until a run completes it shows a placeholder reading <i>Run a calculation to see plots here</i>. Its width tracks the column, and the <b>⛶</b> toggle expands the plots over the whole tab."
+   "text": "The plot panel (column 3) renders the simulated spectra natively on an embedded matplotlib canvas with a navigation toolbar. Until a run completes it shows a placeholder reading <i>Press Run to show the plots.</i> Its width tracks the column, and the <b>⛶</b> toggle expands the plots over the whole tab."
   },
   {
    "type": "h2",

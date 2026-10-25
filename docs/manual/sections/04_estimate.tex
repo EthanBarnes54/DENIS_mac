@@ -187,7 +187,10 @@ intensity, and whether it lies inside the sweep.
 
 Drag the red bar, or click the map and use the arrow keys
 ($\pm$0.001\,cm$^{-1}$, with Shift $\pm$0.01\,cm$^{-1}$); clicking a
-centre marker snaps to it. The mouse wheel zooms the map around the
+centre marker snaps to it. Clicking a red ring labels its $\Delta V$
+beside the bar; the label follows the ring as the setpoint moves, and
+clicking the ring again or elsewhere on the map clears it. The mouse
+wheel zooms the map around the
 cursor, dragging away from the bar pans it, and a double-click refits
 it; the zoom is kept while you adjust the setpoint and the sweep. When you finish (mouse release, Enter in the
 \app{Setpoint} box, or a pause after the arrow keys), the setpoint is
@@ -202,9 +205,14 @@ are drawn bold and marked in the readout, whose \emph{Peaks} line
 gives the DAQ range [start, stop] that covers them at the current
 setpoint, with 100\,V of baseline on each side (the gear button beside
 \app{Optimise} changes this), start and stop rounded outward to whole
-steps. \app{Optimise} sets \app{Scan} $\rightarrow$ \app{Voltage range}
-to that range's width (one undo step); the setpoint is left for you to
-place. With \app{Show} on a single state it covers that state alone.
+steps. \app{Optimise} moves the setpoint so those peaks sit centred in
+the sweep, which is symmetric about the beam voltage, and sets
+\app{Scan} $\rightarrow$ \app{Voltage range} to the smallest range that covers
+them with the margin: the fewest steps per scan, with every selected peak
+in the sweep's core. The setpoint is found by bisection between the
+setpoints that put each selected peak on the beam voltage, through the
+pipeline's own conversion; both values change as one undo step. With
+\app{Show} on a single state it fits that state alone.
 The same gear holds a \app{Readout offset}: a signed shift in volts for
 a known DAQ readout shift (negative moves the peaks to lower
 $\Delta V$). The component lines, rings, spectrum and sweep band move by
@@ -215,6 +223,58 @@ move, and the hyperfine model, the plots and the log are unchanged.
 the components), and \app{Show} limits the view to one state. The
 estimator appears after the first \app{Run}; its commits then re-run
 the estimation like any other change.
+
+\subsection{Saturation estimator}
+
+The voltage range estimator shares its pane with the \app{Saturation Estimator} and
+the \app{Efficiency Estimator}; the titles on the panel's top edge
+switch between them. The saturation estimator finds the laser power that maximises a
+figure of merit from a fitted saturation curve. Each table row is one
+measurement: the laser \app{Power} (mW), the \app{Background} counts off
+resonance, and the \app{Peak} counts, background included. A row counts
+once all three cells hold numbers, a new row appears as the last one
+fills, rows copied from a spreadsheet can be pasted, and \app{Clear}
+removes them all; the plot and the readout follow each completed row.
+The plot is a single curve: the background-free counts
+$S = \mathrm{peak} - B$ against power.
+
+\app{Model} is fitted to $S$, with $s = P/P_\mathrm{sat}$:
+\emph{Homogeneous} $S_\infty\, s/(1+s)$ for a two-level line,
+\emph{Inhomogeneous} $S_\infty\, s/\sqrt{1+s}$ for a Doppler-broadened
+line, or \emph{Free exponent} $S_\infty\, s/(1+s)^\beta$, which fits
+$\beta$ as well. The background is fitted as $B_0 + kP$; both fits are
+unweighted least squares. \app{Maximise} picks the merit: $S/B$,
+$S/\sqrt{B}$ (the significance when the background dominates) or
+$S/\sqrt{S+B}$. The optimum is the merit's maximum on the fitted
+curves, searched from $10^{-3}$ to 10 times the highest measured power,
+with its $1\sigma$ propagated linearly from both fits' covariances. As
+in the estimator, a red bar marks it, with a red ring and a label where
+it meets the curve. The readout gives the optimum, the merit there and
+the fitted parameters; it flags an optimum outside the measured powers,
+and reports none when the merit only rises or only falls over the
+search.
+
+\subsection{Efficiency estimator}
+
+The \app{Efficiency Estimator} gives the spectroscopic efficiency of the
+running experiment, in large type: the ions fluorescing over the ions
+that reached the light-collection region while the laser sat on the peak,
+\[
+  \varepsilon = \frac{\mathrm{peak} - B}
+    {(I/e)\, n_\mathrm{bunch}\, t_\mathrm{dwell}\, n_\mathrm{scan}},
+\]
+with the \app{Peak counts} and \app{Background} both counted in one
+channel over all the scans, $I$ the \app{Beam current} of singly
+charged ions (entered in fA, pA or nA; 1\,pA is
+$6.24\times10^{6}$ ions/s), $n_\mathrm{bunch}$
+the \app{Bunches per channel}, $t_\mathrm{dwell}$ the \app{Dwell time}
+(the DAQ's dwell is per bunch) and $n_\mathrm{scan}$ the \app{Scans}.
+The headline also reads it as one photon per $1/\varepsilon$ ions, with
+its counting uncertainty $\sqrt{\mathrm{peak}}/(\mathrm{peak} - B)$; the
+readout gives the bunches and time on the peak, the ions arriving and
+fluorescing, the photons per second and per bunch, $S/B$ and the
+significance $(\mathrm{peak} - B)/\sqrt{\mathrm{peak}}$, which is how
+the run-time estimate counts it.
 
 \subsection{Loading a previous estimation}
 

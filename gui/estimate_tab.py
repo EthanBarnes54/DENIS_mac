@@ -10,7 +10,10 @@ the per-isotope/isomer configuration panels with Schmidt-moment
 auto-fill, the run options, the Plots view that renders simulated
 hyperfine spectra and a peak table on a matplotlib canvas, the
 Voltage Range Estimator (a live setpoint map that writes the chosen
-setpoint and sweep back into Laser and Scan), and the log.
+setpoint and sweep back into Laser and Scan) tabbed with the Saturation
+Estimator (the laser power that maximises a figure of merit, from a
+fitted saturation curve) and the Efficiency Estimator (detected counts
+per ion on resonance), and the log.
 Serialises all inputs to/from the project config dict used by the
 estimation pipeline.
 
@@ -42,7 +45,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import (
     Qt, Signal, QLocale, QTimer, QUrl, QCoreApplication, QEvent,
 )
-from PySide6.QtGui import QDesktopServices, QFont, QValidator
+from PySide6.QtGui import (
+    QColor, QDesktopServices, QFont, QKeySequence, QValidator,
+)
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
@@ -53,11 +58,12 @@ from gui.shared_widgets import (
     LEGEND_LOCATIONS, LINESTYLE_MAP, lucide_icon,
     _SpinBoxCommand, scroll_zoom,
 )
+from gui.theme import ACCENT_TITLE, Title_Tabs
 from cls_estimations.mass_lookup import (
     ELEMENT_Z, Z_TO_ELEMENT, load_mass_table, get_mass,
 )
 from cls_estimations.plotting import PALETTES
-from cls_estimations.constants import CM_TO_HZ
+from cls_estimations.constants import CM_TO_HZ, E_CHARGE
 from cls_estimations.doppler import (
     generate_voltage_spectrum, laser_frequency_for_resonance,
     transition_frequency_MHz,
@@ -119,13 +125,12 @@ class SchmidtWidget(QWidget):
 
         self.enable_check = QCheckBox("Use Schmidt moment")
         self.enable_check.setToolTip(
-            "Calculate magnetic moment from the nuclear shell model "
-            "instead of using the experimental value. The μ field "
-            "is auto-filled with the unquenched Schmidt value "
-            "(g_s_factor=1) on tick / orbital change so the "
-            "estimation pipeline always sees a non-zero μ; the "
-            "actual scaling uses this widget's spec + the run's "
-            "configured g_s_factor.")
+            "Calculate the magnetic moment from the nuclear shell model "
+            "instead of using the experimental value. The μ field is filled "
+            "with the unquenched Schmidt value (g_s factor = 1) whenever this "
+            "is ticked or the orbital changes, so the estimation pipeline "
+            "always sees a non-zero μ; the scaling itself uses these settings "
+            "and the run's g_s factor.")
         layout.addWidget(self.enable_check)
 
         self.body = QWidget()
@@ -151,11 +156,11 @@ class SchmidtWidget(QWidget):
         sf.setContentsMargins(0, 0, 0, 0)
         self.sp_type = QComboBox()
         self.sp_type.addItems(["proton", "neutron"])
-        self.sp_type.setToolTip("Nucleon type: proton or neutron")
+        self.sp_type.setToolTip("Nucleon type: proton or neutron.")
         sf.addRow("Type:", self.sp_type)
         self.sp_orbital = QComboBox()
         self.sp_orbital.addItems(ORBITAL_NAMES)
-        self.sp_orbital.setToolTip("Nuclear shell model orbital (e.g., 1f7/2)")
+        self.sp_orbital.setToolTip("Nuclear shell-model orbital (e.g. 1f7/2).")
         sf.addRow("Orbital:", self.sp_orbital)
         body_layout.addWidget(self.single_widget)
 
@@ -165,22 +170,23 @@ class SchmidtWidget(QWidget):
         tf.setContentsMargins(0, 0, 0, 0)
         self.tp_type1 = QComboBox()
         self.tp_type1.addItems(["proton", "neutron"])
-        self.tp_type1.setToolTip("Type of the first unpaired nucleon")
+        self.tp_type1.setToolTip("Type of the first unpaired nucleon.")
         tf.addRow("Type 1:", self.tp_type1)
         self.tp_orbital1 = QComboBox()
         self.tp_orbital1.addItems(ORBITAL_NAMES)
-        self.tp_orbital1.setToolTip("Orbital of the first unpaired nucleon")
+        self.tp_orbital1.setToolTip("Orbital of the first unpaired nucleon.")
         tf.addRow("Orbital 1:", self.tp_orbital1)
         self.tp_type2 = QComboBox()
         self.tp_type2.addItems(["proton", "neutron"])
-        self.tp_type2.setToolTip("Type of the second unpaired nucleon")
+        self.tp_type2.setToolTip("Type of the second unpaired nucleon.")
         tf.addRow("Type 2:", self.tp_type2)
         self.tp_orbital2 = QComboBox()
         self.tp_orbital2.addItems(ORBITAL_NAMES)
-        self.tp_orbital2.setToolTip("Orbital of the second unpaired nucleon")
+        self.tp_orbital2.setToolTip("Orbital of the second unpaired nucleon.")
         tf.addRow("Orbital 2:", self.tp_orbital2)
         self.tp_I = _make_double(0, 0, 20, 1, 0.5,
-                                 tooltip="Total nuclear spin for the two-particle coupling")
+                                 tooltip="Total nuclear spin of the "
+                                         "two-particle coupling.")
         tf.addRow("Total I:", self.tp_I)
         body_layout.addWidget(self.two_widget)
 
@@ -331,25 +337,36 @@ class IsomerPanel(QWidget):
         # Basic fields
         form = QFormLayout()
         self.iso_I = _make_double(0, 0, 20, 1, 0.5,
-                                  tooltip="Nuclear spin of the isomeric state (half-integer allowed)")
+                                  tooltip="Nuclear spin of the isomeric state "
+                                          "(half-integer allowed).")
         form.addRow("I:", self.iso_I)
         self.iso_mu = _make_double(0, -10, 10, 5, 0.1,
-                                   tooltip="Magnetic moment in nuclear magnetons (overridden if Schmidt is used)")
+                                   tooltip="Magnetic moment in nuclear "
+                                           "magnetons (overridden when the "
+                                           "Schmidt moment is used).")
         form.addRow("\u03bc (\u03bc\u2099):", self.iso_mu)
         self.iso_Q = _make_double(0, -5, 5, 5, 0.1,
-                                  tooltip="Electric quadrupole moment in barns")
+                                  tooltip="Electric quadrupole moment in "
+                                          "barns.")
         form.addRow("Q (b):", self.iso_Q)
         self.iso_shift = _make_double(0, -1e6, 1e6, 2, 1.0,
-                                      tooltip="Isomer shift in MHz, defined as (isomer centroid − reference centroid). "
-                                              "Positive = isomer sits at higher frequency than the reference.")
+                                      tooltip="Isomer shift in MHz: the "
+                                              "isomer's centroid minus the "
+                                              "reference centroid. Positive "
+                                              "means the isomer sits at a "
+                                              "higher frequency than the "
+                                              "reference.")
         form.addRow("Isotope shift (MHz):", self.iso_shift)
         self.iso_peaks = _make_int(1, 1, 100,
-                                   tooltip="Number of strongest HFS peaks to include in timing")
+                                   tooltip="Number of the strongest HFS peaks "
+                                           "to include in the timing "
+                                           "estimate.")
         form.addRow("Peaks to measure:", self.iso_peaks)
         self.iso_plot_with_gs = QCheckBox("Plot with ground state")
         self.iso_plot_with_gs.setChecked(True)
         self.iso_plot_with_gs.setToolTip(
-            "If checked, plot the isomer spectrum overlaid with the ground state")
+            "If ticked, the isomer spectrum is plotted over the ground "
+            "state's.")
         form.addRow(self.iso_plot_with_gs)
         layout.addLayout(form)
 
@@ -359,13 +376,16 @@ class IsomerPanel(QWidget):
 
         self.yield_ratio_radio = QRadioButton("Production ratio")
         self.yield_ratio_radio.setToolTip(
-            "Fraction of total yield going to the ground state (0-1). Isomer gets the remainder.")
+            "Fraction of the total yield going to the ground state (0–1); the "
+            "isomer gets the remainder.")
         self.yield_indep_radio = QRadioButton("Independent yield")
         self.yield_indep_radio.setToolTip(
-            "Absolute isomer yield in ions/s, independent of ground state yield")
+            "Absolute isomer yield (ions/s), independent of the ground-state "
+            "yield.")
         self.yield_spin_radio = QRadioButton("Spin distribution \u03c3")
         self.yield_spin_radio.setToolTip(
-            "Auto-calculate g.s./isomer ratio from spin distribution statistics")
+            "Calculate the g.s./isomer ratio from spin-distribution "
+            "statistics.")
         self.yield_mode_group = QButtonGroup(self)
         self.yield_mode_group.addButton(self.yield_ratio_radio)
         self.yield_mode_group.addButton(self.yield_indep_radio)
@@ -377,7 +397,8 @@ class IsomerPanel(QWidget):
         ratio_row.addWidget(self.yield_ratio_radio)
         self.yield_ratio_spin = _make_double(
             0.5, 0.0, 1.0, 3, 0.05,
-            tooltip="Fraction going to ground state (0-1). E.g., 0.8 means 80% g.s., 20% isomer.")
+            tooltip="Fraction going to the ground state (0–1), e.g. 0.8 for "
+                    "80% g.s. and 20% isomer.")
         ratio_row.addWidget(self.yield_ratio_spin)
         yg.addLayout(ratio_row)
 
@@ -386,7 +407,7 @@ class IsomerPanel(QWidget):
         indep_row.addWidget(self.yield_indep_radio)
         self.yield_indep_spin = _make_sci(
             0.0, 0.0, 1e15,
-            tooltip="Independent isomer yield in ions/s")
+            tooltip="Independent isomer yield (ions/s).")
         indep_row.addWidget(self.yield_indep_spin)
         yg.addLayout(indep_row)
 
@@ -395,7 +416,8 @@ class IsomerPanel(QWidget):
         spin_row.addWidget(self.yield_spin_radio)
         self.yield_spin_spin = _make_double(
             7.0, 0.1, 100, 1, 0.5,
-            tooltip="Spin distribution width \u03c3 (typical: 5-10 for fission)")
+            tooltip="Width σ of the spin distribution (typically 5–10 for "
+                    "fission).")
         spin_row.addWidget(self.yield_spin_spin)
         yg.addLayout(spin_row)
 
@@ -414,23 +436,28 @@ class IsomerPanel(QWidget):
         # HFS overrides
         self.hfs_check = QCheckBox("Override A/B constants")
         self.hfs_check.setToolTip(
-            "Provide explicit HFS A/B constants instead of scaling from the reference isotope")
+            "Enter explicit HFS A/B constants instead of scaling them from "
+            "the reference isotope.")
         layout.addWidget(self.hfs_check)
 
         self.hfs_widget = QWidget()
         hf = QFormLayout(self.hfs_widget)
         hf.setContentsMargins(15, 0, 0, 0)
         self.hfs_Al = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Magnetic dipole HFS constant A for lower level (MHz)")
+                                   tooltip="Magnetic dipole HFS constant A of "
+                                           "the lower level (MHz).")
         hf.addRow("A_lower (MHz):", self.hfs_Al)
         self.hfs_Bl = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Electric quadrupole HFS constant B for lower level (MHz)")
+                                   tooltip="Electric quadrupole HFS constant "
+                                           "B of the lower level (MHz).")
         hf.addRow("B_lower (MHz):", self.hfs_Bl)
         self.hfs_Au = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Magnetic dipole HFS constant A for upper level (MHz)")
+                                   tooltip="Magnetic dipole HFS constant A of "
+                                           "the upper level (MHz).")
         hf.addRow("A_upper (MHz):", self.hfs_Au)
         self.hfs_Bu = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Electric quadrupole HFS constant B for upper level (MHz)")
+                                   tooltip="Electric quadrupole HFS constant "
+                                           "B of the upper level (MHz).")
         hf.addRow("B_upper (MHz):", self.hfs_Bu)
         layout.addWidget(self.hfs_widget)
         self.hfs_check.toggled.connect(self.hfs_widget.setVisible)
@@ -576,7 +603,7 @@ class IsotopePanel(QGroupBox):
         from PySide6.QtWidgets import QToolButton
         self.drag_handle = QToolButton()
         self.drag_handle.setText("☰")
-        self.drag_handle.setToolTip("Drag to reorder isotopes")
+        self.drag_handle.setToolTip("Drag to reorder the isotopes.")
         self.drag_handle.setFixedSize(22, 22)
         self.drag_handle.setStyleSheet(
             "QToolButton { border: none; font-size: 14px; color: #888; }"
@@ -586,8 +613,8 @@ class IsotopePanel(QGroupBox):
         self._drag_start_pos = None
         self.ref_check = QCheckBox("Reference")
         self.ref_check.setToolTip(
-            "Mark this isotope as the reference for HFS scaling. "
-            "Its A/B constants will be used to scale other isotopes.")
+            "Mark this isotope as the reference for HFS scaling: its A/B "
+            "constants are scaled to the other isotopes.")
         self.ref_check.toggled.connect(self._on_reference_toggled)
         header.addWidget(self.ref_check)
         header.addStretch()
@@ -608,12 +635,12 @@ class IsotopePanel(QGroupBox):
         a_row = QHBoxLayout()
         a_row.setSpacing(8)
         self.iso_A = _make_int(0, 1, 300,
-                               tooltip="Mass number of the isotope")
+                               tooltip="Mass number of the isotope.")
         a_row.addWidget(self.iso_A)
         self.iso_mass_label = QLabel("—")
         self.iso_mass_label.setToolTip(
-            "Atomic mass (amu) used in calculations, "
-            "looked up from the IUPAC/AME table for the current Z and A.")
+            "Atomic mass (amu) used in the calculations, looked up in the "
+            "IUPAC/AME table for the current Z and A.")
         self.iso_mass_label.setStyleSheet(
             "color: #aaa; font-style: italic;")
         # Cosmetic read-out: never let its text width inflate the
@@ -627,21 +654,30 @@ class IsotopePanel(QGroupBox):
         self.iso_A.valueChanged.connect(self._update_mass_display)
         form.addRow("A:", a_row)
         self.iso_label = QLineEdit()
-        self.iso_label.setToolTip("Display label (e.g., '59Co'). Must match anchor label if used.")
+        self.iso_label.setToolTip("Display label (e.g. '59Co'); it must match "
+                                  "the anchor label if one is used.")
         form.addRow("Label:", self.iso_label)
         self.iso_I = _make_double(0, 0, 20, 1, 0.5,
-                                  tooltip="Nuclear spin (half-integer allowed, 0 for even-even nuclei)")
+                                  tooltip="Nuclear spin (half-integer "
+                                          "allowed; 0 for even–even nuclei).")
         form.addRow("I:", self.iso_I)
         self.iso_mu = _make_double(0, -10, 10, 5, 0.1,
-                                   tooltip="Magnetic moment in nuclear magnetons. Set 0 if using Schmidt.")
+                                   tooltip="Magnetic moment in nuclear "
+                                           "magnetons; set it to 0 when using "
+                                           "the Schmidt moment.")
         form.addRow("\u03bc (\u03bc\u2099):", self.iso_mu)
         self.iso_Q = _make_double(0, -5, 5, 5, 0.1,
-                                  tooltip="Electric quadrupole moment in barns. 0 for I=0 or I=1/2.")
+                                  tooltip="Electric quadrupole moment in "
+                                          "barns; 0 for I = 0 or I = 1/2.")
         form.addRow("Q (b):", self.iso_Q)
         self.iso_shift = _make_double(0, -1e6, 1e6, 2, 1.0,
-                                      tooltip="Isotope shift in MHz, defined as (this isotope's centroid − reference centroid). "
-                                              "Positive = this isotope sits at higher frequency than the reference. "
-                                              "Leave at 0 for the reference itself.")
+                                      tooltip="Isotope shift in MHz: this "
+                                              "isotope's centroid minus the "
+                                              "reference centroid. Positive "
+                                              "means it sits at a higher "
+                                              "frequency than the reference; "
+                                              "leave it at 0 for the "
+                                              "reference itself.")
         form.addRow("Isotope shift (MHz):", self.iso_shift)
         main_layout.addLayout(form)
 
@@ -653,21 +689,23 @@ class IsotopePanel(QGroupBox):
         rg.setHorizontalSpacing(12)
         self.iso_yield = _make_sci(
             0, 0, 1e15,
-            tooltip="Ion production rate at the interaction region (ions/s)")
+            tooltip="Ion production rate at the interaction region (ions/s).")
         rg.addRow("Yield (ions/s):", self.iso_yield)
         self.iso_eff = _make_double(
             0.001, 0, 1, 6, 0.0001,
-            tooltip="Fraction of ions producing detected photons (e.g., 0.001 = 1 per 1000)")
+            tooltip="Fraction of ions producing detected photons (e.g. 0.001 "
+                    "= 1 per 1000).")
         rg.addRow("Efficiency:", self.iso_eff)
         self.iso_peaks = _make_int(
             1, 1, 100,
-            tooltip="Number of strongest HFS peaks to include in timing estimate")
+            tooltip="Number of the strongest HFS peaks to include in the "
+                    "timing estimate.")
         rg.addRow("Peaks to measure:", self.iso_peaks)
 
         # Uniform timing override
         self.uniform_check = QCheckBox("Override uniform timing")
         self.uniform_check.setToolTip(
-            "Override the global uniform timing setting for this isotope")
+            "Override the global uniform timing setting for this isotope.")
         rg.addRow(self.uniform_check)
         self.uniform_combo = QComboBox()
         self.uniform_combo.addItems(["Off", "On"])
@@ -685,10 +723,11 @@ class IsotopePanel(QGroupBox):
         bg_form.setHorizontalSpacing(12)
 
         self.bg_simple_radio = QRadioButton("Simple rate (Hz)")
-        self.bg_simple_radio.setToolTip("Single background count rate in Hz")
+        self.bg_simple_radio.setToolTip("A single background count rate (Hz).")
         self.bg_tof_radio = QRadioButton("TOF-gated")
         self.bg_tof_radio.setToolTip(
-            "Time-of-flight gated background: effective rate = continuous * (gate / dwell)")
+            "Time-of-flight-gated background: effective rate = continuous × "
+            "(gate / dwell).")
         self.bg_mode_group = QButtonGroup(self)
         self.bg_mode_group.addButton(self.bg_simple_radio)
         self.bg_mode_group.addButton(self.bg_tof_radio)
@@ -697,7 +736,7 @@ class IsotopePanel(QGroupBox):
         # Simple background
         self.bg_rate = _make_double(
             10, 0, 1e6, 4, 1.0,
-            tooltip="Background count rate (counts/s per voltage step)")
+            tooltip="Background count rate (counts/s per voltage step).")
         bg_form.addRow(self.bg_simple_radio, self.bg_rate)
 
         # TOF-gated background. Cont and Gate used to share the radio's
@@ -710,13 +749,13 @@ class IsotopePanel(QGroupBox):
         tof_row.setSpacing(8)
         self.bg_cont = _make_double(
             4000, 0, 1e8, 1, 100,
-            tooltip="Continuous background rate before TOF gating (Hz)")
+            tooltip="Continuous background rate before TOF gating (Hz).")
         tof_row.addWidget(QLabel("Cont:"))
         tof_row.addWidget(self.bg_cont)
         bg_form.addRow(self.bg_tof_radio, tof_row)
         self.bg_gate = _make_double(
             2.5, 0.01, 1000, 2, 0.1,
-            tooltip="Time-of-flight gate width (\u03bcs)")
+            tooltip="Time-of-flight gate width (μs).")
         bg_form.addRow("  Gate (\u03bcs):", self.bg_gate)
 
         main_layout.addWidget(self.bg_group)
@@ -732,23 +771,28 @@ class IsotopePanel(QGroupBox):
         # HFS overrides
         self.hfs_check = QCheckBox("Override A/B constants")
         self.hfs_check.setToolTip(
-            "Provide explicit HFS A/B constants instead of scaling from the reference")
+            "Enter explicit HFS A/B constants instead of scaling them from "
+            "the reference isotope.")
         main_layout.addWidget(self.hfs_check)
 
         self.hfs_widget = QWidget()
         hf = QFormLayout(self.hfs_widget)
         hf.setContentsMargins(15, 0, 0, 0)
         self.hfs_Al = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Magnetic dipole HFS constant A, lower level (MHz)")
+                                   tooltip="Magnetic dipole HFS constant A of "
+                                           "the lower level (MHz).")
         hf.addRow("A_lower (MHz):", self.hfs_Al)
         self.hfs_Bl = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Electric quadrupole HFS constant B, lower level (MHz)")
+                                   tooltip="Electric quadrupole HFS constant "
+                                           "B of the lower level (MHz).")
         hf.addRow("B_lower (MHz):", self.hfs_Bl)
         self.hfs_Au = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Magnetic dipole HFS constant A, upper level (MHz)")
+                                   tooltip="Magnetic dipole HFS constant A of "
+                                           "the upper level (MHz).")
         hf.addRow("A_upper (MHz):", self.hfs_Au)
         self.hfs_Bu = _make_double(0, -1e6, 1e6, 4, 1.0,
-                                   tooltip="Electric quadrupole HFS constant B, upper level (MHz)")
+                                   tooltip="Electric quadrupole HFS constant "
+                                           "B of the upper level (MHz).")
         hf.addRow("B_upper (MHz):", self.hfs_Bu)
         main_layout.addWidget(self.hfs_widget)
         self.hfs_check.toggled.connect(self.hfs_widget.setVisible)
@@ -764,7 +808,7 @@ class IsotopePanel(QGroupBox):
 
         # Isomer section
         self.isomer_check = QCheckBox("Has isomer")
-        self.isomer_check.setToolTip("Enable isomeric state for this isotope")
+        self.isomer_check.setToolTip("Add an isomeric state to this isotope.")
         main_layout.addWidget(self.isomer_check)
 
         self.isomer_panel = IsomerPanel()
@@ -1071,7 +1115,7 @@ class IsotopeListWidget(QWidget):
         # Buttons
         btn_row = QHBoxLayout()
         self.add_btn = QPushButton("+ Add Isotope")
-        self.add_btn.setToolTip("Add a new isotope to the list")
+        self.add_btn.setToolTip("Add a new isotope to the list.")
         self.add_btn.clicked.connect(lambda: self.add_isotope())
         btn_row.addWidget(self.add_btn)
         self.count_label = QLabel("0 isotopes")
@@ -1254,12 +1298,13 @@ class GlobalParamsWidget(QWidget):
         elem_row = QHBoxLayout()
         elem_row.setSpacing(6)
         self.element_edit = QLineEdit()
-        self.element_edit.setToolTip("Chemical element symbol (e.g., 'Co', 'Sn')")
+        self.element_edit.setToolTip("Chemical element symbol (e.g. 'Co', "
+                                     "'Sn').")
         self.element_edit.setMaximumWidth(52)
         elem_row.addWidget(QLabel("Element:"))
         elem_row.addWidget(self.element_edit)
         self.z_spin = _make_int(0, 1, 118,
-                                tooltip="Atomic number (proton number)")
+                                tooltip="Atomic number (proton number).")
         # Explicit cap: without it the spin stretches and, in a narrow
         # column, the trailing stretch let the row's tail clip instead.
         self.z_spin.setMaximumWidth(64)
@@ -1270,19 +1315,21 @@ class GlobalParamsWidget(QWidget):
 
         self.lower_level = _make_double(
             0, 0, 200000, 6, 1.0,
-            tooltip="Lower energy level of the transition (cm\u207b\u00b9)")
+            tooltip="Lower energy level of the transition (cm⁻¹).")
         form.addRow("Lower level (cm\u207b\u00b9):", self.lower_level)
         self.upper_level = _make_double(
             0, 0, 200000, 6, 1.0,
-            tooltip="Upper energy level of the transition (cm\u207b\u00b9)")
+            tooltip="Upper energy level of the transition (cm⁻¹).")
         form.addRow("Upper level (cm\u207b\u00b9):", self.upper_level)
         self.j_lower = _make_double(
             0, 0, 20, 1, 0.5,
-            tooltip="Total angular momentum J of the lower level (half-integer allowed)")
+            tooltip="Total angular momentum J of the lower level "
+                    "(half-integer allowed).")
         form.addRow("J_lower:", self.j_lower)
         self.j_upper = _make_double(
             0, 0, 20, 1, 0.5,
-            tooltip="Total angular momentum J of the upper level (half-integer allowed)")
+            tooltip="Total angular momentum J of the upper level "
+                    "(half-integer allowed).")
         form.addRow("J_upper:", self.j_upper)
         layout.addWidget(grp)
 
@@ -1295,16 +1342,17 @@ class GlobalParamsWidget(QWidget):
         form = QFormLayout(grp)
         self.voltage_kV = _make_double(
             30.0, 0.001, 200, 3, 0.1,
-            tooltip="Ion beam acceleration voltage (kV), typically 30-60 kV")
+            tooltip="Ion-beam acceleration voltage (kV), typically 30–60 kV.")
         form.addRow("Voltage (kV):", self.voltage_kV)
         self.charge_state = _make_int(
             1, 1, 10,
-            tooltip="Ion charge state q (number of electrons removed)")
+            tooltip="Ion charge state q (number of electrons removed).")
         form.addRow("Charge state:", self.charge_state)
         self.geometry = QComboBox()
         self.geometry.addItems(["anti-collinear", "collinear"])
         self.geometry.setToolTip(
-            "Laser-ion beam geometry: anti-collinear (head-on) or collinear (co-propagating)")
+            "Laser–ion geometry: anti-collinear (head-on) or collinear "
+            "(co-propagating).")
         form.addRow("Geometry:", self.geometry)
         layout.addWidget(grp)
 
@@ -1314,17 +1362,19 @@ class GlobalParamsWidget(QWidget):
         form = QFormLayout()
         self.harmonic = _make_int(
             1, 1, 10,
-            tooltip="Laser harmonic multiplier (1=fundamental, 2=SHG, 4=FHG). "
-                    "Effective wavenumber = setpoint x harmonic.")
+            tooltip="Laser harmonic (1 = fundamental, 2 = SHG, 4 = FHG); the "
+                    "effective wavenumber is setpoint × harmonic.")
         form.addRow("Harmonic:", self.harmonic)
         lv.addLayout(form)
 
         # Setpoint radio
         self.laser_setpoint_radio = QRadioButton("Setpoint (cm\u207b\u00b9)")
-        self.laser_setpoint_radio.setToolTip("Specify the fundamental laser wavenumber directly")
+        self.laser_setpoint_radio.setToolTip("Enter the fundamental laser "
+                                             "wavenumber directly.")
         self.laser_anchor_radio = QRadioButton("Anchor to isotope")
         self.laser_anchor_radio.setToolTip(
-            "Auto-calculate laser frequency from an isotope's centroid position")
+            "Calculate the laser frequency from an isotope's centroid "
+            "position.")
         self.laser_mode_group = QButtonGroup(self)
         self.laser_mode_group.addButton(self.laser_setpoint_radio)
         self.laser_mode_group.addButton(self.laser_anchor_radio)
@@ -1337,7 +1387,7 @@ class GlobalParamsWidget(QWidget):
         sp_row.addWidget(self.laser_setpoint_radio)
         self.setpoint_cm = _make_double(
             0, 0, 200000, 6, 1.0,
-            tooltip="Fundamental laser wavenumber (cm\u207b\u00b9)")
+            tooltip="Fundamental laser wavenumber (cm⁻¹).")
         sp_row.addWidget(self.setpoint_cm)
         sp_row.addStretch()
         lv.addLayout(sp_row)
@@ -1350,8 +1400,8 @@ class GlobalParamsWidget(QWidget):
         anc_row.addWidget(self.laser_anchor_radio)
         self.anchor_isotope = QLineEdit()
         self.anchor_isotope.setToolTip(
-            "Label of isotope whose centroid defines the laser frequency "
-            "(must match an isotope label)")
+            "Label of the isotope whose centroid defines the laser frequency; "
+            "it must match an isotope's label.")
         self.anchor_isotope.setPlaceholderText("e.g. 59Co")
         self.anchor_isotope.setMaximumWidth(80)
         anc_row.addWidget(self.anchor_isotope)
@@ -1363,13 +1413,14 @@ class GlobalParamsWidget(QWidget):
         anc_row2.addWidget(QLabel("dV (V):"))
         self.anchor_dV = _make_double(
             0, -1e4, 1e4, 2, 1.0,
-            tooltip="Voltage offset of the anchor isotope's centroid "
-                    "from beam voltage (V)")
+            tooltip="Voltage offset of the anchor isotope's centroid from the "
+                    "beam voltage (V).")
         self.anchor_dV.setMaximumWidth(72)
         anc_row2.addWidget(self.anchor_dV)
         self.anchor_state = QComboBox()
         self.anchor_state.addItems(["gs", "isomer"])
-        self.anchor_state.setToolTip("Which state of the anchor isotope to use")
+        self.anchor_state.setToolTip("Which state of the anchor isotope to "
+                                     "use.")
         self.anchor_state.setMaximumWidth(76)
         anc_row2.addWidget(self.anchor_state)
         anc_row2.addStretch()
@@ -1386,8 +1437,8 @@ class GlobalParamsWidget(QWidget):
         form = QFormLayout(grp)
         self.fwhm_MHz = _make_double(
             100, 0.1, 10000, 1, 10,
-            tooltip="Full width at half maximum of the spectral line (MHz). "
-                    "Includes Doppler broadening + laser linewidth.")
+            tooltip="Full width at half maximum of the spectral line (MHz), "
+                    "including Doppler broadening and the laser linewidth.")
         form.addRow("FWHM (MHz):", self.fwhm_MHz)
         layout.addWidget(grp)
 
@@ -1396,15 +1447,15 @@ class GlobalParamsWidget(QWidget):
         form = QFormLayout(grp)
         self.scan_range = _make_double(
             100, 0.1, 1e5, 1, 10,
-            tooltip="Total voltage scan range (V)")
+            tooltip="Total voltage scan range (V).")
         form.addRow("Voltage range (V):", self.scan_range)
         self.scan_step = _make_double(
             1.0, 0.001, 1000, 3, 0.1,
-            tooltip="Voltage step size per DAC step (V)")
+            tooltip="Voltage per DAC step (V).")
         form.addRow("Step size (V):", self.scan_step)
         self.scan_dwell = _make_double(
             200, 0.1, 1e6, 1, 10,
-            tooltip="Time spent at each voltage step (ms)")
+            tooltip="Time spent at each voltage step (ms).")
         form.addRow("Dwell time (ms):", self.scan_dwell)
         layout.addWidget(grp)
 
@@ -1413,17 +1464,18 @@ class GlobalParamsWidget(QWidget):
         self.stats_group.setCheckable(True)
         self.stats_group.setChecked(True)
         self.stats_group.setToolTip(
-            "Enable to calculate timing estimates. "
-            "Uncheck for spectrum-only mode (no timing calculations).")
+            "Tick to calculate timing estimates; untick for spectrum-only "
+            "mode (no timing).")
         form = QFormLayout(self.stats_group)
         self.sigma = _make_double(
             3.0, 0.1, 20, 1, 0.5,
-            tooltip="Required statistical significance (number of \u03c3, typically 3)")
+            tooltip="Required statistical significance (number of σ, "
+                    "typically 3).")
         form.addRow("Required \u03c3:", self.sigma)
         self.uniform_timing = QCheckBox("Uniform timing (global default)")
         self.uniform_timing.setToolTip(
-            "If enabled, all peaks are measured for the same time "
-            "(based on strongest peak assuming full yield)")
+            "If ticked, all peaks are measured for the same time (based on "
+            "the strongest peak, assuming the full yield).")
         form.addRow(self.uniform_timing)
         layout.addWidget(self.stats_group)
 
@@ -1435,8 +1487,9 @@ class GlobalParamsWidget(QWidget):
         form = QFormLayout(grp)
         self.g_s_factor = _make_double(
             1.0, 0, 1, 2, 0.05,
-            tooltip="Quenching factor for the nucleon spin g-factor in Schmidt calculations "
-                    "(1.0 = free nucleon, typical: 0.6-0.8)")
+            tooltip="Quenching factor for the nucleon spin g-factor in "
+                    "Schmidt calculations (1.0 = free nucleon; typically "
+                    "0.6–0.8).")
         form.addRow("g_s factor:", self.g_s_factor)
         layout.addWidget(grp)
 
@@ -1628,7 +1681,7 @@ class GlobalParamsWidget(QWidget):
 # ══════════════════════════════════════════════════════════════════
 class ParametersTab(QWidget):
     """Three-column working surface: Element/Transition, Isotope list
-    with Run Options under it, and Plots / Voltage Range Estimator / Log.
+    with Run Options under it, and Plots / optimiser tools / Log.
     The user can configure, kick off, and watch a run on a single surface
     without tab-switching. All three columns are independently resizable
     via the splitter handles."""
@@ -1671,7 +1724,18 @@ class ParametersTab(QWidget):
         self.plots_panel = PlotsTab()
         self.Voltage_Estimator = Voltage_Range_Estimator(
             self.global_params, self.isotope_list)
-        self.run_tab.set_plots_panel(self.plots_panel, self.Voltage_Estimator)
+        self.Saturation_Estimator = Saturation_Estimator()
+        # The optimiser tools share one group box, a title each, the
+        # current one as group titles are (2026-10-25).
+        self.Optimiser_Tabs = Title_Tabs()
+        self.Optimiser_Tabs.addTab(self.Voltage_Estimator,
+                                   "Voltage Range Estimator")
+        self.Optimiser_Tabs.addTab(self.Saturation_Estimator,
+                                   "Saturation Estimator")
+        self.Efficiency_Estimator = Efficiency_Estimator()
+        self.Optimiser_Tabs.addTab(self.Efficiency_Estimator,
+                                   "Efficiency Estimator")
+        self.run_tab.set_plots_panel(self.plots_panel, self.Optimiser_Tabs)
         splitter.addWidget(self.run_tab)
 
         # Column 3 (plots) soaks up extra width; columns 1-2 are
@@ -1735,8 +1799,8 @@ class ParametersTab(QWidget):
 #  Run & Log Tab
 # ══════════════════════════════════════════════════════════════════
 class RunTab(QWidget):
-    """Column 3 of the Estimate surface: the plots panel and the voltage
-    range estimator (inserted via :meth:`set_plots_panel`) over the log,
+    """Column 3 of the Estimate surface: the plots panel and the optimiser
+    tools (inserted via :meth:`set_plots_panel`) over the log,
     in a vertical splitter so the user decides how much room each gets.
     Also builds the Run Options group (``_top_host``), which
     ParametersTab hosts under the isotope list."""
@@ -1773,9 +1837,9 @@ class RunTab(QWidget):
             lambda _: self.output_dir.hasFocus()
             or self.output_dir.setCursorPosition(0))
         self.output_dir.setToolTip(
-            "Estimate-tab output directory (defaults to "
-            "<output_root>/estimates; the root lives in Settings ▸ "
-            "Output directory).")
+            "The Estimate tab's output directory (by default "
+            "<output_root>/estimates; the root is set in Settings ▸ Output "
+            "directory).")
         dir_row.addWidget(self.output_dir)
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse_dir)
@@ -1785,13 +1849,14 @@ class RunTab(QWidget):
         # Palette
         self.palette_combo = QComboBox()
         self.palette_combo.addItems(list(PALETTES.keys()))
-        self.palette_combo.setToolTip("Color palette for spectrum plots")
-        opts_form.addRow("Color palette:", self.palette_combo)
+        self.palette_combo.setToolTip("Colour palette for the spectrum plots.")
+        opts_form.addRow("Colour palette:", self.palette_combo)
 
         # Generate plots
         self.gen_plots = QCheckBox("Generate plots")
         self.gen_plots.setChecked(True)
-        self.gen_plots.setToolTip("Generate HFS spectra and overview plots")
+        self.gen_plots.setToolTip("Generate the HFS spectra and overview "
+                                  "plots.")
         opts_form.addRow(self.gen_plots)
 
         # Run / Save / Load: one row INSIDE the options group, equal
@@ -1802,7 +1867,7 @@ class RunTab(QWidget):
         self.run_btn = QPushButton("Run")
         self.run_btn.setToolTip(
             "Run the estimation. From then on, every change re-runs it and "
-            "updates the plots, the log and the estimator.")
+            "updates the plots, the log and the voltage range estimator.")
         self.Save_Btn = QPushButton("Save", enabled=False)
         self.Save_Btn.setToolTip(
             "Save the latest run (plots, peak table, log) to the output "
@@ -1832,7 +1897,7 @@ class RunTab(QWidget):
         log_layout = QVBoxLayout(self._log_host)
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("Log Output:"))
+        log_header.addWidget(QLabel("Log output:"))
         log_header.addStretch()
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(lambda: self.log_text.clear())
@@ -1849,7 +1914,7 @@ class RunTab(QWidget):
         self._vsplit.addWidget(self._log_host)
 
     def set_plots_panel(self, panel, estimator):
-        """Stack the plots panel and the voltage estimator above the log.
+        """Stack the plots panel and the optimiser tabs above the log.
         The three fill the column 5 : 5 : 2 and keep that ratio as the
         window resizes (2026-10-24); each handle still drags any pane down
         to its own minimum, as before."""
@@ -1901,13 +1966,13 @@ class PlotsTab(QWidget):
         ctrl_row.addWidget(self.plot_selector)
         ctrl_row.addStretch()
         self.open_pdf_btn = QPushButton("Open PDF")
-        self.open_pdf_btn.setToolTip("Open the selected plot as a PDF file")
+        self.open_pdf_btn.setToolTip("Open the selected plot as a PDF file.")
         self.open_pdf_btn.clicked.connect(self._open_current_pdf)
         self.open_pdf_btn.setEnabled(False)
         ctrl_row.addWidget(self.open_pdf_btn)
         self.edit_plot_btn = QPushButton("Edit Plot")
-        self.edit_plot_btn.setToolTip("Open plot editor for titles, labels, "
-                                      "lines, legend, and export")
+        self.edit_plot_btn.setToolTip("Open the plot editor for titles, "
+                                      "labels, lines, the legend and export.")
         self.edit_plot_btn.clicked.connect(self._open_editor)
         self.edit_plot_btn.setEnabled(False)
         ctrl_row.addWidget(self.edit_plot_btn)
@@ -2020,7 +2085,7 @@ class PlotsTab(QWidget):
         self.figure.set_size_inches(self._fig_width_inches(), 6)
         self._Fit_Canvas()
         ax = self.figure.add_subplot(111)
-        ax.text(0.5, 0.5, "Run a calculation to see plots here",
+        ax.text(0.5, 0.5, "Press Run to show the plots.",
                 ha="center", va="center", fontsize=14, color="gray",
                 transform=ax.transAxes)
         ax.set_xticks([])
@@ -2288,11 +2353,11 @@ class PlotsTab(QWidget):
             if path and os.path.exists(path):
                 ax.text(0.5, 0.5,
                         f"Plot saved at:\n{path}\n\n"
-                        "Click 'Open PDF' to view",
+                        "Click 'Open PDF' to view it.",
                         ha="center", va="center", fontsize=11, color="gray",
                         transform=ax.transAxes)
             else:
-                ax.text(0.5, 0.5, "No plot data available",
+                ax.text(0.5, 0.5, "No plot data available.",
                         ha="center", va="center", fontsize=11, color="gray",
                         transform=ax.transAxes)
             ax.set_xticks([])
@@ -2324,7 +2389,7 @@ class PlotsTab(QWidget):
 # ══════════════════════════════════════════════════════════════════
 #  Voltage Range Estimator
 # ══════════════════════════════════════════════════════════════════
-class Voltage_Range_Estimator(QGroupBox):
+class Voltage_Range_Estimator(QWidget):
     """Setpoint map: where each hyperfine component resonates (dV from
     the beam voltage) as the laser setpoint moves, which components fall
     inside the +/-dV sweep, and the spectrum at the setpoint.
@@ -2339,12 +2404,13 @@ class Voltage_Range_Estimator(QGroupBox):
     MainWindow uses to re-run the pipeline live. Optimise fits the
     setpoint and sweep to the peaks chosen under Peaks. The map
     zooms with the wheel and pans when dragged off the bar; that view
-    survives commits and refreshes until a double-click refits it.
+    survives commits and refreshes until a double-click refits it. A
+    click on a ring labels its dV.
     """
     Config_Changed = Signal()
 
     def __init__(self, global_params, isotope_list, parent=None):
-        super().__init__("Voltage Range Estimator", parent)
+        super().__init__(parent)
         self.Config_Source = None
         self._Global_Params = global_params
         self._Isotope_List = isotope_list
@@ -2357,14 +2423,16 @@ class Voltage_Range_Estimator(QGroupBox):
         self._Pan = None            # (x, y, xlim, ylim) at the press
         self._Zoom = None           # user's (xlim, ylim) on the map
         self._S = 0.0               # setpoint on the map (cm-1)
+        self._Tag = None            # (state label, index) of the labelled ring
 
         self.figure = Figure(layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.canvas.setToolTip(
             "Drag the red bar to move the setpoint, or click the map and use "
-            "the arrow keys (Shift for larger steps). Scroll to zoom, drag "
-            "elsewhere to pan, double-click to refit.")
+            "the arrow keys (Shift for larger steps). Click a red ring to "
+            "label its dV. Scroll to zoom, drag elsewhere to pan, "
+            "double-click to refit.")
         for name, slot in (("button_press_event", self._On_Press),
                            ("motion_notify_event", self._On_Motion),
                            ("button_release_event", self._On_Release),
@@ -2380,10 +2448,15 @@ class Voltage_Range_Estimator(QGroupBox):
         self.Peaks_Btn = QPushButton("To measure", enabled=False)
         self.Peaks_Btn.setMenu(QMenu(self.Peaks_Btn,
                                      aboutToShow=self._Fill_Peaks_Menu))
+        # Room for the count a build adds ("To measure (9)"): this row sets
+        # the controls' width, so the count took the map's (2026-10-25).
+        self.Peaks_Btn.setMinimumWidth(
+            self.Peaks_Btn.sizeHint().width()
+            + self.Peaks_Btn.fontMetrics().horizontalAdvance(" (9)"))
         self.Peaks_Btn.setToolTip(
-            "The peaks the sweep must cover: each state's strongest "
-            "\"Peaks to measure\" (the ones the run time counts), all "
-            "components, or the components you tick per state.")
+            'The peaks the sweep must cover: each state\'s strongest "Peaks '
+            'to measure" (the ones the run time counts), all components or '
+            "the components you tick per state.")
         self.Optimise_Btn = QPushButton("Optimise", enabled=False,
                                         clicked=self._Optimise)
         # The gear, in a popover rather than more form rows: the baseline
@@ -2404,7 +2477,7 @@ class Voltage_Range_Estimator(QGroupBox):
             "A known DAQ readout shift: the peaks, rings, spectrum and sweep "
             "band move by it (negative moves them to lower dV), and the "
             "readout's dV and scan range include it. The axes stay put; the "
-            "hyperfine model, the Plots and the Log are unchanged.")
+            "hyperfine model, the plots and the log are unchanged.")
         margin = QWidget()
         margin_form = QFormLayout(margin)
         margin_form.setContentsMargins(10, 6, 10, 6)
@@ -2417,7 +2490,7 @@ class Voltage_Range_Estimator(QGroupBox):
         margin_menu.addAction(act)
         self.Margin_Btn = QPushButton(lucide_icon("settings"), "",
                                       toolTip="Optimise margin and readout "
-                                              "offset")
+                                              "offset.")
         self.Margin_Btn.setFixedWidth(self.Margin_Btn.sizeHint().height())
         self.Margin_Btn.clicked.connect(lambda: margin_menu.exec(
             self.Margin_Btn.mapToGlobal(self.Margin_Btn.rect().bottomLeft())))
@@ -2531,7 +2604,7 @@ class Voltage_Range_Estimator(QGroupBox):
         else:
             # The first real build imports satlas2 (about 2 s, once):
             # paint a note first, then build on the next tick.
-            self._Show_Placeholder("Preparing hyperfine model...")
+            self._Show_Placeholder("Preparing the hyperfine model...")
             QTimer.singleShot(0, self._Rebuild)
 
     def _Rebuild(self):
@@ -2734,10 +2807,12 @@ class Voltage_Range_Estimator(QGroupBox):
 
     def _Optimise_Tip(self, *_):
         self.Optimise_Btn.setToolTip(
-            "Set Scan > Voltage range to the DAQ range that covers the "
-            "selected peaks of the shown states at this setpoint, with "
+            "Move the setpoint so the selected peaks of the shown states sit "
+            "centred in the sweep, and set Scan \u25b8 Voltage range to the "
+            "smallest range that covers them with "
             f"{self.Margin_Box.value():g} V to spare on each side (the gear "
-            "changes it). The readout lists the range's start and stop.")
+            "changes it), as one undo step. The readout lists the DAQ "
+            "range's start and stop.")
 
     def _Peak_Range(self, s):
         """[start, stop] in DAQ volts (readout offset applied) covering the
@@ -2755,16 +2830,49 @@ class Voltage_Range_Estimator(QGroupBox):
                 step * np.ceil((max(d) + m) / step))
 
     def _Optimise(self):
-        """Scan > Voltage range = the width of the selected peaks' DAQ
-        range at the current setpoint (_Peak_Range); one undo step. The
-        setpoint is left alone: the user places it, and the readout gives
-        the range's start and stop to scan (2026-10-24)."""
-        rng = self._Peak_Range(self._S) if self._Map is not None else None
-        if rng is None:
+        """Fit the setpoint and the sweep to the selected peaks of the
+        shown states, as one undo step (2026-10-25). The sweep is
+        symmetric about the beam voltage (moved by the readout offset),
+        so the setpoint that centres the peaks' dV span there lets the
+        least range cover them all with the margin: the fewest steps per
+        scan, every peak in the sweep's core. It lies between the
+        setpoints that put each peak on the beam voltage (the pipeline's
+        conversion) and is found by bisection; the range is then twice
+        the farther edge of the peaks' DAQ range (_Peak_Range). Until now
+        the setpoint stayed put and the range took the width of an
+        off-centre window, so the symmetric sweep missed the peaks on its
+        far side."""
+        from scipy.optimize import brentq
+        if self._Map is None or self._Peak_Range(self._S) is None:
             return
+        shown, off = self._Shown(), self.Offset_Box.value()
+
+        def middle(s):          # of the selected peaks' dV, offset removed
+            d = [v - off for st in shown for k, v in
+                 enumerate(self._Peak_Dvs(st, s))
+                 if k in self._Selected(st) and v is not None]
+            return (min(d) + max(d)) / 2
+        ends = [self._Setpoint_For(st["centroid"] + st["offsets"][k],
+                                   self._V0, st["mass"])
+                for st in shown for k in self._Selected(st)]
+        try:
+            s = brentq(middle, min(ends), max(ends), xtol=1e-9)
+        except ValueError:      # one peak, or all at one setpoint
+            s = min(ends)
         gp = self._Global_Params
-        width = min(gp.scan_range.maximum(), rng[1] - rng[0])
-        _Set_Spin_Undoable(gp.scan_range, float(width), self)
+        stack = getattr(self.window(), "_undo_stack", None)
+        if stack is not None:
+            stack.beginMacro("Optimise setpoint and voltage range")
+        try:
+            self._S = s
+            self._Commit_Setpoint()
+            lo, hi = self._Peak_Range(self._S)
+            width = min(gp.scan_range.maximum(),
+                        2 * max(off - lo, hi - off))
+            _Set_Spin_Undoable(gp.scan_range, float(width), self)
+        finally:
+            if stack is not None:
+                stack.endMacro()
         self.Dv_Box.setValue(width / 2)
         self._Draw_View()
 
@@ -2853,6 +2961,11 @@ class Voltage_Range_Estimator(QGroupBox):
         self._Rings = self._Map.scatter([], [], s=81, facecolors="none",
                                         edgecolors="red", linewidths=1.5,
                                         zorder=3)
+        self._Label = self._Map.annotate(
+            "", (s, 0), xytext=(9, 0), textcoords="offset points",
+            va="center", fontsize="small", zorder=4, visible=False,
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", lw=0.8,
+                      alpha=0.9))
         self._Spectra = [spec.plot([], [], color=st["color"], ls=st["ls"])[0]
                          for st in shown]
         n = sum(len(self._Selected(st)) for st in shown)
@@ -2874,12 +2987,13 @@ class Voltage_Range_Estimator(QGroupBox):
         setpoint moved (2026-10-24)."""
         cfg, self._S, dv = self._Cfg, s, self.Dv_Box.value()
         self._Bar.set_xdata([s, s])
-        rows, inside, off = [], [], self.Offset_Box.value()
+        rows, self._Ring_Dvs, off = [], {}, self.Offset_Box.value()
         lo, hi, fw = *self._Map.get_ylim(), self._Fwhm_V
         for st, line in zip(self._Shown(), self._Spectra):
             dvs, sel = self._Peak_Dvs(st, s), self._Selected(st)
-            inside += [d for k, d in enumerate(dvs)
-                       if k in sel and d is not None and abs(d - off) <= dv]
+            self._Ring_Dvs.update(
+                {(st["label"], k): (d, st["color"]) for k, d in enumerate(dvs)
+                 if k in sel and d is not None and abs(d - off) <= dv})
             # The spectrum is computed in the pipeline's dV and drawn
             # shifted by the readout offset, like everything else here.
             pk = [d - off for d in dvs if d is not None]
@@ -2895,10 +3009,21 @@ class Voltage_Range_Estimator(QGroupBox):
                      in enumerate(zip(st["offsets"], st["intens"], dvs))]
         # Fainter towards the scan edge: crossings in the margin are riskier
         # to measure (2026-10-24).
+        inside = [d for d, _ in self._Ring_Dvs.values()]
         self._Rings.set_offsets(np.column_stack(
             ([s] * len(inside), inside)) if inside else np.empty((0, 2)))
         self._Rings.set_edgecolors(
             [(1, 0, 0, max(0.1, self._Weight(d))) for d in inside])
+        # The clicked ring's dV, edged in its state's colour, beside the bar
+        # on the roomier side: every ring sits on the bar, so it covers none.
+        # It follows the ring and hides while the ring is gone (2026-10-25).
+        d, color = self._Ring_Dvs.get(self._Tag, (None, None))
+        self._Label.set_visible(d is not None)
+        if d is not None:
+            left = s > sum(self._Map.get_xlim()) / 2
+            self._Label.xy, self._Label.xyann = (s, d), (-9 if left else 9, 0)
+            self._Label.set(text=f"{d:+.2f} V", ha="right" if left else "left")
+            self._Label.get_bbox_patch().set_edgecolor(color)
         self._Write_Readout(s, rows)
         self.canvas.draw_idle()
 
@@ -2932,11 +3057,10 @@ class Voltage_Range_Estimator(QGroupBox):
         # margin, only partly.
         text.append(f"{n_in}/{len(rows)} components in the sweep, selected "
                     f"coverage {cover:.2f}/{n_sel}")
+        # The readout keeps the width the controls give it and scrolls a
+        # longer line: sized to its longest line, it took the map's width
+        # as soon as a run filled it (2026-10-25).
         self.Readout.setPlainText("\n".join(text))
-        # Wide enough for the longest line (frame, margins, scrollbar).
-        fm = self.Readout.fontMetrics()
-        self.Readout.setMinimumWidth(
-            32 + max(fm.horizontalAdvance(t) for t in text))
 
     # ── Interaction and write-back ──────────────────────────────
 
@@ -2956,7 +3080,14 @@ class Voltage_Range_Estimator(QGroupBox):
             return abs(self._Map.transData.transform((x, 0))[0]
                        - event.x) <= tol
         if near(self._S):
-            self._Dragging = True
+            # Note the ring under the press: released unmoved, it labels
+            # that ring instead of committing (_On_Release).
+            px = {key: abs(self._Map.transData.transform((self._S, d))[1]
+                           - event.y)
+                  for key, (d, _) in self._Ring_Dvs.items()}
+            ring = min(px, key=px.get, default=None)
+            self._Dragging = (event.x, event.y, self._S,
+                              ring if ring and px[ring] <= tol else None)
             return
         for x_c in self._Centres:
             if near(x_c):
@@ -2978,16 +3109,27 @@ class Voltage_Range_Estimator(QGroupBox):
             self._Map.set_ylim(y0 - dy, y1 - dy)
             self.canvas.draw_idle()
 
-    def _On_Release(self, _event):
+    def _On_Release(self, event):
         if self._Dragging:
+            x, y, s, ring = self._Dragging
             self._Dragging = False
-            self._Commit_Setpoint()
+            tol = 6 * self.canvas.device_pixel_ratio
+            if ring and max(abs(event.x - x), abs(event.y - y)) <= tol:
+                # A click on a ring, not a drag: toggle its dV label and
+                # undo any jitter of the bar.
+                self._Tag = None if ring == self._Tag else ring
+                self._Draw_At(s)
+            else:
+                self._Commit_Setpoint()
         elif self._Pan:
             moved = self._Map.get_xlim() != self._Pan[2]
             moved |= self._Map.get_ylim() != self._Pan[3]
             self._Pan = None
             if moved:
                 self._Keep_View()
+            elif self._Tag:             # a click elsewhere clears the label
+                self._Tag = None
+                self._Draw_At(self._S)
 
     def _On_Scroll(self, event):
         if event.inaxes is self._Map:
@@ -3042,6 +3184,482 @@ class Voltage_Range_Estimator(QGroupBox):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  Saturation Estimator
+# ══════════════════════════════════════════════════════════════════
+# The signal against laser power P, with s = P/Psat: a homogeneously
+# broadened line saturates as s/(1+s), an inhomogeneously (Doppler)
+# broadened one keeps rising as s/sqrt(1+s), and the free exponent spans
+# both. Each: (readout formula, S(P, S_inf, Psat[, beta])).
+SATURATION_MODELS = {
+    "Homogeneous": ("S∞ s/(1+s)",
+                    lambda p, a, ps: a * (p / ps) / (1 + p / ps)),
+    "Inhomogeneous": ("S∞ s/√(1+s)",
+                      lambda p, a, ps: a * (p / ps) / np.sqrt(1 + p / ps)),
+    "Free exponent": ("S∞ s/(1+s)^β",
+                      lambda p, a, ps, b: a * (p / ps) / (1 + p / ps) ** b),
+}
+# What the optimum power maximises, of signal S and background B.
+SATURATION_MERITS = {
+    "S / B": lambda s, b: s / b,
+    "S / √B": lambda s, b: s / np.sqrt(b),
+    "S / √(S + B)": lambda s, b: s / np.sqrt(s + b),
+}
+
+
+def _Plus_Minus(v, e):
+    """``v +/- e`` to two significant figures of ``e``; ``v`` alone when
+    ``e`` is not a finite positive number."""
+    if not np.isfinite(e) or e <= 0:
+        return f"{v:.4g}"
+    d = max(0, 1 - int(np.floor(np.log10(e))))
+    return f"{v:.{d}f} ± {e:.{d}f}"
+
+
+class Saturation_Estimator(QWidget):
+    """Saturation curve from measured laser power, background and peak
+    counts. Fits the chosen model to the background-free counts S = peak
+    - background and a straight line B0 + kP to the background
+    (unweighted least squares), and finds the power that maximises the
+    chosen merit on the fitted curves, its 1 sigma propagated from both
+    fits' covariances. It refits as each row is completed; the table
+    grows a fresh row as the last one fills and takes pasted rows. One
+    curve is drawn, S against power (2026-10-25), with the optimum
+    marked as the voltage range estimator marks the setpoint: a red
+    bar, with a red ring and label on the curve."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._Key = None            # inputs of the last fit
+        self.figure = Figure(layout="constrained")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.Model_Combo = QComboBox()
+        self.Model_Combo.addItems(list(SATURATION_MODELS))
+        self.Model_Combo.setToolTip(
+            "Saturation model fitted to the background-free counts, with "
+            "s = P/Psat. Homogeneous, s/(1+s): a two-level line (natural "
+            "or power broadened). Inhomogeneous, s/√(1+s): a Doppler-"
+            "broadened line. Free exponent, s/(1+s)^β: fits β too (1 and "
+            "0.5 are the two limits). The background is fitted as B0 + kP.")
+        self.Merit_Combo = QComboBox()
+        self.Merit_Combo.addItems(list(SATURATION_MERITS))
+        self.Merit_Combo.setToolTip(
+            "What the optimum power maximises on the fitted curves. S / B: "
+            "the signal-to-background ratio. S / √B: the significance "
+            "when the background dominates the counts. S / √(S + B): "
+            "the significance counting both.")
+        self.Table = QTableWidget(1, 3, alternatingRowColors=True)
+        self.Table.setHorizontalHeaderLabels(
+            ["Power (mW)", "Background", "Peak"])
+        for c, tip in enumerate((
+                "Laser power at the interaction region (mW).",
+                "Background counts at that power, off resonance, counted "
+                "as the peak is.",
+                "Counts on the peak at that power, background included.")):
+            self.Table.horizontalHeaderItem(c).setToolTip(tip)
+        self.Table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.Table.verticalHeader().setVisible(False)
+        self.Table.verticalHeader().setDefaultSectionSize(
+            self.Table.fontMetrics().height() + 8)      # compact rows
+        self.Table.setToolTip(
+            "One measurement per row; a row counts once all three cells "
+            "hold numbers, and a new row appears as the last one fills. "
+            "Paste rows copied from a spreadsheet; Delete clears the "
+            "selected cells.")
+        self.Table.installEventFilter(self)
+        self.Table.itemChanged.connect(self._On_Item_Changed)
+        self.Clear_Btn = QPushButton("Clear", clicked=self._Clear,
+                                     toolTip="Remove every measurement.")
+        self.Readout = QPlainTextEdit(
+            readOnly=True, styleSheet=_MONO_QSS,
+            lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap)
+
+        form = QFormLayout()
+        form.addRow("Model:", self.Model_Combo)
+        form.addRow("Maximise:", self.Merit_Combo)
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        clear_row.addWidget(self.Clear_Btn)
+        side = QVBoxLayout()
+        side.addLayout(form)
+        side.addWidget(self.Table, 3)
+        side.addLayout(clear_row)
+        side.addWidget(self.Readout, 2)
+        row = QHBoxLayout(self)
+        row.addWidget(self.canvas, 1)
+        row.addLayout(side)
+        self.Model_Combo.currentIndexChanged.connect(self._Update)
+        self.Merit_Combo.currentIndexChanged.connect(self._Update)
+        self._Update()
+
+    # ── The table ───────────────────────────────────────────────
+
+    @staticmethod
+    def _Value(item):
+        """The cell's number if it is finite and >= 0, else None."""
+        try:
+            v = float(item.text())
+        except (AttributeError, ValueError):
+            return None
+        return v if np.isfinite(v) and v >= 0 else None
+
+    def _Rows(self):
+        """(power, background, background-free counts) arrays of the
+        complete rows: the last is peak - background."""
+        t = self.Table
+        rows = [[self._Value(t.item(r, c)) for c in range(3)]
+                for r in range(t.rowCount())]
+        p, b, peak = np.array([r for r in rows if None not in r],
+                              dtype=float).reshape(-1, 3).T
+        return p, b, peak - b
+
+    def _On_Item_Changed(self, _item):
+        """Flag cells that are not numbers >= 0, keep one empty row at the
+        bottom, and refit."""
+        t = self.Table
+        t.blockSignals(True)
+        for r in range(t.rowCount()):
+            for c in range(3):
+                item = t.item(r, c)
+                if item is not None:
+                    bad = item.text().strip() and self._Value(item) is None
+                    item.setData(Qt.ItemDataRole.ForegroundRole,
+                                 QColor("#e15759") if bad else None)
+        last = t.rowCount() - 1
+        if any(t.item(last, c) and t.item(last, c).text().strip()
+               for c in range(3)):
+            t.insertRow(last + 1)
+        t.blockSignals(False)
+        self._Update()
+
+    def eventFilter(self, obj, event):
+        """Spreadsheet keys on the table: paste a block of rows (tab,
+        comma or space separated) from the current cell, growing the
+        table; Delete or Backspace clears the selected cells."""
+        if obj is self.Table and event.type() == QEvent.Type.KeyPress:
+            t = self.Table
+            if event.matches(QKeySequence.StandardKey.Paste):
+                r0, c0 = max(0, t.currentRow()), max(0, t.currentColumn())
+                lines = [ln.split() for ln in re.sub(
+                    r"[,;\t]", " ", QApplication.clipboard().text())
+                    .splitlines() if ln.strip()]
+                t.blockSignals(True)
+                t.setRowCount(max(t.rowCount(), r0 + len(lines)))
+                for i, cells in enumerate(lines):
+                    for j, v in enumerate(cells[:3 - c0]):
+                        t.setItem(r0 + i, c0 + j, QTableWidgetItem(v))
+                t.blockSignals(False)
+                self._On_Item_Changed(None)
+                return True
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                for item in t.selectedItems():
+                    item.setText("")
+                return True
+        return super().eventFilter(obj, event)
+
+    def _Clear(self):
+        self.Table.clearContents()
+        self.Table.setRowCount(1)
+        self._Update()
+
+    # ── Fit and optimum ─────────────────────────────────────────
+
+    def _Merit_Curve(self, theta, n):
+        """The merit on the fitted curves, as a function of power; NaN
+        where the fitted background is not positive."""
+        model = SATURATION_MODELS[self.Model_Combo.currentText()][1]
+        merit = SATURATION_MERITS[self.Merit_Combo.currentText()]
+
+        def curve(x):
+            b = theta[n] + theta[n + 1] * x
+            with np.errstate(all="ignore"):
+                return np.where(b > 0, merit(model(x, *theta[:n]), b),
+                                np.nan)
+        return curve
+
+    def _Optimum(self, theta, n, p_max):
+        """The power maximising the merit, searched from 1e-3 to 10 times
+        the highest measured power: 0 or inf when the maximum sits at
+        either end, i.e. the merit only falls or only rises there."""
+        from scipy.optimize import minimize_scalar
+        curve = self._Merit_Curve(theta, n)
+        x = np.geomspace(1e-3, 10, 2001) * p_max
+        y = curve(x)
+        if not np.isfinite(y).any():
+            return np.nan
+        i = int(np.nanargmax(y))
+        if i in (0, len(x) - 1):
+            return 0.0 if i == 0 else np.inf
+        return minimize_scalar(lambda v: -curve(v), method="bounded",
+                               bounds=(x[i - 1], x[i + 1]),
+                               options={"xatol": 1e-10 * p_max}).x
+
+    def _Fit(self, p, b, s):
+        """Fit the signal model and the background line to the complete
+        rows and locate the optimum, with its 1 sigma by linear
+        propagation of both covariances (central differences). Returns
+        a dict, or the reason there is no fit."""
+        from scipy.optimize import curve_fit
+        model = SATURATION_MODELS[self.Model_Combo.currentText()][1]
+        n = model.__code__.co_argcount - 1
+        if len(p) <= n:
+            more = n + 1 - len(p)
+            return (f"Enter {more} more measurement{'s' * (more > 1)} "
+                    "to fit.")
+        if np.ptp(p) <= 0:
+            return "The powers must differ to fit."
+        try:
+            with warnings.catch_warnings():
+                # A fit through every point has no covariance; it says so.
+                warnings.simplefilter("ignore")
+                sig_par, sig_cov = curve_fit(
+                    model, p, s,
+                    p0=[max(2 * s.max(), 1e-9), max(p.mean(), 1e-9), 0.75][:n],
+                    bounds=([0, 1e-12 * p.max(), 0][:n],
+                            [np.inf, np.inf, 2][:n]))
+                bkg_par, bkg_cov = curve_fit(
+                    lambda x, b0, k: b0 + k * x, p, b)
+        except (RuntimeError, ValueError):
+            return "The fit did not converge: check the measurements."
+        theta = np.concatenate([sig_par, bkg_par])
+        cov = np.zeros((n + 2, n + 2))
+        cov[:n, :n], cov[n:, n:] = sig_cov, bkg_cov
+        err = np.sqrt(np.diag(cov))
+        opt, opt_err = self._Optimum(theta, n, p.max()), np.nan
+        if 0 < opt < np.inf and np.isfinite(cov).all():
+            jac = []
+            for k, h in enumerate(1e-2 * err):
+                d = np.zeros_like(theta)
+                d[k] = h
+                hi = self._Optimum(theta + d, n, p.max())
+                lo = self._Optimum(theta - d, n, p.max())
+                jac.append((hi - lo) / (2 * h) if h else 0.0)
+            jac = np.array(jac)
+            with np.errstate(invalid="ignore"):
+                opt_err = float(np.sqrt(jac @ cov @ jac))
+        return dict(n=n, theta=theta, cov=cov, err=err, opt=opt,
+                    opt_err=opt_err,
+                    signal=lambda x: model(x, *sig_par),
+                    merit=self._Merit_Curve(theta, n))
+
+    # ── Drawing ─────────────────────────────────────────────────
+
+    def _Update(self, *_):
+        """Refit and redraw when the complete rows, the model or the merit
+        changed."""
+        p, b, s = self._Rows()
+        key = (p.tobytes(), b.tobytes(), s.tobytes(),
+               self.Model_Combo.currentText(), self.Merit_Combo.currentText())
+        if key == self._Key:
+            return
+        self._Key = key
+        fit = self._Fit(p, b, s) if len(p) else None
+        self._Draw(p, b, s, fit)
+        self._Write_Readout(p, fit)
+
+    def _Draw(self, p, b, s, fit):
+        """The background-free counts against power, measured and fitted,
+        with the optimum marked on the curve."""
+        self.figure.clear()
+        if not len(p):
+            self.figure.text(
+                0.5, 0.5, "Enter measurements to plot the saturation curve.",
+                ha="center", va="center", color="gray", wrap=True)
+            self.canvas.draw_idle()
+            return
+        ok = isinstance(fit, dict)
+        opt = fit["opt"] if ok and 0 < fit["opt"] < np.inf else None
+        x_hi = 1.1 * max(p.max(), opt or 0)
+        ax = self.figure.subplots()
+        color = ISOTOPE_COLORS[0]
+        ax.plot(p, s, "o", color=color, ms=5)
+        if ok:
+            x = np.linspace(0, x_hi, 400)
+            ax.plot(x, fit["signal"](x), color=color, lw=1.5)
+        if opt is not None:
+            e = fit["opt_err"]
+            if np.isfinite(e):
+                ax.axvspan(opt - e, opt + e, color="red", alpha=0.1, lw=0)
+            ax.axvline(opt, color="red", lw=1.5)
+            y_opt = float(fit["signal"](opt))
+            ax.scatter([opt], [y_opt], s=81, facecolors="none",
+                       edgecolors="red", linewidths=1.5, zorder=3)
+            # The curve rises, so below and right of the ring, or above
+            # and left of it, is clear of the curve and off the bar.
+            left = opt > x_hi / 2
+            ax.annotate(
+                f"{_Plus_Minus(opt, e)} mW", (opt, y_opt),
+                xytext=(-8, 8) if left else (8, -8),
+                textcoords="offset points", ha="right" if left else "left",
+                va="bottom" if left else "top", fontsize="small", zorder=4,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red",
+                          lw=0.8, alpha=0.9))
+        ax.set_xlim(0, x_hi)
+        ax.set_ylim(bottom=min(0, s.min()))
+        ax.set_xlabel("Laser power (mW)")
+        ax.set_ylabel("Background-free counts")
+        self.canvas.draw_idle()
+
+    def _Write_Readout(self, p, fit):
+        """The optimum first, then the fitted parameters and the model."""
+        formula = SATURATION_MODELS[self.Model_Combo.currentText()][0]
+        merit = self.Merit_Combo.currentText()
+        text = []
+        if not isinstance(fit, dict):
+            text.append(fit or "No complete measurement yet.")
+        else:
+            n, theta, opt = fit["n"], fit["theta"], fit["opt"]
+            if 0 < opt < np.inf:
+                text += [f"Optimum  {_Plus_Minus(opt, fit['opt_err'])} mW  "
+                         f"({opt / theta[1]:.2f} Psat)",
+                         f"{merit:<9}{float(fit['merit'](opt)):.4g} there"]
+                if not p.min() <= opt <= p.max():
+                    text.append("         outside the measured powers")
+            else:
+                text.append(
+                    "Optimum  none: " + (
+                        "no positive background" if np.isnan(opt) else
+                        f"{merit} still rises at 10x the highest power"
+                        if opt else f"{merit} only falls with power"))
+            text.append("")
+            for name, v, e, unit in zip(
+                    ["S∞", "Psat", "β"][:n] + ["B0", "k"],
+                    theta, fit["err"], ["", " mW", ""][:n] + ["", " /mW"]):
+                text.append(f"{name:<9}{_Plus_Minus(v, e)}{unit}")
+        text += ["", f"Net      {formula}, s = P/Psat",
+                 f"Bkg      B0 + kP, {len(p)} point{'s' * (len(p) != 1)}"]
+        self.Readout.setPlainText("\n".join(text))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Efficiency Estimator
+# ══════════════════════════════════════════════════════════════════
+# The beam current units (A), and the exponent digits of _Times_Ten.
+BEAM_CURRENT_UNITS = {"fA": 1e-15, "pA": 1e-12, "nA": 1e-9}
+_SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _Times_Ten(x):
+    """``x`` as m.mm x 10^e, the exponent in superscript."""
+    m, e = f"{x:.2e}".split("e")
+    return f"{m} × 10{str(int(e)).translate(_SUPERSCRIPT)}"
+
+
+def _Three_Figures(x):
+    """``x`` to three significant figures, grouped by thousands from 100
+    up: 12,500 rather than 1.25e+04."""
+    x = float(f"{x:.3g}")
+    return f"{x:,.0f}" if x >= 100 else f"{x:.3g}"
+
+
+class Efficiency_Estimator(QWidget):
+    """Spectroscopic efficiency of the running experiment, shown large:
+    the ions fluorescing (the background-free counts on the peak) over
+    the ions that reached the light-collection region while the laser
+    sat on it: the beam current over e (singly charged ions) times the
+    time on the peak (bunches per channel x dwell x scans: the DAQ's
+    dwell is per bunch, as the I311 ELOG's scan times show). Its
+    uncertainty and the significance are counting statistics with the
+    background known, as the Estimate's timing assumes: sigma(net) =
+    sqrt(peak)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.Peak_Box = _make_double(
+            0, 0, 1e12, 0, 1, tooltip="Counts in the peak's channel, "
+            "background included, summed over the scans.")
+        self.Background_Box = _make_double(
+            0, 0, 1e12, 2, 1, tooltip="Background counts in one channel, "
+            "summed over the scans: the mean of the off-peak channels or "
+            "a fitted baseline, so it need not be whole.")
+        self.Bunches_Box = _make_int(
+            1, 1, 10 ** 7,
+            tooltip="Bunches the DAQ collects in each channel per scan.")
+        self.Scans_Box = _make_int(1, 1, 10 ** 6,
+                                   tooltip="Scans summed in the spectrum.")
+        self.Dwell_Box = _make_double(
+            100, 0.1, 1e6, 1, 10, tooltip="The DAQ's dwell time, per bunch "
+            "(ms).")
+        self.Current_Box = _make_double(
+            0, 0, 1e6, 3, 1, tooltip="Beam current reaching the light-"
+            "collection region, of singly charged ions: 1 pA is 6.24 "
+            "million ions per second.")
+        self.Current_Unit = QComboBox()
+        self.Current_Unit.addItems(list(BEAM_CURRENT_UNITS))
+        self.Current_Unit.setCurrentText("pA")
+        self.Current_Unit.currentIndexChanged.connect(self._Update)
+        self.Readout = QPlainTextEdit(
+            readOnly=True, styleSheet=_MONO_QSS,
+            lineWrapMode=QPlainTextEdit.LineWrapMode.NoWrap)
+        # The headline: stylesheet fonts, since the zoom stamps fonts on
+        # widgets.
+        dim = "color: #9a9aa0;"
+        self.Caption = QLabel("Spectroscopic efficiency", styleSheet=dim)
+        self.Value = QLabel(styleSheet=f"color: {ACCENT_TITLE}; "
+                            "font-size: 30pt; font-weight: bold;")
+        self.Detail = QLabel(styleSheet=dim, wordWrap=True)
+
+        form = QFormLayout()
+        current = QHBoxLayout()
+        current.addWidget(self.Current_Box, 1)
+        current.addWidget(self.Current_Unit)
+        for label, box in (("Peak counts:", self.Peak_Box),
+                           ("Background:", self.Background_Box),
+                           ("Bunches per channel:", self.Bunches_Box),
+                           ("Scans:", self.Scans_Box),
+                           ("Dwell time (ms):", self.Dwell_Box),
+                           ("Beam current:", self.Current_Box)):
+            box._Own_Undo = True        # an estimator input, not a parameter
+            box.valueChanged.connect(self._Update)
+            form.addRow(label, current if box is self.Current_Box else box)
+        hero = QVBoxLayout()
+        hero.addStretch()
+        for w in (self.Caption, self.Value, self.Detail):
+            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hero.addWidget(w)
+        hero.addStretch()
+        side = QVBoxLayout()
+        side.addLayout(form)
+        side.addWidget(self.Readout, 1)
+        row = QHBoxLayout(self)
+        row.addLayout(hero, 1)
+        row.addLayout(side)
+        self._Update()
+
+    def _Update(self, *_):
+        """The headline and the readout, from the inputs as they stand."""
+        bunches = self.Bunches_Box.value() * self.Scans_Box.value()
+        time = bunches * self.Dwell_Box.value() / 1000      # s on the peak
+        rate = (self.Current_Box.value() / E_CHARGE
+                * BEAM_CURRENT_UNITS[self.Current_Unit.currentText()])
+        ions = rate * time
+        peak, bkg = self.Peak_Box.value(), self.Background_Box.value()
+        net = peak - bkg                                    # fluorescing
+        text = [f"Bunches  {bunches:,} on the peak",
+                f"Time     {time:.4g} s on the peak",
+                f"Ions     {ions:,.0f} arriving ({_Three_Figures(rate)} /s, "
+                "1+)",
+                f"Net      {_Plus_Minus(net, np.sqrt(peak))} fluorescing",
+                f"Photons  {net / time:.3g} /s, {net / bunches:.3g} per bunch",
+                f"S/B      {net / bkg:.3g}" if bkg else "S/B      -",
+                f"Signif.  {net / np.sqrt(peak):.1f} σ" if peak
+                else "Signif.  -"]
+        if ions <= 0:
+            value, detail = "—", "Enter the beam current."
+        elif net <= 0:
+            value, detail = "—", ("The peak counts must exceed the "
+                                       "background.")
+        else:
+            eff = net / ions
+            value = _Times_Ten(eff)
+            detail = (f"1 photon per {_Three_Figures(1 / eff)} ions   "
+                      f"±{100 * np.sqrt(peak) / net:.1f}% (counting)")
+        self.Value.setText(value)
+        self.Detail.setText(detail)
+        self.Readout.setPlainText("\n".join(text))
+
+
+# ══════════════════════════════════════════════════════════════════
 #  Estimate Tab (wrapper combining Parameters, Run & Log, Plots)
 # ══════════════════════════════════════════════════════════════════
 class EstimateTab(QWidget):
@@ -3049,9 +3667,10 @@ class EstimateTab(QWidget):
 
     Three resizable columns (see :class:`ParametersTab`): element /
     transition parameters, the isotope list with Run Options under it,
-    and a right column stacking the plots panel, the Voltage Range
-    Estimator and a shortened log. The plots can be expanded over the
-    whole tab with the ⛶ toggle.
+    and a right column stacking the plots panel, the optimiser tools
+    (Voltage Range Estimator, Saturation and Efficiency Estimators,
+    under one card's titles) and a shortened log. The plots can be
+    expanded over the whole tab with the ⛶ toggle.
 
     Stable handles for callers: ``run_tab`` (the RunTab in column 3),
     ``plots_tab`` (the plots panel hosted inside it) and
@@ -3105,7 +3724,7 @@ class EstimateTab(QWidget):
         pt.global_params.setVisible(not expanded)
         pt.isotope_list.setVisible(not expanded)
         self.run_tab._top_host.setVisible(not expanded)
-        self.Voltage_Estimator.setVisible(not expanded)
+        pt.Optimiser_Tabs.setVisible(not expanded)
         self.run_tab._log_host.setVisible(not expanded)
         # Redraw at the new width once the layout has settled.
         QTimer.singleShot(0, self.plots_tab.refresh_current)
@@ -3117,7 +3736,7 @@ class EstimateTab(QWidget):
             "one or more isotopes. The tab is a single surface with "
             "three resizable columns: element / transition on the left, "
             "the isotope list with the run options under it in the "
-            "middle, and plots + voltage range estimator + log on the "
+            "middle, and the plots, the optimiser tools and the log on the "
             "right. Drag the dividers to resize; the "
             "⛶ button expands the plots over the whole tab.<br><br>"
 
@@ -3135,15 +3754,15 @@ class EstimateTab(QWidget):
             "(kV), typically 30\u201360 kV.<br>"
             "\u2022 <b>Charge state</b> \u2013 Ion charge q.<br>"
             "\u2022 <b>Geometry</b> \u2013 Anti-collinear (head-on) or "
-            "collinear (co-propagating) laser-ion geometry.<br><br>"
+            "collinear (co-propagating) laser\u2013ion geometry.<br><br>"
 
             "<h4>Laser</h4>"
-            "\u2022 <b>Harmonic</b> \u2013 Laser harmonic multiplier "
+            "\u2022 <b>Harmonic</b> \u2013 Laser harmonic "
             "(1 = fundamental, 2 = SHG, 4 = FHG).<br>"
             "\u2022 <b>Setpoint</b> \u2013 Fundamental laser wavenumber "
             "(cm\u207b\u00b9) entered directly.<br>"
-            "\u2022 <b>Anchor to isotope</b> \u2013 Auto-calculate the laser "
-            "frequency from a named isotope\u2019s centroid and a voltage "
+            "\u2022 <b>Anchor to isotope</b> \u2013 Calculate the laser "
+            "frequency from a named isotope's centroid and a voltage "
             "offset \u0394V.<br><br>"
 
             "<h4>Linewidth &amp; Scan</h4>"
@@ -3155,8 +3774,8 @@ class EstimateTab(QWidget):
             "(ms).<br><br>"
 
             "<h4>Statistics (Timing Mode)</h4>"
-            "Enable this section to compute measurement time estimates. "
-            "Uncheck for spectrum-only mode (no timing).<br>"
+            "Tick this section to compute measurement-time estimates; untick "
+            "it for spectrum-only mode (no timing).<br>"
             "\u2022 <b>Required \u03c3</b> \u2013 Statistical significance "
             "threshold (typically 3\u03c3).<br>"
             "\u2022 <b>Uniform timing</b> \u2013 All peaks measured for the "
@@ -3165,22 +3784,23 @@ class EstimateTab(QWidget):
             "<h4>Advanced</h4>"
             "\u2022 <b>g_s factor</b> \u2013 Quenching factor for the "
             "nucleon spin g-factor in Schmidt moment calculations "
-            "(1.0 = free nucleon, typical 0.6\u20130.8).<br><br>"
+            "(1.0 = free nucleon; typically 0.6\u20130.8).<br><br>"
 
             "<h4>Isotopes (middle panel)</h4>"
-            "\u2022 Add isotopes with <b>+ Add Isotope</b> and configure "
-            "mass number, label, nuclear spin (I), magnetic moment "
-            "(\u03bc), quadrupole moment (Q), and isotope shift.<br>"
+            "\u2022 Add isotopes with <b>+ Add Isotope</b> and set each "
+            "one's mass number, label, nuclear spin (I), magnetic moment "
+            "(\u03bc), quadrupole moment (Q) and isotope shift.<br>"
             "\u2022 <b>Reference</b> \u2013 Mark one isotope as the "
-            "reference; its A/B constants scale to other isotopes.<br>"
+            "reference; its A/B constants are scaled to the other "
+            "isotopes.<br>"
             "\u2022 <b>Rates &amp; Timing</b> \u2013 Yield (ions/s), "
-            "detection efficiency, and number of peaks to measure.<br>"
+            "detection efficiency and the number of peaks to measure.<br>"
             "\u2022 <b>Background</b> \u2013 Background count rate (Hz), set as "
             "a <b>Simple rate</b> or <b>TOF-gated</b>; used in the timing "
             "estimate.<br>"
             "\u2022 <b>Isomer</b> \u2013 Add an isomeric state with its own "
-            "I, \u03bc, Q, shift, and yield method (production ratio, "
-            "independent yield, or spin distribution).<br>"
+            "I, \u03bc, Q, shift and yield method (production ratio, "
+            "independent yield or spin distribution).<br>"
             "\u2022 <b>Schmidt moment</b> \u2013 Calculate \u03bc from the "
             "nuclear shell model instead of using an experimental value. "
             "Configure the unpaired nucleon type, orbital, and "
@@ -3189,7 +3809,7 @@ class EstimateTab(QWidget):
             "<h4>Run Options &amp; Log</h4>"
             "\u2022 Under the isotope list: set the output directory and "
             "colour palette, and toggle <b>Generate plots</b>.<br>"
-            "\u2022 <b>Run</b> starts the calculation; the plots, the log "
+            "\u2022 <b>Run</b> starts the estimation; the plots, the log "
             "and the voltage range estimator appear once it finishes. From "
             "then on every change (including undo and the estimator) re-runs "
             "it and updates them live; pressing <b>Run</b> again re-runs at "
@@ -3206,12 +3826,15 @@ class EstimateTab(QWidget):
             "\u2022 <b>Combined Overview</b> \u2013 All isotopes overlaid on "
             "a single spectrum plot.<br>"
             "\u2022 <b>Peak List</b> \u2013 Sortable table of all peaks with "
-            "isotope, state, shift, offset, voltage, and intensity.<br>"
+            "isotope, state, shift, offset, voltage and intensity.<br>"
             "\u2022 Use <b>Edit Plot</b> to customise titles, labels, "
-            "colours, and line styles, then export as PNG, PDF, or SVG."
+            "colours and line styles, then export as PNG, PDF or SVG."
             "<br><br>"
 
             "<h4>Voltage Range Estimator</h4>"
+            "Shares its pane with the <b>Saturation Estimator</b> and the "
+            "<b>Efficiency Estimator</b>; the titles on the panel's top "
+            "edge switch between them. "
             "A live map of where every hyperfine component resonates "
             "(\u0394V from the beam voltage, one line per component; "
             "isomers dashed) as the laser setpoint moves, the spectrum at "
@@ -3225,7 +3848,10 @@ class EstimateTab(QWidget):
             "<b>Peaks</b>) cross the bar inside \u00b1dV; they fade across "
             "the margin towards the sweep's edges, where scanning is "
             "riskier, and the readout calls those crossings <i>edge</i> and "
-            "counts them by weight in its coverage line.<br>"
+            "counts them by weight in its coverage line. Click a ring to "
+            "label its ΔV beside the bar; the label follows the ring as "
+            "the setpoint moves, and clicking the ring again or elsewhere on "
+            "the map clears it.<br>"
             "\u2022 The mouse wheel zooms the map around the cursor, "
             "dragging away from the bar pans it, and a double-click "
             "refits it.<br>"
@@ -3235,27 +3861,75 @@ class EstimateTab(QWidget):
             "Voltage range = 2 \u00d7 dV. Both can be undone.<br>"
             "\u2022 <b>Peaks</b> picks the components the sweep must "
             "cover: by default each state's strongest <i>Peaks to "
-            "measure</i> (the ones the run time counts), all components, "
+            "measure</i> (the ones the run time counts), all components "
             "or any you tick per state. Selected components are drawn bold "
             "and marked \u2022 in the readout, whose <i>Peaks</i> line "
             "gives the DAQ range [start, stop] that covers them at the "
             "current setpoint, with 100 V to spare on each side (the gear "
             "beside <b>Optimise</b> changes it), start and stop rounded "
-            "outward to whole steps. <b>Optimise</b> sets Scan \u25b8 "
-            "Voltage range to that range's width (one undo step); the "
-            "setpoint is yours to place. With <b>Show</b> on one state it "
-            "covers that state alone.<br>"
+            "outward to whole steps. <b>Optimise</b> moves the setpoint so "
+            "those peaks sit centred in the sweep, which is symmetric about "
+            "the beam voltage, and sets Scan \u25b8 Voltage range to the "
+            "smallest range that covers them with the margin: the fewest "
+            "steps per scan, every selected peak in the sweep's core. Both "
+            "change as one undo step. With <b>Show</b> on one state it fits "
+            "that state alone.<br>"
             "\u2022 The gear also holds a <b>Readout offset</b>: a signed "
             "shift (V) for a known DAQ readout shift. The lines, rings, "
             "spectrum and sweep band move by it, and the readout's dV and "
             "scan range include it, so they can be entered as DAQ scanning "
             "ranges directly. The axes stay put, and the hyperfine model, "
-            "the Plots and the Log are unchanged.<br>"
+            "the plots and the log are unchanged.<br>"
             "\u2022 <b>Window</b> only sets the plotted voltage range "
             "(auto fits the components); <b>Show</b> picks one state or "
             "all.<br>"
             "\u2022 It appears after the first <b>Run</b> and follows every "
             "change from then on."
+            "<br><br>"
+
+            "<h4>Saturation Estimator</h4>"
+            "Finds the laser power that maximises a figure of merit from a "
+            "fitted saturation curve. Enter one measurement per row: the "
+            "laser <b>Power</b> (mW), the <b>Background</b> counts off "
+            "resonance and the <b>Peak</b> counts, background included. A "
+            "row counts once all three cells hold numbers and a new row "
+            "appears as the last one fills; rows copied from a spreadsheet "
+            "can be pasted, and <b>Clear</b> removes them all. The "
+            "plot is one curve: the background-free counts, peak minus "
+            "background, against power.<br>"
+            "\u2022 <b>Model</b> is fitted to the background-free counts, "
+            "with s = P/Psat: "
+            "<i>Homogeneous</i> S\u221e s/(1+s) (a two-level line), "
+            "<i>Inhomogeneous</i> S\u221e s/\u221a(1+s) (a Doppler-broadened "
+            "line) or <i>Free exponent</i> S\u221e s/(1+s)<sup>\u03b2</sup>. "
+            "The background is fitted as B0 + kP. Both fits are unweighted "
+            "least squares.<br>"
+            "\u2022 <b>Maximise</b> picks the merit: S/B, S/\u221aB "
+            "(significance when the background dominates) or "
+            "S/\u221a(S+B). The optimum is the merit's maximum on the "
+            "fitted curves, with its 1\u03c3 propagated from both fits; "
+            "a red bar and ring mark it on the curve, and the readout lists "
+            "it with the fitted parameters. It is flagged when it lies "
+            "outside the measured powers, and reported as none when the "
+            "merit only rises or only falls."
+            "<br><br>"
+
+            "<h4>Efficiency Estimator</h4>"
+            "The spectroscopic efficiency of the running experiment, shown "
+            "large: the ions fluorescing over the ions arriving. The ions "
+            "fluorescing are <b>Peak counts</b> \u2212 <b>Background</b>, "
+            "both counted in one channel over all the scans. The time on "
+            "the peak is <b>Bunches per channel</b> \u00d7 <b>Dwell "
+            "time</b> \u00d7 <b>Scans</b> (the DAQ's dwell is per bunch), "
+            "and the ions arriving at the light-collection region are the "
+            "<b>Beam current</b> (fA, pA or nA; singly charged ions, so 1 pA "
+            "is 6.24 \u00d7 10\u2076 ions/s) \u00f7 e \u00d7 that time. The "
+            "headline also reads it "
+            "as 1 photon per N ions, with its counting uncertainty "
+            "\u221apeak; the readout gives the bunches and time on the "
+            "peak, the ions arriving and fluorescing, the photons per "
+            "second and per bunch, S/B and the significance, net / "
+            "\u221apeak, as the run-time estimate counts it."
         )
         from gui.analysis.helpers import _show_scrollable_info
         _show_scrollable_info(self, "Estimate Tab \u2013 Information", text)

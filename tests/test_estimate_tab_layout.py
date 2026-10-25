@@ -113,15 +113,30 @@ class EstimateTabStructureTests(unittest.TestCase):
         tab.close()
 
     def test_Run_Column_Hosts_Plots_Estimator_Log(self):
-        """Column 3: plots | voltage estimator | log splitter. Run Options
-        moved under the isotope list, fixed below its scroll area."""
+        """Column 3: plots | optimiser tools | log splitter, the tools being
+        the voltage range, saturation and efficiency estimators in one
+        group box, a title each (2026-10-25). Run Options moved under the
+        isotope list, fixed below its scroll area."""
         from gui.estimate_tab import (
-            EstimateTab, PlotsTab, Voltage_Range_Estimator)
+            EstimateTab, Efficiency_Estimator, PlotsTab,
+            Saturation_Estimator, Voltage_Range_Estimator)
+        from gui.theme import Title_Tabs
         tab = EstimateTab()
         vs = tab.run_tab._vsplit
         self.assertEqual(vs.count(), 3)
         self.assertIsInstance(vs.widget(0), PlotsTab)
-        self.assertIsInstance(vs.widget(1), Voltage_Range_Estimator)
+        tabs = vs.widget(1)
+        self.assertIs(tabs, tab.params_tab.Optimiser_Tabs)
+        self.assertIsInstance(tabs, Title_Tabs)
+        self.assertGreater(tabs.minimumSizeHint().width(),   # never cropped
+                           tabs._Layout()[-1][1].right())
+        self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
+                         ["Voltage Range Estimator", "Saturation Estimator",
+                          "Efficiency Estimator"])
+        self.assertIs(tabs.widget(0), tab.Voltage_Estimator)
+        self.assertIsInstance(tabs.widget(0), Voltage_Range_Estimator)
+        self.assertIsInstance(tabs.widget(1), Saturation_Estimator)
+        self.assertIsInstance(tabs.widget(2), Efficiency_Estimator)
         self.assertIs(vs.widget(2), tab.run_tab._log_host)
         # Options host sits OUTSIDE the splitter, under the isotope list.
         il = tab.params_tab.isotope_list
@@ -175,11 +190,15 @@ class EstimateTabStructureTests(unittest.TestCase):
         self.assertFalse(tab.run_tab._top_host.isVisible())
         self.assertFalse(tab.run_tab._log_host.isVisible())
         self.assertFalse(tab.Voltage_Estimator.isVisible())
+        self.assertFalse(tab.params_tab.Optimiser_Tabs.isVisible())
         self.assertTrue(tab.plots_tab.isVisible())
         tab.plots_tab.expand_btn.setChecked(False)
         QApplication.processEvents()
         self.assertTrue(tab.params_tab.global_params.isVisible())
         self.assertTrue(tab.run_tab._log_host.isVisible())
+        # Only the current optimiser page comes back (2026-10-25).
+        self.assertTrue(tab.Voltage_Estimator.isVisible())
+        self.assertFalse(tab.params_tab.Saturation_Estimator.isVisible())
         tab.hide()
 
 
@@ -412,10 +431,11 @@ class VoltageEstimatorTests(unittest.TestCase):
     def test_Estimator_Rings_Fade_Across_The_Margin(self):
         """Rings are full strength in the sweep's core and fade towards its
         edges across the margin; the readout calls those crossings "edge"
-        and counts them by weight; the map carries no text (2026-10-24)."""
+        and counts them by weight; the map shows no text until a ring is
+        clicked (2026-10-24)."""
         self._Build(self.cfg)
         est = self.est
-        self.assertFalse(est._Map.texts)
+        self.assertFalse([t for t in est._Map.texts if t.get_visible()])
         est.Dv_Box.setValue(400)
         est.Dv_Box.editingFinished.emit()
         est.Margin_Box.setValue(150)
@@ -432,6 +452,51 @@ class VoltageEstimatorTests(unittest.TestCase):
         self.assertIn("selected coverage", text)
         if any(250 < abs(y) <= 400 for y in ys):
             self.assertIn(" edge", text)
+
+    def test_Estimator_Ring_Click_Labels_Its_Dv(self):
+        """A click on a red ring labels its dV beside the bar without moving
+        the setpoint; the label follows the ring, and a second click on it
+        or a click elsewhere on the map clears it (2026-10-25)."""
+        from types import SimpleNamespace
+        self._Build(self.cfg)
+        est = self.est
+        est.Dv_Box.setValue(300)
+        est.Dv_Box.editingFinished.emit()
+        est.Window_Box.setValue(400)        # rings tens of pixels apart
+        self.tab.resize(1600, 1000)
+        QApplication.processEvents()
+        est.canvas.draw()                   # lays the axes out
+        s0, label, dvs = est._S, est._Label, est._Ring_Dvs
+        key = max(dvs, key=lambda k: min(
+            (abs(dvs[k][0] - dvs[j][0]) for j in dvs if j != k),
+            default=float("inf")))          # the ring furthest from the rest
+        x, y = est._Map.transData.transform((s0, est._Ring_Dvs[key][0]))
+
+        def click(x, y):
+            ev = SimpleNamespace(inaxes=est._Map, button=1, dblclick=False,
+                                 x=x, y=y)
+            est._On_Press(ev)
+            est._On_Release(ev)
+        click(x, y + 2)
+        self.assertEqual(est._S, s0)                    # no commit
+        self.assertTrue(label.get_visible())
+        d = est._Ring_Dvs[key][0]
+        self.assertEqual(label.get_text(), f"{d:+.2f} V")
+        self.assertEqual(label.xy, (s0, d))
+        est._Draw_At(s0 + 1e-4)                         # follows the ring
+        self.assertEqual(label.xy, (s0 + 1e-4, est._Ring_Dvs[key][0]))
+        est._Draw_At(s0)
+        click(x, y)
+        self.assertFalse(label.get_visible())
+        click(x, y)
+        # Clear of the bar and the centre markers: a plain click there pans.
+        bb, tol = est._Map.bbox, 12 * est.canvas.device_pixel_ratio
+        far = next(px for px in range(int(bb.x0) + 5, int(bb.x1) - 5, 5)
+                   if all(abs(est._Map.transData.transform((c, 0))[0] - px)
+                          > tol for c in [s0] + est._Centres))
+        click(far, y)
+        self.assertFalse(label.get_visible())
+        self.assertEqual(est._S, s0)
 
     def test_Estimator_Waits_For_Run(self):
         """F2: before the first Run a refresh reports the change but shows
@@ -500,18 +565,25 @@ class VoltageEstimatorTests(unittest.TestCase):
         self.assertEqual(est._Selected(st), set(top3))
 
     def test_Estimator_Optimise_Covers_Selected_Peaks(self):
-        """Optimise leaves the setpoint alone and sets Scan > Voltage range
-        to the DAQ range of the selected peaks plus the margin (100 V by
-        default, set with the gear), start and stop outward to whole
-        steps; the readout lists them (2026-10-24)."""
+        """Optimise moves the setpoint so the selected peaks are centred on
+        the beam voltage, the sweep's centre, and sets Scan ▸ Voltage range
+        to the least symmetric range covering them with the margin (100 V
+        by default, set with the gear), start and stop outward to whole
+        steps; the readout lists them. Before 2026-10-25 the setpoint
+        stayed put and the range took the width of an off-centre window,
+        so with all states shown the 59Co peaks fell outside the sweep."""
         self._Build(self.cfg)
         est, gp = self.est, self.tab.params_tab.global_params
         est.Show_Combo.setCurrentIndex(1)       # 59Co only
         st = est._Shown()[0]
-        s0, step = est._S, gp.scan_step.value()
-        d = [est._Peak_Dvs(st, s0)[k] for k in est._Selected(st)]
-        start, stop = est._Peak_Range(s0)
+        step = gp.scan_step.value()
         self.assertEqual(est.Margin_Box.value(), 100.0)
+        est._Optimise()
+        s = est._S
+        self.assertEqual(gp.setpoint_cm.value(), s)
+        d = [est._Peak_Dvs(st, s)[k] for k in est._Selected(st)]
+        self.assertAlmostEqual((min(d) + max(d)) / 2, 0.0, delta=0.01)
+        start, stop = est._Peak_Range(s)
         for edge in (start, stop):
             self.assertAlmostEqual(edge / step, round(edge / step), places=6)
         self.assertLessEqual(start, min(d) - 100.0)
@@ -520,13 +592,21 @@ class VoltageEstimatorTests(unittest.TestCase):
         self.assertLess(stop, max(d) + 100.0 + step)
         self.assertIn(f"[{start:.1f}, {stop:.1f}] V to scan",
                       est.Readout.toPlainText())
+        half = gp.scan_range.value() / 2
+        self.assertAlmostEqual(half, max(-start, stop), places=6)
+        self.assertAlmostEqual(est.Dv_Box.value(), half, places=2)
+        for v in d:                             # all in the sweep's core
+            self.assertEqual(est._Weight(v), 1.0)
+        est.Margin_Box.setValue(40.0)           # a tighter margin
         est._Optimise()
-        self.assertEqual(est._S, s0)                    # setpoint untouched
-        self.assertAlmostEqual(gp.scan_range.value(), stop - start, places=6)
-        est.Margin_Box.setValue(40.0)                   # a tighter margin
-        start2, stop2 = est._Peak_Range(s0)
-        self.assertAlmostEqual(stop2 - start2, (stop - start) - 120.0,
+        self.assertAlmostEqual(gp.scan_range.value(), 2 * half - 120.0,
                                delta=2 * step)
+        est.Show_Combo.setCurrentIndex(0)       # all states, as reported
+        est._Optimise()
+        dv = est.Dv_Box.value()
+        for state in est._Shown():
+            for k in est._Selected(state):
+                self.assertLessEqual(abs(est._Peak_Dvs(state, est._S)[k]), dv)
 
     def test_Estimator_Follows_Stepped_Parameters(self):
         """A step (arrows, wheel, code) in a parameter box refreshes the
@@ -683,6 +763,167 @@ class IsotopeColorCodingTests(unittest.TestCase):
         self.assertIn(ISOTOPE_COLORS[0], panels[1].styleSheet())
         self.assertEqual(panels[2]._color_index, 1)
 
+
+class Saturation_Estimator_Tests(unittest.TestCase):
+    """The saturation estimator beside the voltage range estimator
+    (2026-10-25)."""
+
+    P = (0.25, 0.5, 1.0, 2.0, 3.0, 4.5, 6.0, 8.0)
+
+    def setUp(self):
+        _ensure_app()
+        from gui.estimate_tab import Saturation_Estimator
+        self.sat = Saturation_Estimator()
+
+    def _Fill(self, rows):
+        from PySide6.QtWidgets import QTableWidgetItem
+        t = self.sat.Table
+        for r, row in enumerate(rows):
+            t.setRowCount(max(t.rowCount(), r + 1))
+            for c, v in enumerate(row):
+                t.setItem(r, c, QTableWidgetItem(str(v)))
+
+    def _Homogeneous(self, noise=0.0, a=5000.0, ps=1.6, b0=40.0, k=18.0):
+        import numpy as np
+        p = np.array(self.P)
+        wiggle = noise * np.sin(7 * p)          # deterministic "noise"
+        rows = []                   # (power, background, peak)
+        for x, w in zip(p, wiggle):
+            bkg = (b0 + k * x) * (1 + w)
+            rows.append((x, bkg, bkg + a * (x / ps) / (1 + x / ps) * (1 - w)))
+        return rows
+
+    def test_Saturation_Fit_Finds_The_Analytic_Optimum(self):
+        """Homogeneous signal over a linear background: the fit returns the
+        inputs, S/B peaks at sqrt(Psat B0 / k), and the propagated 1 sigma
+        matches the analytic propagation of the joint covariance."""
+        import numpy as np
+        self._Fill(self._Homogeneous())
+        p, b, s = self.sat._Rows()
+        fit = self.sat._Fit(p, b, s)
+        np.testing.assert_allclose(fit["theta"], (5000, 1.6, 40, 18),
+                                   rtol=1e-6)
+        self.assertAlmostEqual(fit["opt"], np.sqrt(1.6 * 40 / 18), places=6)
+        self.assertTrue(self.sat.Readout.toPlainText().startswith(
+            "Optimum  1.886"))
+        self._Fill(self._Homogeneous(noise=0.03))
+        fit = self.sat._Fit(*self.sat._Rows())
+        a, ps, b0, k = fit["theta"]
+        opt = np.sqrt(ps * b0 / k)
+        self.assertAlmostEqual(fit["opt"], opt, places=6)
+        jac = np.array([0, opt / (2 * ps), opt / (2 * b0), -opt / (2 * k)])
+        self.assertAlmostEqual(fit["opt_err"],
+                               np.sqrt(jac @ fit["cov"] @ jac), places=4)
+        # One curve, the background-free counts, with the optimum drawn as
+        # the estimator draws its setpoint: a red bar and ring.
+        (ax,) = self.sat.figure.axes
+        self.assertEqual(ax.lines[-1].get_xdata()[0], fit["opt"])
+        ring = ax.collections[-1].get_offsets()
+        self.assertEqual(len(ring), 1)
+        self.assertAlmostEqual(ring[0][1], fit["signal"](fit["opt"]))
+
+    def test_Saturation_Refits_Once_A_Row_Is_Complete(self):
+        """A row counts once all three cells hold numbers >= 0; a bad cell
+        turns red and its row is skipped; one empty row stays at the
+        bottom."""
+        from PySide6.QtWidgets import QTableWidgetItem
+        rows = self._Homogeneous()
+        self._Fill(rows[:3])
+        t = self.sat.Table
+        self.assertEqual(t.rowCount(), 4)
+        self.assertEqual(len(self.sat._Rows()[0]), 3)
+        self.assertIn("Optimum", self.sat.Readout.toPlainText())
+        t.setItem(3, 0, QTableWidgetItem("3"))
+        t.setItem(3, 1, QTableWidgetItem("94"))      # signal still missing
+        self.assertEqual(len(self.sat._Rows()[0]), 3)
+        self.assertEqual(t.rowCount(), 5)
+        t.setItem(3, 2, QTableWidgetItem("abc"))
+        self.assertEqual(t.item(3, 2).foreground().color().name(), "#e15759")
+        self.assertEqual(len(self.sat._Rows()[0]), 3)
+        t.item(3, 2).setText("3500")
+        self.assertEqual(self.sat._Rows()[2][-1], 3500 - 94)     # peak - bkg
+        self.assertEqual(len(self.sat._Rows()[0]), 4)
+        self.assertIn("4 points", self.sat.Readout.toPlainText())
+
+    def test_Saturation_Paste_Models_And_Clear(self):
+        """Pasted rows (a header line is skipped) fill the table; the free
+        exponent recovers an inhomogeneous line's 0.5, whose S/sqrt(B) has
+        no maximum; Clear empties the table and the plot."""
+        import numpy as np
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        p = np.array(self.P)
+        text = "Power\tBackground\tPeak\n" + "\n".join(
+            f"{x}\t{30 + 12 * x}\t"
+            f"{30 + 12 * x + 3000 * (x / 2) / np.sqrt(1 + x / 2)}"
+            for x in p)
+        QApplication.clipboard().setText(text)
+        self.sat.Table.setCurrentCell(0, 0)
+        QTest.keyClick(self.sat.Table, Qt.Key.Key_V,
+                       Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(self.sat._Rows()[0]), len(p))
+        self.sat.Model_Combo.setCurrentText("Free exponent")
+        fit = self.sat._Fit(*self.sat._Rows())
+        self.assertAlmostEqual(fit["theta"][2], 0.5, places=4)
+        self.sat.Model_Combo.setCurrentText("Inhomogeneous")
+        self.sat.Merit_Combo.setCurrentIndex(1)              # S / sqrt(B)
+        self.assertIn("still rises", self.sat.Readout.toPlainText())
+        self.sat.Clear_Btn.click()
+        self.assertEqual(self.sat.Table.rowCount(), 1)
+        self.assertFalse(self.sat.figure.axes)
+        self.assertTrue(self.sat.Readout.toPlainText().startswith(
+            "No complete measurement"))
+
+
+class Efficiency_Estimator_Tests(unittest.TestCase):
+    """The efficiency estimator, third of the optimiser tabs
+    (2026-10-25)."""
+
+    def setUp(self):
+        _ensure_app()
+        from gui.estimate_tab import Efficiency_Estimator
+        self.eff = Efficiency_Estimator()
+
+    def test_Efficiency_Is_Net_Counts_Per_Ion_On_Resonance(self):
+        """The ions fluorescing over the ions arriving: 10 bunches per
+        channel x 20 scans x 10 ms dwell = 2 s on the peak; 1 pA of singly
+        charged ions is 1e-12 / e = 6.24e6 ions/s, so 1.25e7 arrive; 2000
+        peak - 400 background = 1600 fluorescing, so 1.28e-4 (1 photon per
+        7,800 ions, +/- sqrt(2000)/1600 = 2.8 %). The unit list rescales
+        the current (pA by default); no current, or a peak not above the
+        background, shows a dash."""
+        from cls_estimations.constants import E_CHARGE
+        e = self.eff
+        self.assertEqual(e.Current_Unit.currentText(), "pA")
+        self.assertEqual([e.Current_Unit.itemText(i) for i in range(3)],
+                         ["fA", "pA", "nA"])
+        self.assertEqual(e.Value.text(), "\u2014")
+        self.assertIn("beam current", e.Detail.text())
+        e.Peak_Box.setValue(2000)
+        e.Background_Box.setValue(400)
+        e.Bunches_Box.setValue(10)
+        e.Scans_Box.setValue(20)
+        e.Dwell_Box.setValue(10)
+        e.Current_Box.setValue(1)
+        self.assertEqual(e.Value.text(), "1.28 \u00d7 10\u207b\u2074")
+        self.assertEqual(e.Detail.text(), "1 photon per 7,800 ions"
+                         "   \u00b12.8% (counting)")
+        text = e.Readout.toPlainText()
+        for line in ("200 on the peak", "2 s on the peak",
+                     f"{2e-12 / E_CHARGE:,.0f} arriving (6,240,000 /s, 1+)",
+                     "1600 \u00b1 45 fluorescing", "800 /s, 8 per bunch",
+                     "35.8 \u03c3"):
+            self.assertIn(line, text)
+        e.Current_Unit.setCurrentText("fA")     # 1000 times fewer ions
+        self.assertEqual(e.Value.text(), "1.28 \u00d7 10\u207b\u00b9")
+        self.assertTrue(e.Detail.text().startswith("1 photon per 7.8 ions"))
+        e.Current_Unit.setCurrentText("nA")
+        self.assertEqual(e.Value.text(), "1.28 \u00d7 10\u207b\u2077")
+        e.Background_Box.setValue(2000)
+        self.assertEqual(e.Value.text(), "\u2014")
+        self.assertIn("exceed the background", e.Detail.text())
+        # Estimator inputs stay off the global undo stack.
+        self.assertTrue(e.Peak_Box._Own_Undo)
 
 if __name__ == "__main__":
     unittest.main()

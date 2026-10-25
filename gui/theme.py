@@ -39,10 +39,13 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QEvent, Qt, QObject
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PySide6.QtCore import QEvent, Qt, QObject, QRect
+from PySide6.QtGui import (
+    QColor, QFont, QFontDatabase, QImage, QPainter, QPalette,
+)
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QComboBox, QDial, QSlider, QTabBar, QWidget,
+    QAbstractSpinBox, QComboBox, QDial, QGroupBox, QSlider, QStackedWidget,
+    QStyle, QStyleOptionGroupBox, QTabBar, QVBoxLayout, QWidget,
 )
 
 # ── Design tokens ────────────────────────────────────────────────────────
@@ -1184,6 +1187,162 @@ def style_project_tab_bar(tabs) -> None:
             btn.clicked.connect(
                 lambda _checked=False, b=bar, w=wrap:
                 _emit_close_for(b, w))
+
+
+class Title_Tabs(QGroupBox):
+    """Pages in one group box whose title row names each page
+    (2026-10-25). The box and every title are drawn by the style, as for
+    any group box: the first title where a group title goes, the others
+    after it, each cutting its gap in the border as a title does. The
+    current title is as a group title is; the others are darkened and
+    lighten under the cursor; a click on one shows its page. Answers the
+    QTabWidget calls the Estimate tab makes."""
+
+    # The sheets' QGroupBox::title left, and the 4 px the style cuts in
+    # the border beyond a title's padding (measured, both themes).
+    _LEFT, _CUT = 9, 4
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._Titles, self._Hover = [], -1
+        self._Stack = QStackedWidget()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._Stack)
+        self.setMouseTracking(True)
+
+    def addTab(self, widget, text):
+        self._Titles.append(text)
+        self._Stack.addWidget(widget)
+        self.update()
+
+    def count(self):
+        return self._Stack.count()
+
+    def widget(self, index):
+        return self._Stack.widget(index)
+
+    def tabText(self, index):
+        return self._Titles[index]
+
+    def currentIndex(self):
+        return self._Stack.currentIndex()
+
+    def currentWidget(self):
+        return self._Stack.currentWidget()
+
+    def setCurrentIndex(self, index):
+        self._Stack.setCurrentIndex(index)
+        self.update()
+
+    def setCurrentWidget(self, widget):
+        self.setCurrentIndex(self._Stack.indexOf(widget))
+
+    def _Layout(self):
+        """(shift, gap, label) of each title: the style's title rect for
+        it, the shift that sets it after the titles before, and the gap
+        it cuts in the border once shifted."""
+        opt = QStyleOptionGroupBox()
+        self.initStyleOption(opt)
+        opt.subControls |= QStyle.SubControl.SC_GroupBoxLabel
+        out, shift = [], 0
+        for text in self._Titles:
+            opt.text = text
+            label = self.style().subControlRect(
+                QStyle.ComplexControl.CC_GroupBox, opt,
+                QStyle.SubControl.SC_GroupBoxLabel, self)
+            pad = max(0, label.left() - self._LEFT)
+            gap = QRect(shift + self._LEFT, label.top(),
+                        label.width() + 2 * pad + self._CUT, label.height())
+            out.append((shift, gap, label))
+            shift += label.right() + 1 + label.left()   # its margin again
+        return out
+
+    def _Titled(self, text, height):
+        """The top ``height`` px of this box as the style paints it titled
+        ``text``, as for any group box."""
+        dpr = self.devicePixelRatioF()
+        img = QImage(round(self.width() * dpr), round(height * dpr),
+                     QImage.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(dpr)
+        # Over the parent's colour, as on screen: the background's
+        # antialiased top edge blends with it.
+        img.fill((self.parentWidget() or self).palette().color(
+            QPalette.ColorRole.Window))
+        p = QPainter(img)
+        opt = QStyleOptionGroupBox()
+        self.initStyleOption(opt)
+        opt.text = text         # initStyleOption leaves an untitled box's
+        opt.subControls |= QStyle.SubControl.SC_GroupBoxLabel   # label out
+        self.style().drawComplexControl(
+            QStyle.ComplexControl.CC_GroupBox, opt, p, self)
+        p.end()
+        return img
+
+    def minimumSizeHint(self):
+        """Wide enough for every title: they are never cropped."""
+        hint, layout = super().minimumSizeHint(), self._Layout()
+        if layout:
+            hint.setWidth(max(hint.width(),
+                              layout[-1][1].right() + 1 + self._LEFT))
+        return hint
+
+    def paintEvent(self, event):
+        """The box titled with the first title, as the style draws it, and
+        each other title's gap copied in from the box the style draws
+        titled with that one (the style sets its own clip as it draws, so
+        a shifted draw cannot be clipped). A title not shown is darkened:
+        each row of its glyphs blended toward the colour behind it there,
+        sampled from that drawing at the title's padding."""
+        layout, cur = self._Layout(), self.currentIndex()
+        opt = QStyleOptionGroupBox()
+        self.initStyleOption(opt)
+        if self._Titles:
+            opt.text = self._Titles[0]
+            opt.subControls |= QStyle.SubControl.SC_GroupBoxLabel
+        p = QPainter(self)
+        self.style().drawComplexControl(
+            QStyle.ComplexControl.CC_GroupBox, opt, p, self)
+        dpr = self.devicePixelRatioF()
+        for i, (shift, gap, label) in enumerate(layout):
+            img = self._Titled(self._Titles[i], gap.bottom() + 1)
+            src = QRect(*(round(v * dpr)
+                          for v in gap.translated(-shift, 0).getRect()))
+            if i:
+                p.drawImage(gap, img, src)
+            if i == cur:
+                continue
+            box = label.translated(shift, 0)
+            for y in range(box.top(), box.bottom() + 1):
+                shade = img.pixelColor(src.left(), round(y * dpr))
+                shade.setAlphaF(0.3 if i == self._Hover else 0.55)
+                p.fillRect(QRect(box.left(), y, box.width(), 1), shade)
+        p.end()
+
+    def _Title_At(self, pos):
+        return next((i for i, (_, gap, _) in enumerate(self._Layout())
+                     if gap.contains(pos)), -1)
+
+    def mouseMoveEvent(self, event):
+        i = self._Title_At(event.position().toPoint())
+        if i != self._Hover:
+            self._Hover = i
+            self.setCursor(Qt.CursorShape.PointingHandCursor if i >= 0
+                           else Qt.CursorShape.ArrowCursor)
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._Hover = -1
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        i = self._Title_At(event.position().toPoint())
+        if i >= 0 and event.button() == Qt.MouseButton.LeftButton:
+            self.setCurrentIndex(i)
+        else:
+            super().mousePressEvent(event)
 
 
 def install_wheel_guard(app) -> WheelFocusGuard:

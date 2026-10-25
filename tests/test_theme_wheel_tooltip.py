@@ -120,6 +120,48 @@ class ThemeApplyTests(unittest.TestCase):
             assert install_wheel_guard(app) is first
         """)
 
+    def test_Title_Tabs_Draw_Group_Titles(self):
+        """The optimiser tools' titles are group titles (2026-10-25):
+        under each theme, with any title current, that title and the box
+        are pixel for pixel a QGroupBox titled with it."""
+        run_in_fresh_app(self, """
+            from PySide6.QtWidgets import (
+                QGroupBox, QLabel, QVBoxLayout, QWidget)
+            from gui.theme import Title_Tabs, apply_theme
+            titles = ("Voltage Range Estimator", "Saturation Estimator",
+                      "Efficiency Estimator")
+            keep = []
+
+            def grab(box):
+                host = QWidget()
+                QVBoxLayout(host).addWidget(box)
+                host.setFixedSize(700, 160)
+                host.show()
+                keep.append(host)
+                app.processEvents()
+                return host.grab().toImage(), box.x(), box.y()
+            for name in ("dark", "win98"):
+                apply_theme(app, name)
+                for k, title in enumerate(titles):
+                    native = QGroupBox(title)
+                    QVBoxLayout(native).addWidget(QLabel(""))
+                    tabs = Title_Tabs()
+                    for t in titles:
+                        tabs.addTab(QLabel(""), t)
+                    tabs.setCurrentIndex(k)
+                    a, x0, y0 = grab(native)
+                    b = grab(tabs)[0]
+                    shift, gap, _ = tabs._Layout()[k]
+                    for y in range(y0, y0 + gap.bottom() + 1):
+                        for x in range(x0 + gap.left(), x0 + gap.right() + 1):
+                            assert b.pixel(x, y) == a.pixel(x - shift, y), \\
+                                (name, k, x, y)
+                    for y in range(y0 + gap.bottom() + 1, a.height()):
+                        for x in range(a.width()):
+                            assert b.pixel(x, y) == a.pixel(x, y), \\
+                                (name, k, x, y)
+        """)
+
     def test_wheel_guard_installed_once(self):
         """Idempotence on the shared app -- install_wheel_guard only
         attaches an event filter, so it is safe here; the restyle
