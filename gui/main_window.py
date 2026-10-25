@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import (
-    QAction, QKeySequence, QShortcut, QIcon, QPixmap, QFont,
+    QAction, QKeySequence, QIcon, QPixmap, QFont,
     QUndoStack, QColor, QDesktopServices,
 )
 
@@ -1510,7 +1510,8 @@ class MainWindow(QMainWindow):
             from cls_estimations.plotting import set_palette
             set_palette(et.run_tab.palette_combo.currentText())
             et.plots_tab.set_plot_data(self._worker.plot_results)
-            et.plots_tab.set_peak_data(self._worker.all_peaks or [])
+            et.plots_tab.set_peak_data(self._worker.all_peaks or [],
+                                       self._Run_Config)
 
         et.plots_tab.display_results(
             actual_output, config_name,
@@ -1658,10 +1659,16 @@ class MainWindow(QMainWindow):
                 with np.load(npz_path, allow_pickle=True) as data:
                     plot_results = list(data["plot_results"])
                     all_peaks = list(data["all_peaks"])
+                # The run's inputs name its peaks; older folders have none.
+                cfg_path = os.path.join(run_dir, "estimate_config.yaml")
+                run_cfg = None
+                if os.path.isfile(cfg_path):
+                    with open(cfg_path, encoding="utf-8") as fh:
+                        run_cfg = yaml.safe_load(fh)
                 from cls_estimations.plotting import set_palette
                 set_palette(palette)
                 et.plots_tab.set_plot_data(plot_results)
-                et.plots_tab.set_peak_data(all_peaks)
+                et.plots_tab.set_peak_data(all_peaks, run_cfg)
             except Exception:
                 logging.getLogger("denis").exception(
                     "could not load estimate arrays from %s", npz_path)

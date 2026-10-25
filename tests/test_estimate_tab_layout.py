@@ -369,7 +369,9 @@ class VoltageEstimatorTests(unittest.TestCase):
 
     def test_Estimator_Matches_Pipeline_Peak_Voltages(self):
         """Physics guard: every component's dV at the setpoint equals the
-        pipeline's, with a setpoint and with an anchored laser."""
+        pipeline's, with a setpoint and with an anchored laser; the peak
+        list names each of the pipeline's peaks by the estimator's state
+        and F transition for it (2026-10-25)."""
         import copy
         import logging
         import os
@@ -403,6 +405,14 @@ class VoltageEstimatorTests(unittest.TestCase):
                 self.assertEqual(len(mine), len(peaks))
                 for d, pk in zip(mine, peaks):
                     self.assertAlmostEqual(d, pk["dV"], delta=1e-9)
+                table = self.tab.plots_tab._peak_table
+                self.tab.plots_tab.set_peak_data(peaks, cfg)
+                rows = sorted(tuple(table.item(r, c).text() for c in (0, 1, 4))
+                              for r in range(table.rowCount()))
+                self.assertEqual(rows, sorted(
+                    (st["label"], t, "N/A" if d is None else f"{d:+.3f}")
+                    for st in est._States for t, d in zip(
+                        st["transitions"], est._Peak_Dvs(st, est._S))))
 
     def test_Estimator_Zoom_Survives_Commit_And_Rings_Mark_The_Band(self):
         """A wheel zoom on the map survives a commit's full redraw, and
@@ -1004,18 +1014,19 @@ class Efficiency_Estimator_Tests(unittest.TestCase):
         self.eff = Efficiency_Estimator()
 
     def test_Efficiency_Is_Net_Counts_Per_Ion_On_Resonance(self):
-        """The ions fluorescing over the ions arriving: 10 bunches per
-        channel x 20 scans x 10 ms dwell = 2 s on the peak; 1 pA of singly
-        charged ions is 1e-12 / e = 6.24e6 ions/s, so 1.25e7 arrive; 2000
-        peak - 400 background = 1600 fluorescing, so 1.28e-4 (1 photon per
-        7,800 ions, +/- sqrt(2000)/1600 = 2.8 %). The unit list rescales
-        the current (pA by default); no current, or a peak not above the
-        background, shows a dash."""
+        """The photons per second on the peak over the ions per second:
+        10 bunches per channel x 20 scans x 10 ms dwell = 2 s on the peak,
+        and 2000 peak - 400 background = 1600, so 800 photons/s; 1 pA of
+        singly charged ions is 1e-12 / e = 6.24e6 ions/s, so 1.28e-4 (1
+        photon per 7,800 ions, +/- sqrt(2000)/1600 = 2.8 %). The unit list
+        rescales the current (pA by default) or takes the ion rate in
+        s-1; no current, or a peak not above the background, shows a
+        dash."""
         from cls_estimations.constants import E_CHARGE
         e = self.eff
         self.assertEqual(e.Current_Unit.currentText(), "pA")
-        self.assertEqual([e.Current_Unit.itemText(i) for i in range(3)],
-                         ["fA", "pA", "nA"])
+        self.assertEqual([e.Current_Unit.itemText(i) for i in range(4)],
+                         ["fA", "pA", "nA", "s\u207b\u00b9"])
         self.assertEqual(e.Value.text(), "\u2014")
         self.assertIn("beam current", e.Detail.text())
         e.Peak_Box.setValue(2000)
@@ -1038,6 +1049,11 @@ class Efficiency_Estimator_Tests(unittest.TestCase):
         self.assertTrue(e.Detail.text().startswith("1 photon per 7.8 ions"))
         e.Current_Unit.setCurrentText("nA")
         self.assertEqual(e.Value.text(), "1.28 \u00d7 10\u207b\u2077")
+        # The same beam as an ion rate: 1 pA's 6.24e6 ions/s, no charge.
+        e.Current_Unit.setCurrentText("s\u207b\u00b9")
+        e.Current_Box.setValue(1e-12 / E_CHARGE)
+        self.assertEqual(e.Value.text(), "1.28 \u00d7 10\u207b\u2074")
+        self.assertIn("arriving (6,240,000 /s)", e.Readout.toPlainText())
         e.Background_Box.setValue(2000)
         self.assertEqual(e.Value.text(), "\u2014")
         self.assertIn("exceed the background", e.Detail.text())

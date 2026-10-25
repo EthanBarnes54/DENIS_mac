@@ -2022,6 +2022,9 @@ class PlotsTab(QWidget):
              "dV (V)", "V_acc (V)", "Intensity"])
         self._peak_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
+        # The state's transition in full; the even stretch clipped it.
+        self._peak_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents)
         self._peak_table.setSortingEnabled(True)
         self._peak_table.setEditTriggers(
             QTableWidget.EditTrigger.NoEditTriggers)
@@ -2032,6 +2035,7 @@ class PlotsTab(QWidget):
 
         self._plot_results = None
         self._all_peaks = []
+        self._peak_names = None     # (state, transition) of each peak
         self._palette = "default"
         self._pdf_paths = {}
         self._editor_dialog = None
@@ -2122,9 +2126,18 @@ class PlotsTab(QWidget):
         self._plot_results = all_plot_results
         self._on_selection()
 
-    def set_peak_data(self, all_peaks):
-        """Store peak data and populate the peak table."""
+    def set_peak_data(self, all_peaks, config=None):
+        """Store peak data and populate the peak table. With the run's
+        estimate dict ``config``, each peak is named as the voltage range
+        estimator names it, by its state and its F transition (2026-10-25);
+        only when the names line up with the peaks one for one."""
         self._all_peaks = all_peaks or []
+        names = _Peak_Names(config) if config else None
+        if names and (len(names) != len(self._all_peaks) or any(
+                not n.startswith(str(pk.get("label", "")))
+                for (n, _t), pk in zip(names, self._all_peaks))):
+            names = None
+        self._peak_names = names
         self._populate_peak_table()
 
     def _populate_peak_table(self):
@@ -2132,10 +2145,10 @@ class PlotsTab(QWidget):
         self._peak_table.setSortingEnabled(False)
         self._peak_table.setRowCount(len(self._all_peaks))
         for row, pk in enumerate(self._all_peaks):
-            self._peak_table.setItem(
-                row, 0, QTableWidgetItem(str(pk.get("label", ""))))
-            self._peak_table.setItem(
-                row, 1, QTableWidgetItem(str(pk.get("state", ""))))
+            label, state = (self._peak_names[row] if self._peak_names else
+                            (pk.get("label", ""), pk.get("state", "")))
+            self._peak_table.setItem(row, 0, QTableWidgetItem(str(label)))
+            self._peak_table.setItem(row, 1, QTableWidgetItem(str(state)))
             # Numeric columns: use a sortable item
             for col, key, fmt in [
                 (2, "iso_shift_MHz", "{:+.3f}"),
@@ -2409,6 +2422,47 @@ def _Transitions(I, J_lower, J_upper):
     q = "J" if I == 0 else "F"
     return [f"{q} = {lo} → {q}′ = {up}"
             for lo, up in (key.replace("_", "/").split("to") for key in keys)]
+
+
+def _Load_Config(d):
+    """Parse the estimate dict ``d`` as Run does. load_config takes only a
+    path; the descriptor is closed before loading, since Windows can't
+    reopen a file that is still open."""
+    import tempfile
+    import yaml
+    from cls_estimations.config_parser import load_config
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            yaml.safe_dump(d, fh)
+        return load_config(path)
+    finally:
+        os.unlink(path)
+
+
+def _States_Of(cfg):
+    """``(index, isotope, isomer or None, label)`` of every state, in the
+    order run() lists its peaks: isotope by isotope, the ground state
+    before its isomer."""
+    for i, iso in enumerate(cfg.isotopes):
+        for isomer in [None] + [iso.isomer] * (iso.isomer is not None):
+            yield i, iso, isomer, (
+                iso.label if iso.isomer is None
+                else f"{iso.label} (g.s.)" if isomer is None
+                else f"{iso.label} (isomer, I={isomer.I})")
+
+
+def _Peak_Names(d):
+    """``(state, transition)`` of each peak run() lists for the estimate
+    dict ``d``, as the voltage range estimator names them; None when ``d``
+    does not parse."""
+    try:
+        cfg = _Load_Config(d)
+    except Exception:                                   # noqa: BLE001
+        return None
+    tr = cfg.transition
+    return [(label, t) for _i, iso, isomer, label in _States_Of(cfg)
+            for t in _Transitions((isomer or iso).I, tr.J_lower, tr.J_upper)]
 
 
 class _Gradient_Line(LineCollection):
@@ -2712,51 +2766,37 @@ class Voltage_Range_Estimator(QWidget):
 
     def _Build_Model(self, d):
         """Parse ``d`` as Run does and collect each state's components."""
-        import tempfile
-        import yaml
         # The pipeline's single source of the A/B scaling and the peak
         # voltages; copying them would fork the physics.
         from cls_estimate import _get_hfs_params
-        from cls_estimations.config_parser import load_config
-        # load_config takes only a path. Close the descriptor before
-        # loading: Windows can't reopen a file that is still open.
-        fd, path = tempfile.mkstemp(suffix=".yaml")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                yaml.safe_dump(d, fh)
-            cfg = load_config(path)
-        finally:
-            os.unlink(path)
+        cfg = _Load_Config(d)
         tr = cfg.transition
         nu0 = transition_frequency_MHz(tr.lower_level_cm, tr.upper_level_cm)
         self._Cfg, self._V0 = cfg, cfg.beam.voltage_kV * 1e3  # V0 as in run()
         self._States = []
-        for i, iso in enumerate(cfg.isotopes):
-            # Ground state solid, isomer dashed, labelled as run() does.
-            for isomer in [None] + [iso.isomer] * (iso.isomer is not None):
-                A_l, B_l, A_u, B_u = _get_hfs_params(
-                    iso, cfg.reference, is_isomer=isomer is not None,
-                    isomer_cfg=isomer, g_s_factor=cfg.g_s_factor)[:4]
-                state = isomer or iso
-                key = (state.I, tr.J_lower, tr.J_upper, A_l, B_l, A_u, B_u)
-                if key not in self._Hfs_Cache:
-                    self._Hfs_Cache[key] = (*compute_hfs_lines(*key),
-                                            _Transitions(*key[:3]))
-                self._States.append(dict(
-                    label=(iso.label if iso.isomer is None
-                           else f"{iso.label} (g.s.)" if isomer is None
-                           else f"{iso.label} (isomer, I={isomer.I})"),
-                    ls="--" if isomer else "-",
-                    mass=get_mass(self._Mass_Table, cfg.Z, iso.A),
-                    color=ISOTOPE_COLORS[i % len(ISOTOPE_COLORS)],
-                    # centroid = nu0 + isotope (or isomer) shift, as in run()
-                    centroid=nu0 + state.isotope_shift_MHz,
-                    offsets=self._Hfs_Cache[key][0],
-                    intens=self._Hfs_Cache[key][1],
-                    transitions=self._Hfs_Cache[key][2],
-                    n_meas=state.peaks_to_measure,
-                    I=state.I, shift=state.isotope_shift_MHz,
-                    hfs=(A_l, A_u, B_l, B_u)))
+        for i, iso, isomer, label in _States_Of(cfg):
+            # Ground state solid, isomer dashed.
+            A_l, B_l, A_u, B_u = _get_hfs_params(
+                iso, cfg.reference, is_isomer=isomer is not None,
+                isomer_cfg=isomer, g_s_factor=cfg.g_s_factor)[:4]
+            state = isomer or iso
+            key = (state.I, tr.J_lower, tr.J_upper, A_l, B_l, A_u, B_u)
+            if key not in self._Hfs_Cache:
+                self._Hfs_Cache[key] = (*compute_hfs_lines(*key),
+                                        _Transitions(*key[:3]))
+            self._States.append(dict(
+                label=label,
+                ls="--" if isomer else "-",
+                mass=get_mass(self._Mass_Table, cfg.Z, iso.A),
+                color=ISOTOPE_COLORS[i % len(ISOTOPE_COLORS)],
+                # centroid = nu0 + isotope (or isomer) shift, as in run()
+                centroid=nu0 + state.isotope_shift_MHz,
+                offsets=self._Hfs_Cache[key][0],
+                intens=self._Hfs_Cache[key][1],
+                transitions=self._Hfs_Cache[key][2],
+                n_meas=state.peaks_to_measure,
+                I=state.I, shift=state.isotope_shift_MHz,
+                hfs=(A_l, A_u, B_l, B_u)))
         if cfg.laser.setpoint_cm is None:
             # Mirrors the "Resolve anchor" block of cls_estimate.run().
             anchor = next((iso for iso in cfg.isotopes
@@ -3708,8 +3748,12 @@ class Saturation_Estimator(QWidget):
 # ══════════════════════════════════════════════════════════════════
 #  Efficiency Estimator
 # ══════════════════════════════════════════════════════════════════
-# The beam current units (A), and the exponent digits of _Times_Ten.
-BEAM_CURRENT_UNITS = {"fA": 1e-15, "pA": 1e-12, "nA": 1e-9}
+# The beam's units, in ions per second per unit: currents of singly
+# charged ions (1 pA is 1e-12 / e ions/s), or the ion rate itself in s-1,
+# which keeps the unit list as narrow as fA, pA and nA did. And the
+# exponent digits of _Times_Ten.
+BEAM_CURRENT_UNITS = {"fA": 1e-15 / E_CHARGE, "pA": 1e-12 / E_CHARGE,
+                      "nA": 1e-9 / E_CHARGE, "s\u207b\u00b9": 1.0}
 _SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
@@ -3728,14 +3772,14 @@ def _Three_Figures(x):
 
 class Efficiency_Estimator(QWidget):
     """Spectroscopic efficiency of the running experiment, shown large:
-    the ions fluorescing (the background-free counts on the peak) over
-    the ions that reached the light-collection region while the laser
-    sat on it: the beam current over e (singly charged ions) times the
-    time on the peak (bunches per channel x dwell x scans: the DAQ's
-    dwell is per bunch, as the I311 ELOG's scan times show). Its
-    uncertainty and the significance are counting statistics with the
-    background known, as the Estimate's timing assumes: sigma(net) =
-    sqrt(peak)."""
+    the photons per second on the peak, the background-free counts over
+    the time the laser sat on it (bunches per channel x dwell x scans: the
+    DAQ's dwell is per bunch, as the I311 ELOG's scan times show), over
+    the ions per second reaching the light-collection region, the beam
+    current over e (singly charged ions) or given in ions/s (s-1). Read
+    the other way, 1 photon per N ions. Its uncertainty and the
+    significance are counting statistics with the background known, as
+    the Estimate's timing assumes: sigma(net) = sqrt(peak)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3754,10 +3798,13 @@ class Efficiency_Estimator(QWidget):
         self.Dwell_Box = _make_double(
             100, 0.1, 1e6, 1, 10, tooltip="The DAQ's dwell time, per bunch "
             "(ms).")
+        # Up to 1e7 with 2 decimals: as wide as 1e6 with 3, so ion rates fit
+        # without widening the form.
         self.Current_Box = _make_double(
-            0, 0, 1e6, 3, 1, tooltip="Beam current reaching the light-"
-            "collection region, of singly charged ions: 1 pA is 6.24 "
-            "million ions per second.")
+            0, 0, 1e7, 2, 1, tooltip="Beam current reaching the light-"
+            "collection region, of singly charged ions (1 pA is 6.24 "
+            "million ions per second), or with s\u207b\u00b9 the ion rate "
+            "itself, in ions per second.")
         self.Current_Unit = QComboBox()
         self.Current_Unit.addItems(list(BEAM_CURRENT_UNITS))
         self.Current_Unit.setCurrentText("pA")
@@ -3801,20 +3848,22 @@ class Efficiency_Estimator(QWidget):
         self._Update()
 
     def _Update(self, *_):
-        """The headline and the readout, from the inputs as they stand."""
+        """The headline and the readout, from the inputs as they stand:
+        the photons per second on the peak over the ions per second."""
         bunches = self.Bunches_Box.value() * self.Scans_Box.value()
         time = bunches * self.Dwell_Box.value() / 1000      # s on the peak
-        rate = (self.Current_Box.value() / E_CHARGE
-                * BEAM_CURRENT_UNITS[self.Current_Unit.currentText()])
+        unit = self.Current_Unit.currentText()
+        rate = self.Current_Box.value() * BEAM_CURRENT_UNITS[unit]  # ions/s
         ions = rate * time
         peak, bkg = self.Peak_Box.value(), self.Background_Box.value()
         net = peak - bkg                                    # fluorescing
+        photons = net / time                                # per second
         text = [f"Bunches  {bunches:,} on the peak",
                 f"Time     {time:.4g} s on the peak",
-                f"Ions     {ions:,.0f} arriving ({_Three_Figures(rate)} /s, "
-                "1+)",
+                f"Ions     {ions:,.0f} arriving ({_Three_Figures(rate)} /s"
+                + (")" if unit == "s\u207b\u00b9" else ", 1+)"),
                 f"Net      {_Plus_Minus(net, np.sqrt(peak))} fluorescing",
-                f"Photons  {net / time:.3g} /s, {net / bunches:.3g} per bunch",
+                f"Photons  {photons:.3g} /s, {net / bunches:.3g} per bunch",
                 f"S/B      {net / bkg:.3g}" if bkg else "S/B      -",
                 f"Signif.  {net / np.sqrt(peak):.1f} σ" if peak
                 else "Signif.  -"]
@@ -3824,7 +3873,7 @@ class Efficiency_Estimator(QWidget):
             value, detail = "—", ("The peak counts must exceed the "
                                        "background.")
         else:
-            eff = net / ions
+            eff = photons / rate                            # = net / ions
             value = _Times_Ten(eff)
             detail = (f"1 photon per {_Three_Figures(1 / eff)} ions   "
                       f"±{100 * np.sqrt(peak) / net:.1f}% (counting)")
@@ -4000,7 +4049,10 @@ class EstimateTab(QWidget):
             "\u2022 <b>Combined Overview</b> \u2013 All isotopes overlaid on "
             "a single spectrum plot.<br>"
             "\u2022 <b>Peak List</b> \u2013 Sortable table of all peaks with "
-            "isotope, state, shift, offset, voltage and intensity.<br>"
+            "isotope (and ground state or isomer), state (the F "
+            "transition, F = 5/2 \u2192 F\u2032 = 7/2, named as the Voltage "
+            "Range Estimator names it), shift, offset, voltage and "
+            "intensity.<br>"
             "\u2022 Use <b>Edit Plot</b> to customise titles, labels, "
             "colours and line styles, then export as PNG, PDF or SVG."
             "<br><br>"
@@ -4103,14 +4155,16 @@ class EstimateTab(QWidget):
 
             "<h4>Efficiency Estimator</h4>"
             "The spectroscopic efficiency of the running experiment, shown "
-            "large: the ions fluorescing over the ions arriving. The ions "
-            "fluorescing are <b>Peak counts</b> \u2212 <b>Background</b>, "
-            "both counted in one channel over all the scans. The time on "
-            "the peak is <b>Bunches per channel</b> \u00d7 <b>Dwell "
-            "time</b> \u00d7 <b>Scans</b> (the DAQ's dwell is per bunch), "
-            "and the ions arriving at the light-collection region are the "
-            "<b>Beam current</b> (fA, pA or nA; singly charged ions, so 1 pA "
-            "is 6.24 \u00d7 10\u2076 ions/s) \u00f7 e \u00d7 that time. The "
+            "large: the photons per second on the peak over the ions per "
+            "second arriving. The photons are <b>Peak counts</b> \u2212 "
+            "<b>Background</b>, both counted in one channel over all the "
+            "scans, over the time on the peak, <b>Bunches per channel</b> "
+            "\u00d7 <b>Dwell time</b> \u00d7 <b>Scans</b> (the DAQ's dwell "
+            "is per bunch). The ions per second reaching the "
+            "light-collection region are the <b>Beam current</b> \u00f7 e "
+            "(fA, pA or nA; singly charged ions, so 1 pA is 6.24 \u00d7 "
+            "10\u2076 ions/s), or with s\u207b\u00b9 the ion rate itself, in "
+            "ions per second. The "
             "headline also reads it "
             "as 1 photon per N ions, with its counting uncertainty "
             "\u221apeak; the readout gives the bunches and time on the "
