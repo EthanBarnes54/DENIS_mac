@@ -35,28 +35,30 @@ import warnings
 import numpy as np
 
 from PySide6.QtWidgets import (
-    QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QGroupBox, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox,
     QComboBox, QCheckBox, QRadioButton, QButtonGroup, QPushButton,
-    QPlainTextEdit, QScrollArea, QSplitter, QFileDialog, QMessageBox,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
+    QPlainTextEdit, QScrollArea, QSplitter, QFileDialog, QSizePolicy,
+    QTableWidget, QTableWidgetItem, QHeaderView, QStackedWidget,
     QAbstractButton, QAbstractSpinBox, QApplication, QMenu, QWidgetAction,
 )
 from PySide6.QtCore import (
-    Qt, Signal, QLocale, QTimer, QUrl, QCoreApplication, QEvent,
+    Qt, Signal, QTimer, QUrl, QCoreApplication, QEvent,
 )
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QFont, QKeySequence, QValidator,
+    QColor, QDesktopServices, QKeySequence,
 )
 
+from matplotlib import rcParams
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.collections import LineCollection
+from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 
 from gui.shared_widgets import (
-    ScientificSpinBox, LogHighlighter, PlotEditorDialog,
+    LogHighlighter, PlotEditorDialog,
     ORBITAL_NAMES, _make_double, _make_int, _make_sci,
-    LEGEND_LOCATIONS, LINESTYLE_MAP, lucide_icon,
-    _SpinBoxCommand, scroll_zoom,
+    lucide_icon, _SpinBoxCommand, scroll_zoom,
 )
 from gui.theme import ACCENT_TITLE, Title_Tabs
 from cls_estimations.mass_lookup import (
@@ -2389,23 +2391,83 @@ class PlotsTab(QWidget):
 # ══════════════════════════════════════════════════════════════════
 #  Voltage Range Estimator
 # ══════════════════════════════════════════════════════════════════
+# The opacity of an unselected peak on the spectrum: faded, still legible.
+FADED_PEAK = 0.3
+
+
+def _Transitions(I, J_lower, J_upper):
+    """Each hyperfine component's "F = 5/2 → F′ = 7/2", in
+    compute_hfs_lines' order: satlas2's own line keys ("5_2to7_2"), the
+    list compute_hfs_lines reads its intensities by, so a label cannot
+    drift from its peak. With I = 0 the one line is J → J′."""
+    if I == 0:
+        keys = ["to".join(f"{2 * j:.0f}_2" if j % 1 else f"{j:.0f}"
+                          for j in (J_lower, J_upper))]
+    else:
+        import satlas2 as sat   # already loaded by compute_hfs_lines
+        keys = sat.HFS(I=I, J=[J_lower, J_upper]).lines
+    q = "J" if I == 0 else "F"
+    return [f"{q} = {lo} → {q}′ = {up}"
+            for lo, up in (key.replace("_", "/").split("to") for key in keys)]
+
+
+class _Gradient_Line(LineCollection):
+    """A curve coloured point by point, built as Matplotlib's multicoloured
+    line example builds it: one segment per point, from the midpoint before
+    it to the midpoint after, so the joins fall on straight runs. Dashed,
+    it carries the dash phase from segment to segment as a Line2D does,
+    measured as it is drawn so zooms and resizes keep it."""
+
+    def __init__(self, ls, **kw):
+        super().__init__([], capstyle="butt", **kw)
+        self._Dashed = ls != "-"
+
+    def get_data(self):
+        """The curve's points, as Line2D.get_data gives them."""
+        return self._Xy
+
+    def Set_Curve(self, x, y, colors):
+        self._Xy = (x, y)
+        p = np.column_stack([x, y])
+        mid = np.vstack([p[:1], (p[1:] + p[:-1]) / 2, p[-1:]])
+        self.set_segments(np.stack([mid[:-1], p, mid[1:]], axis=1))
+        self.set_color(colors)
+
+    def draw(self, renderer):
+        seg = self.get_segments()
+        if self._Dashed and seg:
+            px = self.get_transform().transform(np.concatenate(seg))
+            d = np.diff(px.reshape(-1, 3, 2), axis=1)
+            pts = np.hypot(d[..., 0], d[..., 1]).sum(1) / (
+                renderer.points_to_pixels(1.0))
+            # Collections scale the offset by the width, as the pattern.
+            lw = self.get_linewidth()[0] if rcParams["lines.scale_dashes"] \
+                else 1.0
+            self.set_linestyle([(f / lw, rcParams["lines.dashed_pattern"])
+                                for f in np.cumsum(pts) - pts])
+        super().draw(renderer)
+
+
 class Voltage_Range_Estimator(QWidget):
     """Setpoint map: where each hyperfine component resonates (dV from
     the beam voltage) as the laser setpoint moves, which components fall
-    inside the +/-dV sweep, and the spectrum at the setpoint.
+    inside the +/-Scanning Voltage sweep, and the spectrum at the
+    setpoint. That half-width was labelled dV, which the anchor's dV
+    already names (2026-10-25).
 
     Every number comes from the pipeline's own functions, fed the dict
     Run feeds it (``Config_Source``, i.e. MainWindow._build_estimate_dict),
     so the map agrees with Run. A finished edit (Enter or
     focus-out, drag release, 400 ms after the last arrow key) writes
-    Laser > Setpoint or Scan > Voltage range = 2*dV, undoably. It builds
-    only while ``Live`` (after the first Run); until then it shows a
-    placeholder. Any parameter change emits ``Config_Changed``, which
+    Laser > Setpoint or Scan > Voltage range = 2*Scanning Voltage,
+    undoably. It builds only while ``Live`` (after the first Run); until
+    then it shows a placeholder. Any parameter change emits ``Config_Changed``, which
     MainWindow uses to re-run the pipeline live. Optimise fits the
     setpoint and sweep to the peaks chosen under Peaks. The map
     zooms with the wheel and pans when dragged off the bar; that view
-    survives commits and refreshes until a double-click refits it. A
-    click on a ring labels its dV.
+    survives commits and refreshes until a double-click or the reset
+    button refits it. A click on a ring labels its dV; on a line or its
+    spectrum peak it selects that component or not.
     """
     Config_Changed = Signal()
 
@@ -2416,7 +2478,7 @@ class Voltage_Range_Estimator(QWidget):
         self._Isotope_List = isotope_list
         self._Snapshot = None
         self._Cfg = None            # parsed config of the last build
-        self._Hfs_Cache = {}        # compute_hfs_lines results, by input
+        self._Hfs_Cache = {}        # compute_hfs_lines + F labels, by input
         self._Mass_Table = isotope_list._mass_table   # load_mass_table()
         self._Dirty = True          # build on first show
         self._Dragging = False
@@ -2424,6 +2486,7 @@ class Voltage_Range_Estimator(QWidget):
         self._Zoom = None           # user's (xlim, ylim) on the map
         self._S = 0.0               # setpoint on the map (cm-1)
         self._Tag = None            # (state label, index) of the labelled ring
+        self._Hover = None          # (state label, index) under the cursor
 
         self.figure = Figure(layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
@@ -2431,10 +2494,12 @@ class Voltage_Range_Estimator(QWidget):
         self.canvas.setToolTip(
             "Drag the red bar to move the setpoint, or click the map and use "
             "the arrow keys (Shift for larger steps). Click a red ring to "
-            "label its dV. Scroll to zoom, drag elsewhere to pan, "
-            "double-click to refit.")
+            "label its dV. Click a line, or its peak on the spectrum, to "
+            "select it or not for Optimise. Scroll to zoom, drag elsewhere "
+            "to pan, double-click to refit.")
         for name, slot in (("button_press_event", self._On_Press),
                            ("motion_notify_event", self._On_Motion),
+                           ("figure_leave_event", self._On_Motion),
                            ("button_release_event", self._On_Release),
                            ("scroll_event", self._On_Scroll),
                            ("key_press_event", self._On_Key)):
@@ -2499,6 +2564,14 @@ class Voltage_Range_Estimator(QWidget):
         self.Dv_Box = _make_double(50, 0.05, 50000, 2, 10)
         self.Window_Box = _make_double(0, 0, 100000, 1, 50)
         self.Window_Box.setSpecialValueText("auto")
+        self.Reset_Btn = QPushButton(
+            lucide_icon("rotate-ccw"), "",
+            toolTip="Reset the view: Window back to auto and the map "
+                    "refitted, as a double-click on the map does.")
+        self.Reset_Btn.setFixedWidth(self.Reset_Btn.sizeHint().height())
+        self.Reset_Btn.clicked.connect(
+            lambda: self.Window_Box.setValue(0) if self.Window_Box.value()
+            else self._Reset_View())        # a Window change refits itself
         for box in (self.Setpoint_Box, self.Dv_Box, self.Window_Box):
             box.setKeyboardTracking(False)
             box._Own_Undo = True    # commits push their own undo step
@@ -2514,8 +2587,11 @@ class Voltage_Range_Estimator(QWidget):
         peaks_row.addWidget(self.Margin_Btn)
         form.addRow("Peaks:", peaks_row)
         form.addRow("Setpoint (cm\u207b\u00b9):", self.Setpoint_Box)
-        form.addRow("dV (\u00b1V):", self.Dv_Box)
-        form.addRow("Window (\u00b1V):", self.Window_Box)
+        form.addRow("Scanning Voltage (\u00b1V):", self.Dv_Box)
+        window_row = QHBoxLayout()
+        window_row.addWidget(self.Window_Box, 1)
+        window_row.addWidget(self.Reset_Btn)
+        form.addRow("Window (\u00b1V):", window_row)
         side = QVBoxLayout()
         side.addLayout(form)
         side.addWidget(self.Readout, 1)
@@ -2664,7 +2740,8 @@ class Voltage_Range_Estimator(QWidget):
                 state = isomer or iso
                 key = (state.I, tr.J_lower, tr.J_upper, A_l, B_l, A_u, B_u)
                 if key not in self._Hfs_Cache:
-                    self._Hfs_Cache[key] = compute_hfs_lines(*key)
+                    self._Hfs_Cache[key] = (*compute_hfs_lines(*key),
+                                            _Transitions(*key[:3]))
                 self._States.append(dict(
                     label=(iso.label if iso.isomer is None
                            else f"{iso.label} (g.s.)" if isomer is None
@@ -2676,6 +2753,7 @@ class Voltage_Range_Estimator(QWidget):
                     centroid=nu0 + state.isotope_shift_MHz,
                     offsets=self._Hfs_Cache[key][0],
                     intens=self._Hfs_Cache[key][1],
+                    transitions=self._Hfs_Cache[key][2],
                     n_meas=state.peaks_to_measure,
                     I=state.I, shift=state.isotope_shift_MHz,
                     hfs=(A_l, A_u, B_l, B_u)))
@@ -2740,7 +2818,8 @@ class Voltage_Range_Estimator(QWidget):
 
     def _Side_Widgets(self):
         return (self.Show_Combo, self.Peaks_Btn, self.Optimise_Btn,
-                self.Setpoint_Box, self.Dv_Box, self.Window_Box)
+                self.Setpoint_Box, self.Dv_Box, self.Window_Box,
+                self.Reset_Btn)
 
     def _Selected(self, st):
         """Indices of ``st``'s components Optimise must cover. By default
@@ -2756,7 +2835,10 @@ class Voltage_Range_Estimator(QWidget):
 
     def _Fill_Peaks_Menu(self):
         """The pipeline's choice, all components, or components ticked per
-        shown state, strongest first."""
+        shown state, strongest first. Each is named by its transition, "F =
+        5/2 → F′ = 7/2", with its dV at the setpoint right-aligned as the
+        map reads it; the MHz offset and intensity it showed meant nothing
+        on the bench (2026-10-25)."""
         menu = self.Peaks_Btn.menu()
         for sub in menu.findChildren(QMenu):
             sub.deleteLater()
@@ -2774,11 +2856,12 @@ class Voltage_Range_Estimator(QWidget):
             sub = QMenu(st["label"], menu)
             menu.addMenu(sub)
             sub.installEventFilter(self)    # stays open while ticking
-            sel = self._Selected(st)
+            sel, dvs = self._Selected(st), self._Peak_Dvs(st, self._S)
             for k in sorted(range(len(st["intens"])),
                             key=lambda k: -st["intens"][k]):
-                act = sub.addAction(f"{st['offsets'][k]:+.1f} MHz   "
-                                    f"{st['intens'][k]:.3f}")
+                dv = "N/A" if dvs[k] is None else f"{dvs[k]:+.1f} V"
+                # After the tab: the menu's right-aligned column.
+                act = sub.addAction(f"{st['transitions'][k]}\t{dv}")
                 act.setCheckable(True)
                 act.setChecked(k in sel)
                 act.toggled.connect(
@@ -2894,7 +2977,7 @@ class Voltage_Range_Estimator(QWidget):
         """Full redraw. The x-limits span the setpoints where the shown
         components enter and leave +/-Window, plus 5 %, and always the
         setpoint. Window "auto" fits the components at the setpoint with
-        a 10 % margin and is never narrower than +/-2*dV."""
+        a 10 % margin and is never narrower than +/-2*Scanning Voltage."""
         if self._Cfg is None:
             return
         shown, s, dv = self._Shown(), self._S, self.Dv_Box.value()
@@ -2927,7 +3010,7 @@ class Voltage_Range_Estimator(QWidget):
         self.figure.clear()
         self._Map, spec = self.figure.subplots(
             1, 2, sharey=True, gridspec_kw={"width_ratios": (3, 1)})
-        self._Centres = []
+        self._Spec, self._Centres = spec, []
         for st in shown:
             lines = [[np.nan if v is None else v
                       for v in self._Peak_Dvs(st, x)] for x in grid]
@@ -2966,8 +3049,10 @@ class Voltage_Range_Estimator(QWidget):
             va="center", fontsize="small", zorder=4, visible=False,
             bbox=dict(boxstyle="round,pad=0.3", fc="white", lw=0.8,
                       alpha=0.9))
-        self._Spectra = [spec.plot([], [], color=st["color"], ls=st["ls"])[0]
-                         for st in shown]
+        # Each state's spectrum in its colour, full on the selected peaks
+        # and faded on the rest, as the map's lines read (2026-10-25).
+        self._Spectra = [spec.add_collection(
+            _Gradient_Line(st["ls"], lw=1.5), autolim=False) for st in shown]
         n = sum(len(self._Selected(st)) for st in shown)
         self.Peaks_Btn.setText(
             f"To measure ({n})" if self._Picked is None else
@@ -2981,14 +3066,17 @@ class Voltage_Range_Estimator(QWidget):
         """Move the bar to setpoint ``s``; rings, spectrum and readout
         follow live (no satlas2 call, no rescale). Red rings mark only the
         selected peaks' crossings inside the sweep, which moves with the
-        readout offset like the peaks. The spectrum is sampled over the visible dV
-        range and every component, at a tenth of the FWHM: on a 600-step
+        readout offset like the peaks, and the spectrum is at full colour
+        over the selected peaks, faded elsewhere. The spectrum is sampled
+        over the visible dV range and every component, at a tenth of the
+        FWHM: on a 600-step
         grid of the visible range alone, the peak heights jumped as the
         setpoint moved (2026-10-24)."""
         cfg, self._S, dv = self._Cfg, s, self.Dv_Box.value()
         self._Bar.set_xdata([s, s])
         rows, self._Ring_Dvs, off = [], {}, self.Offset_Box.value()
         lo, hi, fw = *self._Map.get_ylim(), self._Fwhm_V
+        bg = np.array(to_rgb(self._Map.get_facecolor()))
         for st, line in zip(self._Shown(), self._Spectra):
             dvs, sel = self._Peak_Dvs(st, s), self._Selected(st)
             self._Ring_Dvs.update(
@@ -3004,7 +3092,22 @@ class Voltage_Range_Estimator(QWidget):
                 self._V0, cfg.beam.geometry, cfg.linewidth_fwhm_MHz, rng,
                 v_steps=int(min(20000, max(
                     600, 10 * (rng[1] - rng[0]) / (fw or np.inf)))))
-            line.set_data(y, v + off)
+            # The selected components' share of the curve at each dV, from
+            # Gaussians of the FWHM at their dVs (in logs, so it holds far
+            # out): 1 on a selected peak, 0 on the rest, a smooth blend
+            # where they overlap. The opacity follows it, from FADED_PEAK up,
+            # as opaque colours: alpha would double where segments meet.
+            d = np.array([np.nan if x is None else x for x in dvs])[:, None]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                lg = np.nan_to_num(
+                    np.log(np.asarray(st["intens"], float))[:, None]
+                    - 4 * np.log(2) * ((v + off - d) / (fw or np.inf)) ** 2,
+                    nan=-np.inf)
+                e = np.exp(lg - lg.max(0))
+                share = np.nan_to_num(e[sorted(sel)].sum(0) / e.sum(0))
+            a = FADED_PEAK + (1 - FADED_PEAK) * share
+            line.Set_Curve(y, v + off, bg + a[:, None] * (
+                np.array(to_rgb(st["color"])) - bg))
             rows += [(st["label"], o, amp, d, k in sel) for k, (o, amp, d)
                      in enumerate(zip(st["offsets"], st["intens"], dvs))]
         # Fainter towards the scan edge: crossings in the margin are riskier
@@ -3064,9 +3167,52 @@ class Voltage_Range_Estimator(QWidget):
 
     # ── Interaction and write-back ──────────────────────────────
 
+    def _Hit(self, event):
+        """``(state, index)`` of the component nearest the cursor, within
+        6 px: a map line, measured across it (the lines are steep, so
+        straight down overstated the gap), or a spectrum peak at the bar's
+        setpoint, measured in dV. None elsewhere, and within 6 px of the
+        bar or a centre marker, so the bar's drag, its rings' labels and the
+        centres' snap stay as they were."""
+        if self._Map is None or event.inaxes not in (self._Map, self._Spec):
+            return None
+        on_map, to_px = event.inaxes is self._Map, self._Map.transData.transform
+        hit, tol = None, 6 * self.canvas.device_pixel_ratio
+        if on_map and any(abs(to_px((c, 0))[0] - event.x) <= tol
+                          for c in [self._S] + self._Centres):
+            return None
+        x = (self._Map.transData.inverted().transform((event.x, event.y))[0]
+             if on_map else self._S)
+        h = 1e-2 * np.diff(self._Map.get_xlim())[0]     # for the slopes
+        for st in self._Shown():
+            for k, (d, e) in enumerate(zip(self._Peak_Dvs(st, x),
+                                           self._Peak_Dvs(st, x + h))):
+                if d is None:
+                    continue
+                (x0, y0), (x1, y1) = to_px([(x, d), (x + h, d if e is None
+                                                      else e)])
+                gap = abs(y0 - event.y) / (
+                    np.hypot(1, (y1 - y0) / (x1 - x0)) if on_map else 1)
+                if gap <= tol:
+                    hit, tol = (st, k), gap
+        return hit
+
+    def _Toggle_Hit(self, event):
+        """A click on a line or a peak selects it or not, as its Peaks
+        menu entry does; returns what it hit."""
+        hit = self._Hit(event)
+        if hit:
+            st, k = hit
+            self._Toggle_Peak(st, k, k not in self._Selected(st))
+        return hit
+
     def _On_Press(self, event):
-        if (self._Map is None or event.inaxes is not self._Map
-                or event.button != 1):
+        if self._Map is None or event.button != 1:
+            return
+        if event.inaxes is self._Spec:
+            self._Toggle_Hit(event)
+            return
+        if event.inaxes is not self._Map:
             return
         if event.dblclick:
             self._Reset_View()
@@ -3108,6 +3254,17 @@ class Voltage_Range_Estimator(QWidget):
             self._Map.set_xlim(x0 - dx, x1 - dx)
             self._Map.set_ylim(y0 - dy, y1 - dy)
             self.canvas.draw_idle()
+        else:
+            # Hover: a pointing hand over a line or peak a click toggles;
+            # no outline, which looked unprofessional (2026-10-25).
+            hit = self._Hit(event)
+            key = hit and (hit[0]["label"], hit[1])
+            if key != self._Hover:
+                self._Hover = key
+                if key:
+                    self.canvas.setCursor(Qt.CursorShape.PointingHandCursor)
+                else:
+                    self.canvas.unsetCursor()
 
     def _On_Release(self, event):
         if self._Dragging:
@@ -3127,7 +3284,8 @@ class Voltage_Range_Estimator(QWidget):
             self._Pan = None
             if moved:
                 self._Keep_View()
-            elif self._Tag:             # a click elsewhere clears the label
+            elif not self._Toggle_Hit(event) and self._Tag:
+                # A click off the lines clears the label.
                 self._Tag = None
                 self._Draw_At(self._S)
 
@@ -3177,7 +3335,7 @@ class Voltage_Range_Estimator(QWidget):
         self._Draw_View()
 
     def _Commit_Dv(self):
-        """Write Scan > Voltage range = 2*dV, undoably."""
+        """Write Scan > Voltage range = 2*Scanning Voltage, undoably."""
         _Set_Spin_Undoable(self._Global_Params.scan_range,
                            2 * self.Dv_Box.value(), self)
         self._Draw_View()
@@ -3217,8 +3375,10 @@ def _Plus_Minus(v, e):
 
 class Saturation_Estimator(QWidget):
     """Saturation curve from measured laser power, background and peak
-    counts. Fits the chosen model to the background-free counts S = peak
-    - background and a straight line B0 + kP to the background
+    counts. Each row's counts are divided by the scans they were summed
+    over, so rows of different lengths compare and everything is per scan
+    (2026-10-25). Fits the chosen model to the background-free counts S =
+    peak - background and a straight line B0 + kP to the background
     (unweighted least squares), and finds the power that maximises the
     chosen merit on the fitted curves, its 1 sigma propagated from both
     fits' covariances. It refits as each row is completed; the table
@@ -3247,22 +3407,33 @@ class Saturation_Estimator(QWidget):
             "the signal-to-background ratio. S / √B: the significance "
             "when the background dominates the counts. S / √(S + B): "
             "the significance counting both.")
-        self.Table = QTableWidget(1, 3, alternatingRowColors=True)
+        self.Table = QTableWidget(1, 4, alternatingRowColors=True)
         self.Table.setHorizontalHeaderLabels(
-            ["Power (mW)", "Background", "Peak"])
+            ["Power (mW)", "Background", "Peak", "Scans"])
         for c, tip in enumerate((
                 "Laser power at the interaction region (mW).",
                 "Background counts at that power, off resonance, counted "
                 "as the peak is.",
-                "Counts on the peak at that power, background included.")):
+                "Counts on the peak at that power, background included, "
+                "summed over the row's scans.",
+                "Scans summed in the row's counts, a whole number: the "
+                "counts are divided by it, so rows of different lengths "
+                "compare.")):
             self.Table.horizontalHeaderItem(c).setToolTip(tip)
         self.Table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
+        # Room for every header in the evenly stretched columns, and the
+        # scroll bar once rows overflow: the side's default width clipped
+        # "Power (mW)" and "Background".
+        self.Table.setMinimumWidth(
+            4 * max(self.Table.horizontalHeader().sectionSizeHint(c)
+                    for c in range(4)) + 2 * self.Table.frameWidth()
+            + self.Table.verticalScrollBar().sizeHint().width())
         self.Table.verticalHeader().setVisible(False)
         self.Table.verticalHeader().setDefaultSectionSize(
             self.Table.fontMetrics().height() + 8)      # compact rows
         self.Table.setToolTip(
-            "One measurement per row; a row counts once all three cells "
+            "One measurement per row; a row counts once all four cells "
             "hold numbers, and a new row appears as the last one fills. "
             "Paste rows copied from a spreadsheet; Delete clears the "
             "selected cells.")
@@ -3295,39 +3466,41 @@ class Saturation_Estimator(QWidget):
     # ── The table ───────────────────────────────────────────────
 
     @staticmethod
-    def _Value(item):
-        """The cell's number if it is finite and >= 0, else None."""
+    def _Value(item, col):
+        """The cell's number if it is finite and >= 0 (in Scans, column 3,
+        a whole number >= 1), else None."""
         try:
             v = float(item.text())
         except (AttributeError, ValueError):
             return None
-        return v if np.isfinite(v) and v >= 0 else None
+        ok = v >= 1 and v.is_integer() if col == 3 else v >= 0
+        return v if np.isfinite(v) and ok else None
 
     def _Rows(self):
         """(power, background, background-free counts) arrays of the
-        complete rows: the last is peak - background."""
+        complete rows, per scan: the last is (peak - background) / scans."""
         t = self.Table
-        rows = [[self._Value(t.item(r, c)) for c in range(3)]
+        rows = [[self._Value(t.item(r, c), c) for c in range(4)]
                 for r in range(t.rowCount())]
-        p, b, peak = np.array([r for r in rows if None not in r],
-                              dtype=float).reshape(-1, 3).T
-        return p, b, peak - b
+        p, b, peak, scans = np.array([r for r in rows if None not in r],
+                                     dtype=float).reshape(-1, 4).T
+        return p, b / scans, (peak - b) / scans
 
     def _On_Item_Changed(self, _item):
-        """Flag cells that are not numbers >= 0, keep one empty row at the
-        bottom, and refit."""
+        """Flag cells that are not numbers >= 0 (Scans: whole numbers >= 1),
+        keep one empty row at the bottom, and refit."""
         t = self.Table
         t.blockSignals(True)
         for r in range(t.rowCount()):
-            for c in range(3):
+            for c in range(4):
                 item = t.item(r, c)
                 if item is not None:
-                    bad = item.text().strip() and self._Value(item) is None
+                    bad = item.text().strip() and self._Value(item, c) is None
                     item.setData(Qt.ItemDataRole.ForegroundRole,
                                  QColor("#e15759") if bad else None)
         last = t.rowCount() - 1
         if any(t.item(last, c) and t.item(last, c).text().strip()
-               for c in range(3)):
+               for c in range(4)):
             t.insertRow(last + 1)
         t.blockSignals(False)
         self._Update()
@@ -3346,7 +3519,7 @@ class Saturation_Estimator(QWidget):
                 t.blockSignals(True)
                 t.setRowCount(max(t.rowCount(), r0 + len(lines)))
                 for i, cells in enumerate(lines):
-                    for j, v in enumerate(cells[:3 - c0]):
+                    for j, v in enumerate(cells[:4 - c0]):
                         t.setItem(r0 + i, c0 + j, QTableWidgetItem(v))
                 t.blockSignals(False)
                 self._On_Item_Changed(None)
@@ -3497,7 +3670,7 @@ class Saturation_Estimator(QWidget):
         ax.set_xlim(0, x_hi)
         ax.set_ylim(bottom=min(0, s.min()))
         ax.set_xlabel("Laser power (mW)")
-        ax.set_ylabel("Background-free counts")
+        ax.set_ylabel("Background-free counts per scan")
         self.canvas.draw_idle()
 
     def _Write_Readout(self, p, fit):
@@ -3524,7 +3697,8 @@ class Saturation_Estimator(QWidget):
             text.append("")
             for name, v, e, unit in zip(
                     ["S∞", "Psat", "β"][:n] + ["B0", "k"],
-                    theta, fit["err"], ["", " mW", ""][:n] + ["", " /mW"]):
+                    theta, fit["err"],
+                    [" /scan", " mW", ""][:n] + [" /scan", " /mW/scan"]):
                 text.append(f"{name:<9}{_Plus_Minus(v, e)}{unit}")
         text += ["", f"Net      {formula}, s = P/Psat",
                  f"Bkg      B0 + kP, {len(p)} point{'s' * (len(p) != 1)}"]
@@ -3839,30 +4013,40 @@ class EstimateTab(QWidget):
             "(\u0394V from the beam voltage, one line per component; "
             "isomers dashed) as the laser setpoint moves, the spectrum at "
             "the current setpoint, and a readout of which components fall "
-            "inside the \u00b1dV sweep. It uses the same physics as "
+            "inside the \u00b1<b>Scanning Voltage</b> sweep. It uses the "
+            "same physics as "
             "<b>Run</b>.<br>"
             "\u2022 Drag the red bar, or click the map and use the arrow "
             "keys (0.001 cm⁻¹ per press, 0.01 with Shift); click a "
             "<i>centre</i> marker to "
             "snap to it. Red rings mark where the selected peaks (see "
-            "<b>Peaks</b>) cross the bar inside \u00b1dV; they fade across "
+            "<b>Peaks</b>) cross the bar inside the sweep; they fade across "
             "the margin towards the sweep's edges, where scanning is "
             "riskier, and the readout calls those crossings <i>edge</i> and "
             "counts them by weight in its coverage line. Click a ring to "
             "label its ΔV beside the bar; the label follows the ring as "
             "the setpoint moves, and clicking the ring again or elsewhere on "
-            "the map clears it.<br>"
+            "the map, off the lines, clears it.<br>"
             "\u2022 The mouse wheel zooms the map around the cursor, "
-            "dragging away from the bar pans it, and a double-click "
-            "refits it.<br>"
+            "dragging away from the bar pans it, and a double-click or the "
+            "reset button beside <b>Window</b> refits it (the button also "
+            "sets Window back to auto).<br>"
+            "\u2022 Clicking a line, or its peak on the spectrum, selects "
+            "that component or not, as its tick in <b>Peaks</b> does; the "
+            "pointer turns to a hand over them. On the bar a click still "
+            "labels a ring.<br>"
             "\u2022 Releasing the bar, or pressing Enter in <b>Setpoint</b>, "
             "writes Laser \u25b8 Setpoint (anchor mode switches to "
-            "Setpoint). Pressing Enter in <b>dV</b> writes Scan \u25b8 "
-            "Voltage range = 2 \u00d7 dV. Both can be undone.<br>"
+            "Setpoint). Pressing Enter in <b>Scanning Voltage</b> writes "
+            "Scan \u25b8 Voltage range = 2 \u00d7 Scanning Voltage. Both "
+            "can be undone.<br>"
             "\u2022 <b>Peaks</b> picks the components the sweep must "
             "cover: by default each state's strongest <i>Peaks to "
             "measure</i> (the ones the run time counts), all components "
-            "or any you tick per state. Selected components are drawn bold "
+            "or any you tick per state, each named by its transition "
+            "(F = 5/2 \u2192 F\u2032 = 7/2) with its dV at the setpoint. "
+            "Selected components are drawn bold on the map and in full "
+            "colour on the spectrum, the rest faded, "
             "and marked \u2022 in the readout, whose <i>Peaks</i> line "
             "gives the DAQ range [start, stop] that covers them at the "
             "current setpoint, with 100 V to spare on each side (the gear "
@@ -3891,12 +4075,15 @@ class EstimateTab(QWidget):
             "Finds the laser power that maximises a figure of merit from a "
             "fitted saturation curve. Enter one measurement per row: the "
             "laser <b>Power</b> (mW), the <b>Background</b> counts off "
-            "resonance and the <b>Peak</b> counts, background included. A "
-            "row counts once all three cells hold numbers and a new row "
-            "appears as the last one fills; rows copied from a spreadsheet "
-            "can be pasted, and <b>Clear</b> removes them all. The "
-            "plot is one curve: the background-free counts, peak minus "
-            "background, against power.<br>"
+            "resonance, the <b>Peak</b> counts, background included, and "
+            "the <b>Scans</b> both were summed over. Each row's counts are "
+            "divided by its scans, so rows of different lengths compare and "
+            "the fits, plot and readout are per scan. A row counts once all "
+            "four cells hold numbers and a new row appears as the last one "
+            "fills; rows copied from a spreadsheet can be pasted, and "
+            "<b>Clear</b> removes them all. The plot is one curve: the "
+            "background-free counts per scan, peak minus background, "
+            "against power.<br>"
             "\u2022 <b>Model</b> is fitted to the background-free counts, "
             "with s = P/Psat: "
             "<i>Homogeneous</i> S\u221e s/(1+s) (a two-level line), "

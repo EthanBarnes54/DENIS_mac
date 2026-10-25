@@ -85,6 +85,11 @@ create_shortcut() {
     local SC
     case "$(uname -s)" in
         Darwin)
+            # iCloud keeps setting the hidden flag on files in a .venv under
+            # ~/Documents, and Qt skips hidden plugins, so the app would not
+            # start: keep the environment out of iCloud and clear its flags
+            xattr -w 'com.apple.fileprovider.ignore#P' 1 "$APP_DIR/.venv" || return 1
+            chflags -R nohidden "$APP_DIR/.venv"
             # A minimal app bundle, linked from the Desktop. The old
             # DENIS.command opened a Terminal that killed DENIS when it was
             # closed, and had no icon (2026-10-22).

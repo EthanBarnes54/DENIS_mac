@@ -85,7 +85,6 @@ class EstimateTabStructureTests(unittest.TestCase):
         state (timing mode + isomer) must fit the scroll viewport --
         the TOF Gate spin and the header Remove button used to be cut
         off at the right edge (hardcoded 320-460 band, 2026-09-15)."""
-        from PySide6.QtWidgets import QScrollArea
         from gui.estimate_tab import EstimateTab
         tab = EstimateTab()
         il = tab.params_tab.isotope_list
@@ -564,6 +563,114 @@ class VoltageEstimatorTests(unittest.TestCase):
         est._Pick(None)
         self.assertEqual(est._Selected(st), set(top3))
 
+    def test_Estimator_Peaks_Named_By_Dv_And_Transition(self):
+        """The Peaks menu names each component by its F transition, its dV
+        at the setpoint right-aligned, no longer its MHz offset, and the
+        spectrum is in its state's colour, full over the selected peaks and
+        faded over the rest (2026-10-25)."""
+        import re
+        from fractions import Fraction
+        import numpy as np
+        from PySide6.QtWidgets import QMenu
+        self._Build(self.cfg)
+        est = self.est
+        est.Show_Combo.setCurrentIndex(1)       # 59Co only
+        st = est._Shown()[0]
+        dvs, sel = est._Peak_Dvs(st, est._S), est._Selected(st)
+        est._Fill_Peaks_Menu()
+        [sub] = est.Peaks_Btn.menu().findChildren(QMenu)
+        order = sorted(range(len(st["intens"])), key=lambda k: -st["intens"][k])
+        self.assertEqual(
+            [a.text() for a in sub.actions()],
+            [f"{st['transitions'][k]}\t"
+             + ("N/A" if dvs[k] is None else f"{dvs[k]:+.1f} V")
+             for k in order])
+        for label in st["transitions"]:         # the selection rule holds
+            m = re.fullmatch(r"F = (\S+) → F′ = (\S+)", label)
+            lower, upper = (Fraction(f) for f in m.groups())
+            self.assertLessEqual(abs(upper - lower), 1)
+        from matplotlib.colors import to_rgb
+        from gui.estimate_tab import FADED_PEAK
+        spectrum = est._Spectra[0]
+        v = np.array([seg[1, 1] for seg in spectrum.get_segments()])
+        rgb = spectrum.get_edgecolor()[:, :3]
+        self.assertTrue(np.all(spectrum.get_edgecolor()[:, 3] == 1))  # opaque
+        full = np.array(to_rgb(st["color"]))
+        faded = 1 + FADED_PEAK * (full - 1)             # on the white axes
+        for k, d in enumerate(dvs):
+            if d is None or not v.min() <= d <= v.max():
+                continue
+            at = rgb[np.argmin(np.abs(v - d))]
+            if k in sel:
+                np.testing.assert_allclose(at, full, atol=1e-3)
+            elif min(abs(d - dvs[j]) for j in sel) > 3 * est._Fwhm_V:
+                np.testing.assert_allclose(at, faded, atol=1e-3)
+        # No jumps on the drawn peaks: the colour changes smoothly point to
+        # point (between far-apart peaks it may switch on the baseline).
+        up = spectrum.get_data()[0] > 1e-3
+        self.assertLess(np.abs(np.diff(rgb, axis=0))[up[1:] & up[:-1]].max(),
+                        0.2)
+
+    def test_Estimator_Click_And_Hover_Lines_And_Peaks(self):
+        """Hovering a map line shows a pointing hand, with no outline; a
+        click on the line or its spectrum peak toggles the component, as its
+        Peaks tick does, but never on the bar, whose rings keep their
+        labels; the reset button sets Window to auto and refits a lost view
+        (2026-10-25)."""
+        from matplotlib.backend_bases import MouseEvent
+        from PySide6.QtCore import Qt
+        self.tab.resize(1500, 950)              # a canvas wide enough to aim
+        self._Build(self.cfg)
+        est = self.est
+        est.Show_Combo.setCurrentIndex(1)       # 59Co only
+        QApplication.processEvents()
+        est.canvas.draw()
+        st = est._Shown()[0]
+        dvs = est._Peak_Dvs(st, est._S)
+        lo, hi = est._Map.get_ylim()
+        to_px = est._Map.transData.transform
+        # A whole pixel off the bar and the centre markers, as a mouse gives.
+        bar = to_px((est._S, 0))[0]
+        px = next(round(bar + o) for o in (15, 30, -15, -30, 45) if all(
+            abs(bar + o - to_px((c, 0))[0]) > 8 for c in est._Centres))
+        x = est._Map.transData.inverted().transform((px, 0))[0]
+        ys = {j: to_px((x, e))[1] for j, e in enumerate(est._Peak_Dvs(st, x))
+              if e is not None and lo < e < hi}
+        free = [j for j in ys if j not in est._Selected(st)
+                and dvs[j] is not None and lo < dvs[j] < hi]
+        # The unselected line farthest from its neighbours.
+        k = max(free, key=lambda j: min(abs(ys[j] - ys[i])
+                                        for i in ys if i != j))
+        py = ys[k]
+
+        def at(name, x, y):
+            return MouseEvent(name, est.canvas, x, y, button=1)
+        est._On_Motion(at("motion_notify_event", px, py))
+        self.assertEqual(est._Hover, (st["label"], k))
+        self.assertEqual(est.canvas.cursor().shape(),
+                         Qt.CursorShape.PointingHandCursor)
+        lines = len(est._Map.lines)
+        # On the bar a line is no target: the rings and the drag keep it.
+        self.assertIsNone(est._Hit(at("motion_notify_event", round(bar), py)))
+        est._On_Press(at("button_press_event", px, py))   # a map click
+        est._On_Release(at("button_release_event", px, py))
+        self.assertIn(k, est._Selected(st))
+        # The same peak on the spectrum, at the bar: off again.
+        sx, sy = est._Spec.transData.transform((0.5, dvs[k]))
+        est._On_Press(at("button_press_event", sx, sy))
+        self.assertNotIn(k, est._Selected(st))
+        est._On_Motion(at("motion_notify_event", 1, 1))    # off the axes
+        self.assertIsNone(est._Hover)
+        self.assertEqual(len(est._Map.lines), lines)       # nothing drawn
+        # A lost view and a set Window: the button restores both.
+        est.Window_Box.setValue(500)
+        est._Map.set_ylim(1e5, 2e5)
+        est._Keep_View()
+        est.Reset_Btn.click()
+        self.assertEqual(est.Window_Box.value(), 0)
+        self.assertIsNone(est._Zoom)
+        self.assertLess(est._Map.get_ylim()[1], 1e5)
+
     def test_Estimator_Optimise_Covers_Selected_Peaks(self):
         """Optimise moves the setpoint so the selected peaks are centred on
         the beam voltage, the sweep's centre, and sets Scan ▸ Voltage range
@@ -783,22 +890,25 @@ class Saturation_Estimator_Tests(unittest.TestCase):
             for c, v in enumerate(row):
                 t.setItem(r, c, QTableWidgetItem(str(v)))
 
-    def _Homogeneous(self, noise=0.0, a=5000.0, ps=1.6, b0=40.0, k=18.0):
+    def _Homogeneous(self, noise=0.0, a=5000.0, ps=1.6, b0=40.0, k=18.0,
+                     scans=(1,) * len(P)):
         import numpy as np
         p = np.array(self.P)
         wiggle = noise * np.sin(7 * p)          # deterministic "noise"
-        rows = []                   # (power, background, peak)
-        for x, w in zip(p, wiggle):
+        rows = []                   # (power, background, peak, scans)
+        for x, w, n in zip(p, wiggle, scans):
             bkg = (b0 + k * x) * (1 + w)
-            rows.append((x, bkg, bkg + a * (x / ps) / (1 + x / ps) * (1 - w)))
+            rows.append((x, n * bkg,
+                         n * (bkg + a * (x / ps) / (1 + x / ps) * (1 - w)), n))
         return rows
 
     def test_Saturation_Fit_Finds_The_Analytic_Optimum(self):
-        """Homogeneous signal over a linear background: the fit returns the
-        inputs, S/B peaks at sqrt(Psat B0 / k), and the propagated 1 sigma
-        matches the analytic propagation of the joint covariance."""
+        """Homogeneous signal over a linear background, each row summed
+        over its own number of scans: the fit returns the per-scan inputs,
+        S/B peaks at sqrt(Psat B0 / k), and the propagated 1 sigma matches
+        the analytic propagation of the joint covariance."""
         import numpy as np
-        self._Fill(self._Homogeneous())
+        self._Fill(self._Homogeneous(scans=(1, 3, 2, 10, 5, 1, 4, 7)))
         p, b, s = self.sat._Rows()
         fit = self.sat._Fit(p, b, s)
         np.testing.assert_allclose(fit["theta"], (5000, 1.6, 40, 18),
@@ -823,9 +933,9 @@ class Saturation_Estimator_Tests(unittest.TestCase):
         self.assertAlmostEqual(ring[0][1], fit["signal"](fit["opt"]))
 
     def test_Saturation_Refits_Once_A_Row_Is_Complete(self):
-        """A row counts once all three cells hold numbers >= 0; a bad cell
-        turns red and its row is skipped; one empty row stays at the
-        bottom."""
+        """A row counts once all four cells hold numbers >= 0, its scans a
+        whole number >= 1; a bad cell turns red and its row is skipped; one
+        empty row stays at the bottom; counts are taken per scan."""
         from PySide6.QtWidgets import QTableWidgetItem
         rows = self._Homogeneous()
         self._Fill(rows[:3])
@@ -841,7 +951,16 @@ class Saturation_Estimator_Tests(unittest.TestCase):
         self.assertEqual(t.item(3, 2).foreground().color().name(), "#e15759")
         self.assertEqual(len(self.sat._Rows()[0]), 3)
         t.item(3, 2).setText("3500")
-        self.assertEqual(self.sat._Rows()[2][-1], 3500 - 94)     # peak - bkg
+        self.assertEqual(len(self.sat._Rows()[0]), 3)           # no scans
+        for bad in ("0", "1.5"):
+            t.setItem(3, 3, QTableWidgetItem(bad))
+            self.assertEqual(t.item(3, 3).foreground().color().name(),
+                             "#e15759")
+            self.assertEqual(len(self.sat._Rows()[0]), 3)
+        t.item(3, 3).setText("2")
+        _, b, s = self.sat._Rows()
+        self.assertEqual(b[-1], 94 / 2)                         # per scan
+        self.assertEqual(s[-1], (3500 - 94) / 2)                # peak - bkg
         self.assertEqual(len(self.sat._Rows()[0]), 4)
         self.assertIn("4 points", self.sat.Readout.toPlainText())
 
@@ -853,9 +972,9 @@ class Saturation_Estimator_Tests(unittest.TestCase):
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
         p = np.array(self.P)
-        text = "Power\tBackground\tPeak\n" + "\n".join(
+        text = "Power\tBackground\tPeak\tScans\n" + "\n".join(
             f"{x}\t{30 + 12 * x}\t"
-            f"{30 + 12 * x + 3000 * (x / 2) / np.sqrt(1 + x / 2)}"
+            f"{30 + 12 * x + 3000 * (x / 2) / np.sqrt(1 + x / 2)}\t1"
             for x in p)
         QApplication.clipboard().setText(text)
         self.sat.Table.setCurrentCell(0, 0)
