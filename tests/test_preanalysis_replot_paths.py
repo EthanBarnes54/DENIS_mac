@@ -212,5 +212,24 @@ class KeyboardTrackingTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
 
 
+class Model_Normalize_Tests(unittest.TestCase):
+    """With Normalize on, an HFS model is normalised as the runs are: at
+    its Scale (100 by default) it towered over them (2026-10-26)."""
+
+    def test_Model_Follows_Normalize(self):
+        import numpy as np
+        from gui.preanalysis_tab import PreAnalysisTab, HFSModelPanel
+        model = HFSModelPanel().to_dict()
+        model.update(I=3.5, Jl=5, Ju=6, Al=1056.8, Au=333.52, centroid=0.0)
+        pa = PreAnalysisTab()
+        pa._restore_from_dict({"models": [model]})
+        for on, top in ((False, 100.0), (True, 1.0)):
+            pa._normalize.setChecked(on)
+            pa._update_models()
+            [line] = [ln for ln in pa._ax.lines
+                      if getattr(ln, "_is_hfs_model", False)]
+            self.assertAlmostEqual(np.max(line.get_ydata()), top, delta=0.02 * top)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -63,9 +63,11 @@ from PySide6.QtCore import Qt, Signal, QTimer, QLocale, QEvent
 from PySide6.QtGui import QColor, QPixmap, QIcon
 
 from cls_estimations.constants import C_LIGHT, AMU_TO_KG, E_CHARGE
-from cls_estimations.doppler import beta_from_voltage, nu_seen_by_ion
+from cls_estimations.doppler import (
+    beta_from_voltage, nu_seen_by_ion, resonance_voltage)
 from gui.shared_widgets import (
     maybe_convert_path, lucide_icon, _load_settings, _save_settings,
+    Wait_Cursor,
     AppUndoCommand, scroll_zoom,
 )
 from gui.analysis.vasdf import is_vasdf_path, read_vasdf
@@ -583,6 +585,7 @@ class FileEntry(QWidget):
         self.np_cal_set = None       # calibration set voltages
         self.np_cal_readback = None  # calibration readback voltages
         self.np_vcool = None         # per-event cooler voltage (V)
+        self.Cooler_Measured = None  # its mean over the run (V)
         self.run_time_s = 0.0  # run duration in seconds
 
         # The card's rows, then the per-run override row under them at full
@@ -637,10 +640,10 @@ class FileEntry(QWidget):
         self._detail_label.setStyleSheet("color: gray; font-size: 11px;")
         card.addWidget(self._detail_label)
 
-        # Line 3: this run's own Laser / Cooler, mirroring the global
-        # override rows in Options. A ticked value beats the global one,
-        # so runs with missing or wrong metadata can share one plot
-        # (2026-10-24). Unticked, a box shows the file's value, disabled.
+        # Line 3: this run's own Laser / Cooler. Ticked, the box's value
+        # (the file's, unless edited) beats the main one in Plot Options and
+        # the run is drawn relative to it; unticked, the run uses the main
+        # one and the box shows the file's value, disabled (2026-10-26).
         self.Override_Row = QWidget()
         self.Override_Row.setStyleSheet(
             "QCheckBox, QLabel { color: gray; font-size: 11px; }"
@@ -670,9 +673,11 @@ class FileEntry(QWidget):
             box.setFixedWidth(
                 QFontMetrics(font).horizontalAdvance("8" * (6 + dec)) + 16)
             for w in (tick, box):
-                w.setToolTip(f"Use this value for this run only. It "
-                             f"overrides the global {name} setting in "
-                             f"Options.")
+                w.setToolTip(f"Use this value for this run: it overrides "
+                             f"the main {name} in Plot Options, and on the "
+                             f"voltage axes the run is drawn relative to "
+                             f"the main one. Unticked, the run uses the "
+                             f"main {name}.")
             tick.toggled.connect(box.setEnabled)
             tick.toggled.connect(self._On_Override_Changed)
             box.valueChanged.connect(self._On_Override_Changed)
@@ -1132,7 +1137,8 @@ class FileEntry(QWidget):
         """Show the run's own value next to the file's in the tooltip,
         then replot through the existing ``toggled`` wiring."""
         lines = self.toolTip().split("\n")
-        for key, own in (("laser", self.laser_sp), ("cooler", self.cooler_v)):
+        for key, own in (("laser", self.laser_sp),
+                         ("cooler", self.Cooler_Measured or self.cooler_v)):
             _t, _b, name, unit, fmt = self._Overrides[key]
             ov = self._Override(key)
             lines = [f"{name}: {own:{fmt}} {unit}" + (
@@ -2757,59 +2763,41 @@ class PreAnalysisTab(QWidget):
         self._normalize.toggled.connect(self._schedule_replot)
         opts_form.addRow("", self._normalize)
 
-        # Cooler voltage (with per-parameter override tick)
-        cooler_widget = QWidget()
-        cooler_layout = QHBoxLayout(cooler_widget)
-        cooler_layout.setContentsMargins(0, 0, 0, 0)
-        cooler_layout.setSpacing(4)
-        self._cooler_override_enabled = QCheckBox()
-        self._cooler_override_enabled.setToolTip(
-            "Override cooler voltage for every run without its own value.\n"
-            "When unticked, each file uses its own value.")
-        cooler_layout.addWidget(self._cooler_override_enabled)
-        self._cooler_override = _make_double(
-            29977, 0, 100000, 2, 1.0,
-            tooltip="Cooler voltage for Doppler conversion")
-        self._cooler_override.setMinimumWidth(100)
-        self._cooler_override.valueChanged.connect(self._schedule_replot)
-        cooler_layout.addWidget(self._cooler_override)
-        self._cooler_auto_btn = QPushButton("\u2193")
-        self._cooler_auto_btn.setFixedWidth(24)
-        self._cooler_auto_btn.setToolTip("Auto-fill from selected file")
-        self._cooler_auto_btn.clicked.connect(self._auto_fill_cooler)
-        cooler_layout.addWidget(self._cooler_auto_btn)
-        opts_form.addRow("Cooler (V):", cooler_widget)
-
-        # Laser setpoint (with per-parameter override tick)
-        laser_widget = QWidget()
-        laser_layout = QHBoxLayout(laser_widget)
-        laser_layout.setContentsMargins(0, 0, 0, 0)
-        laser_layout.setSpacing(4)
-        self._laser_override_enabled = QCheckBox()
-        self._laser_override_enabled.setToolTip(
-            "Override laser setpoint for every run without its own value.\n"
-            "When unticked, each file uses its own value.")
-        laser_layout.addWidget(self._laser_override_enabled)
-        self._laser_override = _make_double(
-            10920, 0, 100000, 6, 0.1,
-            tooltip="Laser setpoint for Doppler conversion")
-        self._laser_override.setMinimumWidth(100)
-        self._laser_override.valueChanged.connect(self._schedule_replot)
-        laser_layout.addWidget(self._laser_override)
-        self._laser_auto_btn = QPushButton("\u2193")
-        self._laser_auto_btn.setFixedWidth(24)
-        self._laser_auto_btn.setToolTip("Auto-fill from selected file")
-        self._laser_auto_btn.clicked.connect(self._auto_fill_laser)
-        laser_layout.addWidget(self._laser_auto_btn)
-        opts_form.addRow("Laser (cm\u207b\u00b9):", laser_widget)
-
-        # Wire per-parameter override toggles now that widgets exist
-        self._cooler_override_enabled.toggled.connect(
-            self._on_cooler_override_toggled)
-        self._laser_override_enabled.toggled.connect(
-            self._on_laser_override_toggled)
-        self._on_cooler_override_toggled(False)
-        self._on_laser_override_toggled(False)
+        # The main cooler voltage and laser setpoint: one run's own, picked
+        # by its card's swatch, or typed under Custom. Every run uses them
+        # unless its card's tick gives its own; a ticked run is drawn
+        # relative to them on the voltage axes, so runs taken at different
+        # setpoints make one spectrum (2026-10-26).
+        self._Main_Rows, self._Main_Custom, self._Main_Pending = {}, {}, {}
+        for key, label, box in (
+                ("cooler", "Cooler (V):", _make_double(
+                    29977, 0, 100000, 2, 1.0,
+                    tooltip="The main cooler voltage.")),
+                ("laser", "Laser (cm\u207b\u00b9):", _make_double(
+                    10920, 0, 100000, 6, 0.1,
+                    tooltip="The main laser setpoint (fundamental)."))):
+            combo = QComboBox(toolTip=(
+                "Take the main value from a run, or type it (Custom). Every "
+                "run uses it unless its card's tick gives its own value. On "
+                "the voltage axes a ticked run at another setpoint or cooler "
+                "voltage is drawn where its peaks fall at the main ones, so "
+                "runs taken at different setpoints make one spectrum."))
+            combo.addItem("Custom", None)
+            combo.currentIndexChanged.connect(
+                lambda _i, key=key: self._On_Main_Chosen(key))
+            box.setMinimumWidth(100)
+            box.valueChanged.connect(
+                lambda _v, key=key: self._On_Main_Typed(key))
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            row_layout.addWidget(combo)
+            row_layout.addWidget(box, 1)
+            opts_form.addRow(label, row)
+            self._Main_Rows[key] = (combo, box)
+        self._cooler_override = self._Main_Rows["cooler"][1]
+        self._laser_override = self._Main_Rows["laser"][1]
 
         # The binning controls are intentionally NOT shown in the
         # Pre-Analysis sidebar: the live preview always uses the default
@@ -3805,7 +3793,8 @@ class PreAnalysisTab(QWidget):
         """
         if bin_mode == "Raw Voltage":
             dv_bins = x_bin   # bin centers are raw DV values
-            if xaxis_mode == "Voltage":
+            main = self._default_cooler_laser()
+            if xaxis_mode == "Voltage" and (cooler_v, laser_sp) == main:
                 return dv_bins, "Scanning voltage (V)"
 
             # For Cal voltage / Beam energy / Wavenumber / Frequency we
@@ -3839,10 +3828,17 @@ class PreAnalysisTab(QWidget):
             else:
                 v_cal = dv_bins   # no cal table → fall back to raw DV
 
-            if xaxis_mode == "Calibrated voltage":
-                return v_cal, "Calibrated voltage (V)"
-            if xaxis_mode == "Calibrated beam energy":
-                return cooler_v - v_cal, "Beam energy (V)"
+            if xaxis_mode in ("Voltage", "Calibrated voltage",
+                              "Calibrated beam energy"):
+                # In the main frame: a run at another setpoint or cooler
+                # voltage lands where its peaks fall at the main ones.
+                v_main = self._Into_Main_Frame(
+                    v_cal, cooler_v, laser_sp, mass, harmonic, main)
+                if xaxis_mode == "Voltage":
+                    return dv_bins + (v_main - v_cal), "Scanning voltage (V)"
+                if xaxis_mode == "Calibrated voltage":
+                    return v_main, "Calibrated voltage (V)"
+                return main[0] - v_main, "Beam energy (V)"
 
             freq_MHz = self._voltage_to_frequency(
                 cooler_v - v_cal, mass, harmonic, laser_sp)
@@ -4120,11 +4116,6 @@ class PreAnalysisTab(QWidget):
             (self._ts_fig, self._ts_canvas),
         ])
         self._apply_grids()
-
-    def _display_color(self, entry):
-        """Line colour for a file entry — the entry's own active colour
-        (light or dark, per set_dark_active)."""
-        return entry.color
 
     def _display_color(self, entry):
         """Line colour for a file entry — the entry's own active colour
@@ -4698,9 +4689,8 @@ class PreAnalysisTab(QWidget):
         # between files so the window doesn't look hung and the file list fills
         # progressively (code review 2026-06-02, preanalysis-load-blocks-gui).
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import Qt
         self._loading_files = True
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        Wait_Cursor(True)
         try:
             for path in paths:
                 if any(fe.filepath == path for fe in self._file_entries):
@@ -4708,7 +4698,7 @@ class PreAnalysisTab(QWidget):
                 self._load_file(path)
                 QApplication.processEvents()
         finally:
-            QApplication.restoreOverrideCursor()
+            Wait_Cursor(False)
             self._loading_files = False
         self._replot()
 
@@ -5067,6 +5057,18 @@ class PreAnalysisTab(QWidget):
                     entry.np_vcool = (
                         df[col].to_numpy() * vcool_div + vcool_off)
                     break
+            # The run's own cooler voltage: the readback's mean, as the fit
+            # reads it per event. The header holds one reading, which
+            # scattered by up to 7 V between runs of one day and misplaced
+            # them in the main frame (I311 Co, 2026-10-26). Its card shows
+            # it, ready to tick.
+            mean = (float(np.nanmean(entry.np_vcool))
+                    if entry.np_vcool is not None and len(entry.np_vcool)
+                    else float("nan"))
+            entry.Cooler_Measured = mean if np.isfinite(mean) else None
+            tick, box = entry._Overrides["cooler"][:2]
+            if entry.Cooler_Measured is not None and not tick.isChecked():
+                box.setValue(entry.Cooler_Measured)
 
         except Exception as e:
             QMessageBox.warning(
@@ -5279,7 +5281,7 @@ class PreAnalysisTab(QWidget):
             progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setMinimumDuration(400)
         else:
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            Wait_Cursor(True)
 
         failed = []
         try:
@@ -5302,7 +5304,7 @@ class PreAnalysisTab(QWidget):
                 progress.setValue(len(stale))
                 progress.close()
             else:
-                QApplication.restoreOverrideCursor()
+                Wait_Cursor(False)
 
         # One dialog for the batch, not one per run: fifty modal pop-ups is
         # not a way to tell someone their donor file is missing.
@@ -5336,7 +5338,7 @@ class PreAnalysisTab(QWidget):
             return
         # Indicate work in progress on the reload icon -- ASDFs
         # for long runs can take a second or two.
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        Wait_Cursor(True)
         try:
             self._load_cls_data(entry)
             entry.update_detail()
@@ -5346,7 +5348,7 @@ class PreAnalysisTab(QWidget):
                 f"Could not re-read {entry.filepath}:\n{exc}")
             return
         finally:
-            QApplication.restoreOverrideCursor()
+            Wait_Cursor(False)
         self._schedule_replot()
         parent = self.window()
         if hasattr(parent, "statusBar"):
@@ -5359,109 +5361,93 @@ class PreAnalysisTab(QWidget):
         Cosmetic only: nothing in ``_replot`` reads ``entry.selected`` (it
         keys off ``check.isChecked()`` / colour / linestyle), so a highlight
         changes no plotted data and must NOT trigger a full re-bin + redraw of
-        every checked entry. The cooler/laser auto-fill buttons read the
-        highlighted entry on demand via ``_get_selected_entry``.
+        every checked entry.
         """
         for fe in self._file_entries:
             fe.selected = (fe is entry)
 
-    def _get_selected_entry(self):
-        """Return the highlighted file entry, or first checked, or first."""
-        for fe in self._file_entries:
-            if fe.selected:
-                return fe
-        for fe in self._file_entries:
-            if fe.check.isChecked():
-                return fe
-        return self._file_entries[0] if self._file_entries else None
+    def _Own(self, entry, key):
+        """``entry``'s own cooler voltage or laser setpoint: its card's tick
+        if on, else its file's: the setpoint, and the cooler readback's mean
+        over the run (the header's value without one). The typed main value,
+        with a warning, when the file has none."""
+        own = (entry.Cooler_Override if key == "cooler"
+               else entry.Laser_Override)
+        if own is not None:
+            return own
+        val = ((entry.Cooler_Measured or entry.cooler_v) if key == "cooler"
+               else entry.laser_sp) or 0
+        if val > 0:
+            return val
+        # code review 2026-06-02, cooler-laser-silent-default-fallback:
+        # warn once per run that a fabricated default is used.
+        fallback = self._Main_Rows[key][1].value()
+        self._warn_metadata_fallback(
+            entry, "cooler voltage" if key == "cooler" else "laser setpoint",
+            f"{fallback:.2f} V" if key == "cooler"
+            else f"{fallback:.6f} cm\u207b\u00b9")
+        return fallback
 
-    def _auto_fill_laser(self):
-        """Copy laser setpoint from the selected file entry."""
-        fe = self._get_selected_entry()
-        if fe:
-            self._laser_override.setValue(
-                fe.laser_sp if fe.Laser_Override is None
-                else fe.Laser_Override)
-
-    def _auto_fill_cooler(self):
-        """Copy cooler voltage from the selected file entry."""
-        fe = self._get_selected_entry()
-        if fe:
-            self._cooler_override.setValue(
-                fe.cooler_v if fe.Cooler_Override is None
-                else fe.Cooler_Override)
-
-    def _on_cooler_override_toggled(self, checked):
-        """Enable/disable the cooler voltage field based on its tick."""
-        self._cooler_override.setEnabled(checked)
-        self._cooler_auto_btn.setEnabled(checked)
+    def _On_Main_Chosen(self, key):
+        """A run, or Custom, picked for a main value."""
+        self._Main_Custom[key] = self._Main_Rows[key][0].currentData() is None
+        self._Sync_Main()
         self._schedule_replot()
 
-    def _on_laser_override_toggled(self, checked):
-        """Enable/disable the laser setpoint field based on its tick."""
-        self._laser_override.setEnabled(checked)
-        self._laser_auto_btn.setEnabled(checked)
+    def _On_Main_Typed(self, key):
+        """A typed main value: Custom from now on."""
+        combo = self._Main_Rows[key][0]
+        combo.blockSignals(True)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        self._Main_Custom[key] = True
         self._schedule_replot()
 
-    def _default_file_for_axis(self):
-        """Pick the file whose values to use when no specific entry is
-        in scope (model overlays, merged entries shown in voltage axes).
-        Selected first, then any checked, then any usable file. Skips
-        merged and split entries — model overlays should anchor on a
-        full-range parent run, not a sub-range."""
-        skip = (MergedFileEntry, SplitFileEntry)
-        for fe in self._file_entries:
-            if isinstance(fe, skip):
-                continue
-            if getattr(fe, 'selected', False) and fe.cooler_v > 0:
-                return fe
-        for fe in self._file_entries:
-            if isinstance(fe, skip):
-                continue
-            if fe.check.isChecked() and fe.cooler_v > 0:
-                return fe
-        for fe in self._file_entries:
-            if isinstance(fe, skip):
-                continue
-            if fe.cooler_v > 0:
-                return fe
-        return None
+    def _Sync_Main(self):
+        """List the runs under the main rows, each with its card's swatch,
+        and show the chosen run's own value. With no choice yet the first
+        run is the main one; a save's choice is picked once its run loads,
+        and a removed run gives way to the first."""
+        runs = [fe for fe in self._file_entries
+                if not isinstance(fe, (MergedFileEntry, SplitFileEntry))]
+        listed = [(fe, fe.color) for fe in runs]
+        for key, (combo, box) in self._Main_Rows.items():
+            chosen = combo.currentData()
+            if runs and key in self._Main_Pending:
+                path = self._Main_Pending.pop(key)
+                chosen = next((fe for fe in runs if fe.filepath == path), None)
+                self._Main_Custom[key] = chosen is None
+            elif chosen not in runs:
+                chosen = None if self._Main_Custom.get(key) or not runs \
+                    else runs[0]
+            if (getattr(combo, "_Listed", None) != listed
+                    or combo.currentData() is not chosen):
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItem("Custom", None)
+                for fe in runs:
+                    combo.addItem(_color_icon(fe.color), f"Run {fe.run_number}",
+                                  fe)
+                combo.setCurrentIndex(runs.index(chosen) + 1
+                                      if chosen in runs else 0)
+                combo.blockSignals(False)
+                combo._Listed = listed
+            if chosen is not None:
+                box.blockSignals(True)
+                box.setValue(self._Own(chosen, key))
+                box.blockSignals(False)
 
     def _cooler_for_entry(self, entry):
-        """Cooler voltage to use for this entry: override if its tick is
-        on, else the file's own value (falling back to override if file
-        value is missing). The run's own tick beats all of these."""
-        if getattr(entry, "Cooler_Override", None) is not None:
-            return entry.Cooler_Override
-        if self._cooler_override_enabled.isChecked():
-            return self._cooler_override.value()
-        val = getattr(entry, 'cooler_v', 0) or 0
-        if val > 0:
-            return val
-        # code review 2026-06-02, cooler-laser-silent-default-fallback:
-        # warn once per run that a fabricated default beam energy is used.
-        fallback = self._cooler_override.value()
-        self._warn_metadata_fallback(entry, "cooler voltage",
-                                     f"{fallback:.2f} V")
-        return fallback
+        """The cooler voltage this entry is converted with: its card's tick
+        if on, else the main one (2026-10-26)."""
+        own = getattr(entry, "Cooler_Override", None)
+        return self._default_cooler_laser()[0] if own is None else own
 
     def _laser_for_entry(self, entry):
-        """Laser setpoint to use for this entry: override if its tick is
-        on, else the file's own value (falling back to override if file
-        value is missing). The run's own tick beats all of these."""
-        if getattr(entry, "Laser_Override", None) is not None:
-            return entry.Laser_Override
-        if self._laser_override_enabled.isChecked():
-            return self._laser_override.value()
-        val = getattr(entry, 'laser_sp', 0) or 0
-        if val > 0:
-            return val
-        # code review 2026-06-02, cooler-laser-silent-default-fallback:
-        # warn once per run that a fabricated default setpoint is used.
-        fallback = self._laser_override.value()
-        self._warn_metadata_fallback(entry, "laser setpoint",
-                                     f"{fallback:.6f} cm⁻¹")
-        return fallback
+        """The laser setpoint this entry is converted with: its card's tick
+        if on, else the main one (2026-10-26)."""
+        own = getattr(entry, "Laser_Override", None)
+        return self._default_cooler_laser()[1] if own is None else own
 
     def _warn_metadata_fallback(self, entry, what, default_str):
         """Log once per run that missing/zero ``what`` metadata caused a
@@ -5483,29 +5469,28 @@ class PreAnalysisTab(QWidget):
             run, what, default_str)
 
     def _default_cooler_laser(self):
-        """Cooler/laser for contexts without a specific entry (model
-        overlays, merged entries shown in voltage modes). Each parameter
-        independently follows its own override tick."""
-        fe = self._default_file_for_axis()
-        own_c = getattr(fe, "Cooler_Override", None)
-        own_l = getattr(fe, "Laser_Override", None)
-        if own_c is not None:
-            cooler = own_c
-        elif self._cooler_override_enabled.isChecked():
-            cooler = self._cooler_override.value()
-        elif fe is not None and fe.cooler_v > 0:
-            cooler = fe.cooler_v
-        else:
-            cooler = self._cooler_override.value()
-        if own_l is not None:
-            laser = own_l
-        elif self._laser_override_enabled.isChecked():
-            laser = self._laser_override.value()
-        elif fe is not None and fe.laser_sp > 0:
-            laser = fe.laser_sp
-        else:
-            laser = self._laser_override.value()
-        return cooler, laser
+        """The main cooler voltage and laser setpoint: the frame every run,
+        merged entry and model overlay is drawn in on the voltage axes."""
+        self._Sync_Main()
+        return tuple(
+            box.value() if combo.currentData() is None
+            else self._Own(combo.currentData(), key)
+            for key, (combo, box) in self._Main_Rows.items())
+
+    def _Into_Main_Frame(self, v_cal, cooler_v, laser_sp, mass, harmonic,
+                         main):
+        """A run's calibrated scanning voltages, taken at its own cooler
+        voltage and setpoint, moved to where the same ion-frame frequency
+        resonates at the ``main`` ones, through the pipeline's own inverse
+        (resonance_voltage): runs at different setpoints then make one
+        spectrum (2026-10-26). A run at the main values is left as is."""
+        if (cooler_v, laser_sp) == main:
+            return v_cal
+        nu_main = main[1] * harmonic * C_LIGHT * 100.0 / 1e6
+        beam = [resonance_voltage(f, nu_main, mass, 1, "anti-collinear")
+                for f in self._voltage_to_frequency(
+                    cooler_v - v_cal, mass, harmonic, laser_sp)]
+        return main[0] - np.array([np.nan if b is None else b for b in beam])
 
     # ── Isotope label ────────────────────────────────────────────
 
@@ -7027,6 +7012,11 @@ class PreAnalysisTab(QWidget):
                 x_model = np.linspace(x_min, x_max, 2000)
 
                 y_model = hfs.f(x_model) + bkg.f(x_model)
+                # Normalised as the runs are when Normalize is on: at its
+                # Scale it towered over them (2026-10-26).
+                top = (y_model.max() if self._normalize.isChecked()
+                       and y_model.max() > 0 else 1.0)
+                y_model = y_model / top
 
                 x_plot = self._mhz_to_xaxis(
                     x_model, xaxis_mode, harmonic, offset,
@@ -7046,7 +7036,7 @@ class PreAnalysisTab(QWidget):
                     peak_x = self._mhz_to_xaxis(
                         peak_mhz, xaxis_mode, harmonic, offset,
                         mass, cooler_v, laser_sp)
-                    peak_y = hfs.f(peak_mhz) + bkg.f(peak_mhz)
+                    peak_y = (hfs.f(peak_mhz) + bkg.f(peak_mhz)) / top
                     for px, py, lbl in zip(peak_x, peak_y, labels):
                         ann = self._ax.annotate(
                             lbl, xy=(px, py),
@@ -7504,19 +7494,11 @@ class PreAnalysisTab(QWidget):
             "harmonic":        harmonic,
             "ref_shift":       0.0,
             "noise_filter":    0,
-            "cooler_override": (self._cooler_override.value()
-                                if self._cooler_override_enabled.isChecked()
-                                else 0),
-            "laser_override":  (self._laser_override.value()
-                                if self._laser_override_enabled.isChecked()
-                                else 0),
-            # The two values above are ALREADY gated on PA's own
-            # tickboxes, so tell compute_merged_spectrum they are
-            # authoritative (it gates on override_enabled to avoid
-            # reading the Analysis block's unticked spinbox defaults).
-            "override_enabled": (
-                self._cooler_override_enabled.isChecked()
-                or self._laser_override_enabled.isChecked()),
+            # The main row is the frame the plot is drawn in, not an
+            # override: each run merges with its own values (2026-10-26).
+            "cooler_override": 0,
+            "laser_override":  0,
+            "override_enabled": False,
             "bin_mode":        ("Raw Voltage"
                                 if default_domain == "voltage"
                                 else "Frequency"),
@@ -7711,19 +7693,11 @@ class PreAnalysisTab(QWidget):
             "harmonic":        harmonic,
             "ref_shift":       0.0,
             "noise_filter":    0,
-            "cooler_override": (self._cooler_override.value()
-                                if self._cooler_override_enabled.isChecked()
-                                else 0),
-            "laser_override":  (self._laser_override.value()
-                                if self._laser_override_enabled.isChecked()
-                                else 0),
-            # The two values above are ALREADY gated on PA's own
-            # tickboxes, so tell compute_merged_spectrum they are
-            # authoritative (it gates on override_enabled to avoid
-            # reading the Analysis block's unticked spinbox defaults).
-            "override_enabled": (
-                self._cooler_override_enabled.isChecked()
-                or self._laser_override_enabled.isChecked()),
+            # The main row is the frame the plot is drawn in, not an
+            # override: each run merges with its own values (2026-10-26).
+            "cooler_override": 0,
+            "laser_override":  0,
+            "override_enabled": False,
             "bin_mode":        ("Frequency"
                                 if self._xaxis_combo.currentText()
                                     in ("Frequency", "Wavenumber")
@@ -7975,8 +7949,10 @@ class PreAnalysisTab(QWidget):
                 },
                 "cooler_voltage": self._cooler_override.value(),
                 "laser_setpoint": self._laser_override.value(),
-                "cooler_override": self._cooler_override_enabled.isChecked(),
-                "laser_override": self._laser_override_enabled.isChecked(),
+                # The run each main value is taken from; None: typed.
+                **{f"{key}_reference": getattr(combo.currentData(),
+                                               "filepath", None)
+                   for key, (combo, _box) in self._Main_Rows.items()},
                 "binning": {
                     "bin_mode": self._bin_mode_combo.currentText(),
                     "x_column": self._x_col_combo.currentText(),
@@ -8100,13 +8076,17 @@ class PreAnalysisTab(QWidget):
             float(cfg.get("cooler_voltage", 29977)))
         self._laser_override.setValue(
             float(cfg.get("laser_setpoint", 10920)))
-        # Per-parameter override ticks (legacy "cooler_laser_override"
-        # applies to both for back-compat with older configs).
+        # The run each main value comes from, picked once it loads. A save
+        # from before 2026-10-26 has none: its first run, unless its
+        # override tick was on, which kept the typed value.
         legacy = bool(cfg.get("cooler_laser_override", False))
-        self._cooler_override_enabled.setChecked(
-            bool(cfg.get("cooler_override", legacy)))
-        self._laser_override_enabled.setChecked(
-            bool(cfg.get("laser_override", legacy)))
+        for key in self._Main_Rows:
+            ref = cfg.get(f"{key}_reference")
+            self._Main_Custom[key] = (
+                ref is None if f"{key}_reference" in cfg
+                else bool(cfg.get(f"{key}_override", legacy)))
+            if ref is not None:
+                self._Main_Pending[key] = ref
 
         # Binning (Pre-Analysis defaults preserve the legacy look if
         # the YAML predates this section).

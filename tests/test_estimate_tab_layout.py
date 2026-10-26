@@ -681,6 +681,56 @@ class VoltageEstimatorTests(unittest.TestCase):
         self.assertIsNone(est._Zoom)
         self.assertLess(est._Map.get_ylim()[1], 1e5)
 
+    def test_Estimator_Band_Edges_Drag_The_Scanning_Voltage(self):
+        """The map's y axis reads Scanning Range (V). An edge of the yellow
+        band shows a resize cursor and drags the band about its centre on
+        either panel, in whole scan steps: the Scanning Voltage follows
+        live, and the release writes Scan > Voltage range = 2 x it
+        (2026-10-26)."""
+        from matplotlib.backend_bases import MouseEvent
+        from PySide6.QtCore import Qt
+        self.tab.resize(1500, 950)
+        self._Build(self.cfg)
+        est = self.est
+        QApplication.processEvents()
+        est.canvas.draw()
+        self.assertEqual(est._Map.get_ylabel(), "Scanning Range (V)")
+        gp = self.tab.params_tab.global_params
+        to_px = est._Map.transData.transform
+        bar = to_px((est._S, 0))[0]
+
+        def at(name, x, y):
+            return MouseEvent(name, est.canvas, x, y, button=1)
+        dv = est.Dv_Box.value()
+        lo, hi = est._Map.get_ylim()
+        pixel = (hi - lo) / est._Map.bbox.height    # a mouse step, in V
+        x0, y0 = round(bar + 40), round(to_px((est._S, dv))[1])
+        est._On_Motion(at("motion_notify_event", x0, y0))
+        self.assertEqual(est.canvas.cursor().shape(),
+                         Qt.CursorShape.SizeVerCursor)
+        est._On_Press(at("button_press_event", x0, y0))
+        y1 = round(to_px((est._S, 3 * dv))[1])
+        est._On_Motion(at("motion_notify_event", x0, y1))
+        new = est.Dv_Box.value()
+        self.assertAlmostEqual(new, 3 * dv, delta=pixel)
+        for band in est._Bands:                 # centred, before the release
+            self.assertAlmostEqual(band.get_y(), -new)
+            self.assertAlmostEqual(band.get_height(), 2 * new)
+        est._On_Release(at("button_release_event", x0, y1))
+        self.assertEqual(2 * new % gp.scan_step.value(), 0)
+        self.assertEqual(gp.scan_range.value(), 2 * new)
+        # The spectrum's band edge drags it too: back down to dv. The
+        # release redrew the axes, so their pixels are read again.
+        est.canvas.draw()
+        to_px = est._Map.transData.transform
+        sx = est._Spec.transData.transform((0.5, 0))[0]
+        est._On_Press(at("button_press_event", sx,
+                         round(to_px((est._S, -new))[1])))
+        est._On_Motion(at("motion_notify_event", sx,
+                          round(to_px((est._S, -dv))[1])))
+        est._On_Release(at("button_release_event", sx, 0))
+        self.assertAlmostEqual(est.Dv_Box.value(), dv, delta=pixel)
+
     def test_Estimator_Optimise_Covers_Selected_Peaks(self):
         """Optimise moves the setpoint so the selected peaks are centred on
         the beam voltage, the sweep's centre, and sets Scan ▸ Voltage range
@@ -1059,6 +1109,29 @@ class Efficiency_Estimator_Tests(unittest.TestCase):
         self.assertIn("exceed the background", e.Detail.text())
         # Estimator inputs stay off the global undo stack.
         self.assertTrue(e.Peak_Box._Own_Undo)
+
+class Wait_Cursor_Tests(unittest.TestCase):
+    """macOS gets no wait cursor: Qt draws it from an image there, and
+    making that image just after the Mac woke from sleep crashed DENIS in
+    CoreGraphics (2026-10-26). Elsewhere it shows and restores as before."""
+
+    def setUp(self):
+        _ensure_app()
+
+    def test_Wait_Cursor_Skipped_On_macOS_Only(self):
+        from unittest.mock import patch
+        from PySide6.QtCore import Qt
+        from gui import shared_widgets
+        for platform, shown in (("darwin", None),
+                                ("win32", Qt.CursorShape.WaitCursor),
+                                ("linux", Qt.CursorShape.WaitCursor)):
+            with self.subTest(platform=platform), \
+                    patch.object(shared_widgets.sys, "platform", platform):
+                shared_widgets.Wait_Cursor(True)
+                cursor = QApplication.overrideCursor()
+                self.assertEqual(cursor and cursor.shape(), shown)
+                shared_widgets.Wait_Cursor(False)
+                self.assertIsNone(QApplication.overrideCursor())
 
 if __name__ == "__main__":
     unittest.main()

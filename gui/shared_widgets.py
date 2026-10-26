@@ -71,6 +71,19 @@ def lucide_icon(name):
     return QIcon(path) if os.path.exists(path) else QIcon()
 
 
+def Wait_Cursor(on):
+    """Show (``on``) or restore the wait cursor. Not on macOS: Qt draws that
+    cursor from an image there, and making the image just after the Mac woke
+    from sleep crashed DENIS inside CoreGraphics (Qt 6.11, 2026-10-26).
+    macOS shows its own spinning wheel while the app is busy."""
+    if sys.platform == "darwin":
+        return
+    if on:
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    else:
+        QApplication.restoreOverrideCursor()
+
+
 # ── Orbital names for combo boxes ────────────────────────────────
 ORBITAL_NAMES = [orb["name"] for orb in ORBITALS]
 

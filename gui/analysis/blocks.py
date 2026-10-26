@@ -24,7 +24,7 @@ import numpy as np
 from cls_estimations.mass_lookup import load_mass_table, get_mass, Z_TO_ELEMENT
 
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QRadioButton, QButtonGroup, QPushButton,
     QScrollArea, QToolButton, QMenu, QDialog, QDialogButtonBox, QTabWidget,
@@ -69,7 +69,7 @@ from gui.analysis.expr_validation import (
 from gui.analysis.naming import NON_FIT_PARAMS, full_param_name
 from gui.analysis.vasdf import is_vasdf_path, read_vasdf
 from gui.dialog_style import make_plot_card, style_dialog
-from gui.shared_widgets import _load_settings, _save_settings
+from gui.shared_widgets import _load_settings, _save_settings, Wait_Cursor
 
 
 # Constraint-mode dropdown values for the ModelBlock parameter table.
@@ -3636,7 +3636,7 @@ class SourceBlock(AnalysisBlock):
         focus_label = (f"run_{focus_entry.get('run_number', '?')}"
                        if focus_entry else None)
 
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        Wait_Cursor(True)
         try:
             src_cfg = self.get_source_config()
             infos = []   # list of (label, full_result_or_None, err_or_None)
@@ -3692,7 +3692,7 @@ class SourceBlock(AnalysisBlock):
                 except Exception as exc:
                     infos.append((label, None, str(exc)))
         finally:
-            QApplication.restoreOverrideCursor()
+            Wait_Cursor(False)
 
         warnings_list = build_binning_warnings(
             [(lbl, full["info"]) for lbl, full, _e in infos if full])

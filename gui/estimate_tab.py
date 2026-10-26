@@ -54,11 +54,12 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 
 from gui.shared_widgets import (
     LogHighlighter, PlotEditorDialog,
     ORBITAL_NAMES, _make_double, _make_int, _make_sci,
-    lucide_icon, _SpinBoxCommand, scroll_zoom,
+    lucide_icon, _SpinBoxCommand, scroll_zoom, Wait_Cursor,
 )
 from gui.theme import ACCENT_TITLE, Title_Tabs
 from cls_estimations.mass_lookup import (
@@ -2502,6 +2503,34 @@ class _Gradient_Line(LineCollection):
         super().draw(renderer)
 
 
+class _Spaced_Ticks(MaxNLocator):
+    """AutoLocator's ticks, at most 4 bins, with every other one dropped
+    while their labels, measured as drawn, would sit less than a quarter of
+    a label apart: setpoints like 17238.5 touched on a laptop-wide map
+    (2026-10-26)."""
+
+    def __init__(self):
+        super().__init__(nbins=4, steps=[1, 2, 2.5, 5, 10])
+
+    def __call__(self):
+        lo, hi = self.axis.get_view_interval()
+        ticks = [t for t in super().__call__() if lo <= t <= hi]
+        ax = self.axis.axes
+        renderer = getattr(ax.get_figure(root=True).canvas, "get_renderer",
+                           None)
+        if len(ticks) < 2 or renderer is None:
+            return ticks
+        # majorTicks, not get_major_ticks(), which calls this locator.
+        prop = self.axis.majorTicks[0].label1.get_fontproperties()
+        width = max(renderer().get_text_width_height_descent(
+            text, prop, ismath=False)[0]
+            for text in self.axis.major.formatter.format_ticks(ticks))
+        gap = ax.bbox.width * (ticks[1] - ticks[0]) / (hi - lo)     # px
+        while len(ticks) > 1 and gap < 1.25 * width:
+            ticks, gap = ticks[::2], 2 * gap
+        return ticks
+
+
 class Voltage_Range_Estimator(QWidget):
     """Setpoint map: where each hyperfine component resonates (dV from
     the beam voltage) as the laser setpoint moves, which components fall
@@ -2536,6 +2565,7 @@ class Voltage_Range_Estimator(QWidget):
         self._Mass_Table = isotope_list._mass_table   # load_mass_table()
         self._Dirty = True          # build on first show
         self._Dragging = False
+        self._Sizing = False        # dragging an edge of the sweep band
         self._Pan = None            # (x, y, xlim, ylim) at the press
         self._Zoom = None           # user's (xlim, ylim) on the map
         self._S = 0.0               # setpoint on the map (cm-1)
@@ -2549,7 +2579,8 @@ class Voltage_Range_Estimator(QWidget):
             "Drag the red bar to move the setpoint, or click the map and use "
             "the arrow keys (Shift for larger steps). Click a red ring to "
             "label its dV. Click a line, or its peak on the spectrum, to "
-            "select it or not for Optimise. Scroll to zoom, drag elsewhere "
+            "select it or not for Optimise. Drag an edge of the yellow band "
+            "to change the Scanning Voltage. Scroll to zoom, drag elsewhere "
             "to pan, double-click to refit.")
         for name, slot in (("button_press_event", self._On_Press),
                            ("motion_notify_event", self._On_Motion),
@@ -2738,7 +2769,7 @@ class Voltage_Range_Estimator(QWidget):
             QTimer.singleShot(0, self._Rebuild)
 
     def _Rebuild(self):
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        Wait_Cursor(True)
         try:
             self._Build_Model(self._Snapshot)
         except Exception as exc:  # noqa: BLE001 -- any incomplete config
@@ -2748,7 +2779,7 @@ class Voltage_Range_Estimator(QWidget):
                 f"a reference isotope.\n\n{type(exc).__name__}: {exc}")
             return
         finally:
-            QApplication.restoreOverrideCursor()
+            Wait_Cursor(False)
         combo, keep = self.Show_Combo, self.Show_Combo.currentText()
         combo.blockSignals(True)
         combo.clear()
@@ -3065,28 +3096,32 @@ class Voltage_Range_Estimator(QWidget):
             # (2026-10-24); the marker's colour names the state.
             self._Map.axvline(x_c, color=st["color"], ls=":", lw=0.8)
         off = self.Offset_Box.value()       # the sweep moves with the peaks
-        for ax in (self._Map, spec):
-            ax.axhspan(off - dv, off + dv, color="gold", alpha=0.2)
+        self._Bands = [ax.axhspan(off - dv, off + dv, color="gold", alpha=0.2)
+                       for ax in (self._Map, spec)]
         self._Map.set_xlim(self._Zoom[0] if self._Zoom else fit)
-        # Setpoint ticks are long: few of them, and no offset text, which
-        # landed on the axis label.
-        self._Map.locator_params(axis="x", nbins=4)
+        # Setpoint ticks are long: few of them, as many as fit, and no
+        # offset text, which landed on the axis label.
+        self._Map.xaxis.set_major_locator(_Spaced_Ticks())
         self._Map.ticklabel_format(axis="x", useOffset=False)
         self._Map.set_ylim(self._Zoom[1] if self._Zoom else (-win, win))
+        # Wrapped when the map is narrower than it, not run off the figure.
         self._Map.set_xlabel("Setpoint (cm$^{-1}$, laser = "
-                             f"x{self._Cfg.laser.harmonic})")
-        self._Map.set_ylabel("dV (V)")
+                             f"x{self._Cfg.laser.harmonic})", wrap=True)
+        self._Map.set_ylabel("Scanning Range (V)")
         spec.set_xlim(0, 1.05)
         # On top: below, it collided with the map's wide setpoint label.
-        spec.set_xlabel("Relative\nintensity", fontsize="small")
+        # Right-aligned: centred, it ran off a narrow canvas (2026-10-26).
+        spec.set_xlabel("Relative\nintensity", fontsize="small", loc="right")
         spec.xaxis.set_label_position("top")
         self._Bar = self._Map.axvline(s, color="red", lw=1.5)
         self._Rings = self._Map.scatter([], [], s=81, facecolors="none",
                                         edgecolors="red", linewidths=1.5,
                                         zorder=3)
+        # Clipped to the map: on a narrow one it ran onto the axis title.
         self._Label = self._Map.annotate(
             "", (s, 0), xytext=(9, 0), textcoords="offset points",
             va="center", fontsize="small", zorder=4, visible=False,
+            clip_on=True,
             bbox=dict(boxstyle="round,pad=0.3", fc="white", lw=0.8,
                       alpha=0.9))
         # Each state's spectrum in its colour, full on the selected peaks
@@ -3237,6 +3272,20 @@ class Voltage_Range_Estimator(QWidget):
                     hit, tol = (st, k), gap
         return hit
 
+    def _On_Band_Edge(self, event):
+        """Whether the cursor is within 6 px of an edge of the sweep band, on
+        the map or the spectrum, and off the bar, whose drag comes first."""
+        if self._Map is None or event.inaxes not in (self._Map, self._Spec):
+            return False
+        to_px, tol = self._Map.transData.transform, (
+            6 * self.canvas.device_pixel_ratio)
+        if (event.inaxes is self._Map
+                and abs(to_px((self._S, 0))[0] - event.x) <= tol):
+            return False
+        off, dv = self.Offset_Box.value(), self.Dv_Box.value()
+        return any(abs(to_px((self._S, y))[1] - event.y) <= tol
+                   for y in (off - dv, off + dv))
+
     def _Toggle_Hit(self, event):
         """A click on a line or a peak selects it or not, as its Peaks
         menu entry does; returns what it hit."""
@@ -3248,6 +3297,11 @@ class Voltage_Range_Estimator(QWidget):
 
     def _On_Press(self, event):
         if self._Map is None or event.button != 1:
+            return
+        if self._On_Band_Edge(event):
+            # The band stays centred, so either edge sets its half-width
+            # (2026-10-26).
+            self._Sizing = True
             return
         if event.inaxes is self._Spec:
             self._Toggle_Hit(event)
@@ -3286,6 +3340,20 @@ class Voltage_Range_Estimator(QWidget):
     def _On_Motion(self, event):
         if self._Dragging and event.inaxes is self._Map:
             self._Draw_At(event.xdata)
+        elif self._Sizing:
+            # Live, as the bar is: the band, rings and readout follow; the
+            # release writes the range (_On_Release).
+            off, step = (self.Offset_Box.value(),
+                         self._Global_Params.scan_step.value())
+            y = self._Map.transData.inverted().transform((0, event.y))[1]
+            # The range in whole steps, as Optimise rounds its range.
+            self.Dv_Box.setValue(
+                step * max(1, round(2 * abs(y - off) / step)) / 2)
+            dv = self.Dv_Box.value()
+            for band in self._Bands:
+                band.set_y(off - dv)
+                band.set_height(2 * dv)
+            self._Draw_At(self._S)
         elif self._Pan:
             px, py, (x0, x1), (y0, y1) = self._Pan
             bb = self._Map.bbox
@@ -3295,19 +3363,27 @@ class Voltage_Range_Estimator(QWidget):
             self._Map.set_ylim(y0 - dy, y1 - dy)
             self.canvas.draw_idle()
         else:
-            # Hover: a pointing hand over a line or peak a click toggles;
-            # no outline, which looked unprofessional (2026-10-25).
-            hit = self._Hit(event)
-            key = hit and (hit[0]["label"], hit[1])
+            # Hover: a resize cursor on the band's edges, a pointing hand
+            # over a line or peak a click toggles; no outline, which looked
+            # unprofessional (2026-10-25).
+            if self._On_Band_Edge(event):
+                key, cursor = "band", Qt.CursorShape.SizeVerCursor
+            else:
+                hit = self._Hit(event)
+                key = hit and (hit[0]["label"], hit[1])
+                cursor = Qt.CursorShape.PointingHandCursor
             if key != self._Hover:
                 self._Hover = key
                 if key:
-                    self.canvas.setCursor(Qt.CursorShape.PointingHandCursor)
+                    self.canvas.setCursor(cursor)
                 else:
                     self.canvas.unsetCursor()
 
     def _On_Release(self, event):
-        if self._Dragging:
+        if self._Sizing:
+            self._Sizing = False
+            self._Commit_Dv()
+        elif self._Dragging:
             x, y, s, ring = self._Dragging
             self._Dragging = False
             tol = 6 * self.canvas.device_pixel_ratio
@@ -3709,8 +3785,10 @@ class Saturation_Estimator(QWidget):
                           lw=0.8, alpha=0.9))
         ax.set_xlim(0, x_hi)
         ax.set_ylim(bottom=min(0, s.min()))
-        ax.set_xlabel("Laser power (mW)")
-        ax.set_ylabel("Background-free counts per scan")
+        # Net (peak - background): "Background-free counts per scan" did not
+        # fit a laptop's canvas. Both wrap if the canvas is smaller still.
+        ax.set_xlabel("Laser power (mW)", wrap=True)
+        ax.set_ylabel("Net counts per scan", wrap=True)
         self.canvas.draw_idle()
 
     def _Write_Readout(self, p, fit):
@@ -4083,6 +4161,10 @@ class EstimateTab(QWidget):
             "dragging away from the bar pans it, and a double-click or the "
             "reset button beside <b>Window</b> refits it (the button also "
             "sets Window back to auto).<br>"
+            "\u2022 Dragging an edge of the yellow band widens or narrows "
+            "the sweep about its centre, in whole scan steps; releasing it "
+            "writes Scan \u25b8 Voltage range, as Enter in <b>Scanning "
+            "Voltage</b> does, and can be undone.<br>"
             "\u2022 Clicking a line, or its peak on the spectrum, selects "
             "that component or not, as its tick in <b>Peaks</b> does; the "
             "pointer turns to a hand over them. On the bar a click still "

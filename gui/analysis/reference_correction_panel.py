@@ -1377,14 +1377,13 @@ class ReferenceCorrectionPanel(QGroupBox):
         # handful of runs, a visible pause for a campaign-sized
         # project, so say that something is happening.
         from PySide6.QtCore import QCoreApplication
-        from PySide6.QtGui import QCursor
-        from PySide6.QtWidgets import QApplication
-        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+        from gui.shared_widgets import Wait_Cursor
+        Wait_Cursor(True)
         try:
             new_corrections, skipped_no_runs, skipped_no_ts = (
                 self._collect_corrections(wanted))
         finally:
-            QApplication.restoreOverrideCursor()
+            Wait_Cursor(False)
             QCoreApplication.processEvents()
 
         self._corrections = new_corrections
