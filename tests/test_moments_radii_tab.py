@@ -94,6 +94,15 @@ class Moments_Radii_Tab_Tests(unittest.TestCase):
                 at._close_project(0)
         self.assertNotIn("Moments & Radii", titles())
 
+    def test_A_Project_Never_Fitted_Is_Skipped(self):
+        """A project with an HFS model but no fits yet (its results None)
+        is listed without moments instead of stopping the computation."""
+        tab = self._Tab([Project("53mFe", None)])
+        tab.compute()
+        (row,) = tab.Moments()
+        self.assertEqual((row["project"], row["mu"], row["Q"]),
+                         ("53mFe", None, None))
+
     def test_The_Moments_Of_A_Project_s_Fits(self):
         results = [
             {"success": True, "run_number": "1", "source_name": "Run_1",

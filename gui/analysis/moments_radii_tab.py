@@ -247,7 +247,7 @@ class MomentsRadiiTab(QGroupBox):
             return None
         models = {config["name"], safe_model_name(config["name"])}
         found = {}
-        for result in project._last_results:
+        for result in project._last_results or []:   # never fitted: None
             if not result.get("success"):
                 continue
             df = result.get("params_df") or {}
