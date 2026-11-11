@@ -194,3 +194,53 @@ def Overdispersion(step, scan, channel=None):
         r["afterpulse"] = r["dispersion"] - 1.0 - r["common"]
         out["pmt"][ch.item()] = r
     return out
+
+
+# ── Pulls and coverage of a fit (Analysis Upgrade, WP-S2) ────────────
+
+def Pull_Coverage(expected, truth, fit, n=200, dispersion=1.0, seed=None):
+    """A parametric bootstrap of a fit. ``n`` spectra are drawn from
+    ``expected`` (the fitted model's counts in each of the run's bins):
+    Poisson, or negative binomial at variance/mean ``dispersion`` above 1.
+    Each is refitted by ``fit(y) -> {name: (value, sigma)}``, or None when
+    the refit fails (counted, left out); in the app, DENIS's own fitter
+    with the same configuration.
+
+    Per parameter of ``truth`` (the values ``expected`` was made with), the
+    pulls (value - truth) / sigma: their mean and width, 0 and 1 when the
+    fit's values and errors are right, each with its sigma, and the shares
+    within 1 and 1.96 (the 68 % and 95 % coverage).
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    mu = np.clip(np.asarray(expected, dtype=float), 0.0, None)
+    pulls = {name: [] for name in truth}
+    failed = 0
+    for _ in range(n):
+        if dispersion > 1:
+            y = np.zeros_like(mu)
+            on = mu > 0
+            y[on] = rng.negative_binomial(mu[on] / (dispersion - 1),
+                                          1.0 / dispersion)
+        else:
+            y = rng.poisson(mu).astype(float)
+        got = fit(y)
+        if not got:
+            failed += 1
+            continue
+        for name, true in truth.items():
+            value, sigma = got[name]
+            if sigma > 0 and np.isfinite(value) and np.isfinite(sigma):
+                pulls[name].append((value - true) / sigma)
+    out = {"n": n, "failed": failed, "dispersion": dispersion, "params": {}}
+    for name, p in pulls.items():
+        p = np.asarray(p)
+        width = float(p.std(ddof=1)) if len(p) > 1 else float("nan")
+        out["params"][name] = {
+            "n": len(p), "pull_mean": float(p.mean()) if len(p) else
+            float("nan"), "pull_mean_sigma": width / np.sqrt(len(p)),
+            "pull_width": width,
+            "pull_width_sigma": width / np.sqrt(2.0 * max(len(p) - 1, 1)),
+            "coverage_68": float(np.mean(np.abs(p) < 1.0)),
+            "coverage_95": float(np.mean(np.abs(p) < 1.96))}
+    return out
