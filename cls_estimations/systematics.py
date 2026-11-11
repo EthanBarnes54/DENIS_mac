@@ -591,3 +591,72 @@ def shift_bounds(value, lo, hi, new_value):
     shift = float(new_value) - float(value) if math.isfinite(value) else 0.0
     return (lo + shift if _finite(lo) else lo,
             hi + shift if _finite(hi) else hi)
+
+
+# ── Systematic sources and their propagation (Analysis Upgrade, WP-S3) ─
+
+#: How a source combines across runs: "run" is independent per run; the
+#: rest take one value for every run (and project) at once.
+PER_RUN = "run"
+CORRELATIONS = (PER_RUN, "campaign", "region", "table")
+
+
+@dataclass
+class Systematic_Source:
+    """One systematic source (brief C4). ``key`` is the C3 perturbation it
+    moves (or ``cooler_offset_v``); None for one given directly per
+    parameter. ``width`` is its 1 sigma in ``unit`` (V, mV, ppm or MHz),
+    ``kind`` measured | declared | unknown, ``correlation`` one of
+    CORRELATIONS; ``region``, ``project`` and ``run`` narrow it."""
+    name: str
+    width: float
+    key: str | None = None
+    unit: str = "V"
+    kind: str = "declared"
+    correlation: str = "campaign"
+    region: str = ""
+    project: str = ALL
+    run: str = ALL
+    enabled: bool = True
+
+    @property
+    def sigma(self):
+        """The width in its key's own unit (mV read as V)."""
+        return self.width * (1e-3 if self.unit == "mV" else 1.0)
+
+    def to_dict(self):
+        return dict(self.__dict__)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+
+def Combine_Runs(deltas, sigmas, correlation):
+    """One source's effect on the weighted mean over runs, from each run's
+    response: the weighted mean of the responses (sign kept) when one value
+    moves every run, their weighted quadrature sum when each run has its
+    own. Weights are 1/sigma^2, as the published mean's."""
+    w = 1.0 / np.asarray(sigmas, dtype=float) ** 2
+    w = w / w.sum()
+    d = np.asarray(deltas, dtype=float)
+    if correlation == PER_RUN:
+        return float(np.sqrt(np.sum((w * d) ** 2)))
+    return float(w @ d)
+
+
+def Draw_Sources(sources, n, seed=None):
+    """``n`` Monte Carlo draws of the shared sources, each drawn once per
+    draw (N(0, sigma)) for every run at once, as {key: value}; sources on
+    one key add. Per-run sources are left out: they enter from their +/-1
+    sigma responses (DA3)."""
+    rng = np.random.default_rng(seed)
+    shared = [s for s in sources if s.enabled and s.key and s.sigma > 0
+              and s.correlation != PER_RUN]
+    draws = []
+    for _ in range(n):
+        draw = {}
+        for s in shared:
+            draw[s.key] = draw.get(s.key, 0.0) + float(rng.normal(0.0, s.sigma))
+        draws.append(draw)
+    return draws

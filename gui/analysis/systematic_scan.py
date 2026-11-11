@@ -415,15 +415,22 @@ class SystematicScan(QObject):
     def start(self, targets, offsets, *, label="sys_001",
               seed_mode=SEED_CONTINUATION, baseline_dv=0.0, gp=None,
               is_tab=None, light_output=True, records=None,
-              seed_overrides=None, fitter_overrides=None):
+              seed_overrides=None, fitter_overrides=None,
+              step_overrides=None, step_label=None):
         """Fit every target at every offset.
 
         ``records`` carries results already collected (a resumed or
         partially re-run scan); those offsets keep their numbers and
-        seed the ones being fitted now.
+        seed the ones being fitted now. ``step_overrides(step, project)``
+        gives a step's Source overrides and ``step_label(step)`` its
+        iterations' label; by default the step is the assumed cooler
+        offset, under ``label`` (WP-S3 scans any C3 perturbation this way).
         """
         if self.busy:
             raise RuntimeError("a scan is already running")
+        self._step_overrides = step_overrides or (
+            lambda dv, _project: {"cooler_offset_v": float(dv)})
+        self._step_label = step_label or (lambda _dv: self._label)
         targets = list(targets or [])
         offsets = [float(v) for v in (offsets or [])]
         if not targets:
@@ -699,11 +706,11 @@ class SystematicScan(QObject):
         self._current_target = target
         self.progress.emit(self._done, self._total,
                            f"{target.name} @ {dv:+.2f} V")
-        output = {"iter_mode": "Manual", "iter_label": self._label}
+        output = {"iter_mode": "Manual", "iter_label": self._step_label(dv)}
         if self._light:
             output.update(LIGHT_OUTPUT)
         overrides = {
-            "source": {"cooler_offset_v": float(dv)},
+            "source": self._step_overrides(dv, project),
             "output": output,
         }
         method = self._fitter_overrides.get(float(dv))
@@ -1013,3 +1020,167 @@ class SystematicScan(QObject):
                 base["value"] = have
             seeds[(model, pname)] = base
         return seeds
+
+
+# ── WP-S3: propagating systematic sources (DA3) ─────────────────────
+
+MEAN_RUN = "<weighted mean>"
+
+
+def _Shifted(values, project):
+    """A step's perturbations for ``project``: a beam offset moves the
+    project's own (calibrated) cooler offset, never replaces it."""
+    out = {k: float(v) for k, v in values.items()}
+    if "cooler_offset_v" in out:
+        from gui.analysis.blocks import SourceBlock
+        for block in project._get_blocks_by_type(SourceBlock):
+            out["cooler_offset_v"] += float(
+                block.get_source_config().get("cooler_offset_v", 0.0) or 0.0)
+            break
+    return out
+
+
+class Source_Budget_Scan(QObject):
+    """The generalised propagation (WP-S3, DA3), on SystematicScan's chain.
+
+    Each enabled source with a C3 key: the chain refit at -1 and +1 sigma
+    (seeded outward from the baseline, as the cooler-offset scan is), each
+    value's response half the difference, sign kept. With ``mc_draws``,
+    then that many draws of the shared sources together, each from the
+    baseline. ``finished`` carries {"deltas": {source: {key: delta}},
+    "sigmas": {key: sigma}, "mc": [records] | None, "failed": [source],
+    "table": Source_Budget_Table(...)}; a source whose two steps did not
+    both fit is left out and named in "failed".
+    """
+
+    progress = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scan = SystematicScan(self)
+        self._scan.finished.connect(
+            lambda records: QTimer.singleShot(0, lambda: self._Done(records)))
+        self._scan.failed.connect(self.failed.emit)
+        self._scan.progress.connect(
+            lambda _d, _t, what: self.progress.emit(f"{self._current}: {what}"))
+
+    def start(self, targets, sources, *, mc_draws=0, seed=None,
+              shift_projects=None, **scan_kw):
+        from cls_estimations.systematics import Draw_Sources
+        self._targets, self._kw = list(targets), dict(scan_kw)
+        self._sources = [s for s in sources
+                         if s.enabled and s.key and s.sigma > 0]
+        self._queue = list(self._sources)
+        self._deltas, self._sigmas, self._failed = {}, {}, []
+        self._draws = (Draw_Sources(self._sources, mc_draws, seed)
+                       if mc_draws else None)
+        self._mc, self._shift_projects = None, shift_projects
+        self._Next()
+
+    def _Next(self):
+        import re
+        label = self._kw.get("label", "sys_001")
+        if self._queue:
+            src = self._queue.pop(0)
+            self._current, name = src.name, re.sub(r"\W+", "_", src.name)
+            self._scan.start(
+                self._targets, [-src.sigma, src.sigma], **dict(
+                    self._kw, step_overrides=lambda x, p, k=src.key:
+                    _Shifted({k: x}, p),
+                    step_label=lambda x: f"{label}_{name}_{'+' if x > 0 else '-'}1s"))
+        elif self._draws and self._mc is None:
+            self._current, draws = "Monte Carlo", self._draws
+            self._scan.start(
+                self._targets, list(range(1, len(draws) + 1)), **dict(
+                    self._kw, seed_mode=SEED_BASELINE,
+                    step_overrides=lambda i, p: _Shifted(draws[int(i) - 1], p),
+                    step_label=lambda i: f"{label}_mc{int(i):03d}"))
+        else:
+            self.finished.emit({
+                "deltas": self._deltas, "sigmas": self._sigmas,
+                "mc": self._mc, "failed": self._failed,
+                "table": Source_Budget_Table(
+                    self._deltas, self._sigmas, self._sources, self._mc,
+                    shift_projects=self._shift_projects)})
+
+    def _Done(self, records):
+        if self._current == "Monte Carlo":
+            self._mc = [r for r in records if r["status"] != "failed"]
+        else:
+            ok = {r["dv"]: r["values"] for r in records if r["status"] == "ok"}
+            if len(ok) == 2:
+                minus, plus = ok[min(ok)], ok[max(ok)]
+                self._deltas[self._current] = {
+                    k: 0.5 * (v["value"] - minus[k]["value"])
+                    for k, v in plus.items() if k in minus}
+                self._sigmas.update(
+                    {k: 0.5 * (v["sigma"] + minus[k]["sigma"])
+                     for k, v in plus.items() if k in minus})
+            else:
+                self._failed.append(self._current)
+        self._Next()
+
+
+def Source_Budget_Table(deltas, sigmas, sources, mc=None,
+                        shift_projects=None):
+    """Andrea's table (WP-S3). Per project and parameter: each source's
+    effect on the weighted mean over runs (combined by its correlation,
+    Combine_Runs), the total in quadrature and the statistical error. Per
+    isotope, the same for the shifts, whose shared sources cancel through
+    the chain; a per-run source does not cancel, so needs the projects
+    behind the shift (``shift_projects``: {label: (sample, reference)}),
+    whose per-run effects on their centroid add in quadrature; NaN without
+    them. With ``mc`` (the Monte Carlo's records), ``mc_shared`` is the
+    spread of each row's mean over the draws, ``mc_total`` that with the
+    per-run sources in quadrature."""
+    import numpy as np
+    from cls_estimations.systematics import PER_RUN, Combine_Runs, combine
+    shifts = SystematicScan.SHIFT_PROJECT
+    groups = {}
+    for key in sigmas:
+        project, run, model, pname = split_key(key)
+        groups.setdefault((project, run if project == shifts else "", model,
+                           pname), []).append(key)
+
+    def Effect(keys, src, correlation):
+        d = deltas.get(src.name, {})
+        if not keys or any(k not in d for k in keys):
+            return float("nan")
+        return Combine_Runs([d[k] for k in keys], [sigmas[k] for k in keys],
+                            correlation)
+
+    def Centroid(project):
+        keys = sorted(k for k in sigmas if split_key(k)[0] == project
+                      and split_key(k)[3] == "centroid")
+        model = split_key(keys[0])[2] if keys else None
+        return [k for k in keys if split_key(k)[2] == model]
+
+    rows = []
+    for (project, label, model, pname), keys in sorted(groups.items()):
+        row = {"project": project, "run": label or MEAN_RUN, "model": model,
+               "parameter": pname, "sources": {}}
+        for src in sources:
+            if label and src.correlation == PER_RUN:
+                pair = (shift_projects or {}).get(label)
+                row["sources"][src.name] = (float(np.hypot(
+                    Effect(Centroid(pair[0]), src, PER_RUN),
+                    Effect(Centroid(pair[1]), src, PER_RUN)))
+                    if pair else float("nan"))
+            else:
+                row["sources"][src.name] = Effect(keys, src, src.correlation)
+        w = 1.0 / np.asarray([sigmas[k] for k in keys]) ** 2
+        row["total"] = combine(row["sources"].values())
+        row["statistical"] = float(1.0 / np.sqrt(w.sum()))
+        if mc:
+            means = [float(w @ [r["values"][k]["value"] for k in keys])
+                     / w.sum() for r in mc
+                     if all(k in r["values"] for k in keys)]
+            row["mc_shared"] = (float(np.std(means, ddof=1))
+                                if len(means) > 1 else float("nan"))
+            row["mc_total"] = combine([row["mc_shared"]] + [
+                row["sources"][s.name] for s in sources
+                if s.correlation == PER_RUN])
+        rows.append(row)
+    return rows
