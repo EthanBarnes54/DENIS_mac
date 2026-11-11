@@ -850,6 +850,15 @@ class AnalysisProject(QWidget):
 
     def _on_fit_requested(self):
         """Gather configs from all blocks and start fitting."""
+        # A second start replaced the running worker, and Qt aborts the
+        # process when a running QThread is destroyed (a second Fitter
+        # block's Run, or a scan step on a project already fitting -- the
+        # scan aborts on the raise rather than take that fit as its own).
+        if self.is_fitting():
+            if getattr(self, "_scan_driven", False):
+                raise RuntimeError("a fit is already running")
+            self._fit_warn("A fit is already running for this project.")
+            return
         sources = self._get_blocks_by_type(SourceBlock)
         models = self._get_blocks_by_type(ModelBlock)
         fitters = self._get_blocks_by_type(FitterBlock)

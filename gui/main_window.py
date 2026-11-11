@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QComboBox, QCheckBox, QDialogButtonBox, QGroupBox,
     QLineEdit, QPushButton, QLabel, QScrollArea, QWidget, QSplashScreen,
 )
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, QThread, QDeadlineTimer
 from PySide6.QtGui import (
     QAction, QKeySequence, QIcon, QPixmap, QFont,
     QUndoStack, QColor, QDesktopServices,
@@ -2915,7 +2915,26 @@ def main():
 
     QTimer.singleShot(1500, window.preload_data_stack)
 
-    sys.exit(app.exec())
+    Exit_Code = app.exec()
+    # Qt aborts the whole process when a QThread is destroyed while it
+    # runs, and quitting mid-task did that (a live estimate, a NIST fetch,
+    # a GP or auto fit). Ask every worker to stop and give them 5 s
+    # together; one that won't is left behind by a hard exit, not an abort
+    # (after the logs are flushed: PySide's own exit handler would destroy
+    # the thread with the app, so the atexit ones are skipped).
+    import gc
+    from shiboken6 import isValid
+    Busy_Threads = [T for T in gc.get_objects() if isinstance(T, QThread)
+                    and isValid(T) and T.isRunning()]
+    for T in Busy_Threads:
+        getattr(T, "cancel", getattr(T, "stop", lambda: None))()
+    Deadline = QDeadlineTimer(5000)
+    if not all(T.wait(Deadline) for T in Busy_Threads):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        logging.shutdown()
+        os._exit(Exit_Code)
+    sys.exit(Exit_Code)
 
 
 if __name__ == "__main__":

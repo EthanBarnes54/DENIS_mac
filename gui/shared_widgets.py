@@ -73,15 +73,22 @@ def lucide_icon(name):
 
 def Wait_Cursor(on):
     """Show (``on``) or restore the wait cursor. Not on macOS: Qt draws that
-    cursor from an image there, and making the image just after the Mac woke
-    from sleep crashed DENIS inside CoreGraphics (Qt 6.11, 2026-10-26).
-    macOS shows its own spinning wheel while the app is busy."""
+    cursor (and SizeAll) from an image there, and making the image crashed
+    DENIS inside CoreGraphics (Qt 6.11: after a wake on 2026-10-26, at
+    launch on 2026-11-11). macOS shows its own spinning wheel while busy."""
     if sys.platform == "darwin":
         return
     if on:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
     else:
         QApplication.restoreOverrideCursor()
+
+
+if sys.platform == "darwin":    # matplotlib's toolbars ask for the same two
+    from matplotlib.backends.backend_qt import cursord   # (WAIT around every
+    from matplotlib.backend_tools import Cursors         # draw, MOVE in pan)
+    cursord.update({Cursors.WAIT: Qt.CursorShape.ArrowCursor,
+                    Cursors.MOVE: Qt.CursorShape.OpenHandCursor})
 
 
 # ── Orbital names for combo boxes ────────────────────────────────

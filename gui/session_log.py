@@ -139,6 +139,13 @@ def install(app_root, *, verbose=False, keep=20):
         try:
             import faulthandler
             faulthandler.enable(file=log_fh, all_threads=True)
+            # enable() skips SIGTRAP, which is how CoreGraphics died
+            # (2026-11-11): the log had no stack. chain=True still lets
+            # the process die and macOS write its crash report.
+            if hasattr(faulthandler, "register"):     # not on Windows
+                import signal
+                faulthandler.register(signal.SIGTRAP, file=log_fh,
+                                      all_threads=True, chain=True)
         except Exception:
             pass
 

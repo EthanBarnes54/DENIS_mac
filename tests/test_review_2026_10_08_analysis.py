@@ -284,6 +284,22 @@ class CancelTests(unittest.TestCase):
                                 mock.Mock(), {}, worker=old)
         save.assert_not_called()
 
+    def test_A_Second_Start_Keeps_The_Running_Worker(self):
+        # Replacing a running worker destroyed its QThread: Qt aborted.
+        from gui.analysis.project import AnalysisProject
+        Project = AnalysisProject("P")
+        Running = mock.Mock()
+        Running.isRunning.return_value = True
+        Project._fit_worker = Running
+        with mock.patch.object(Project, "_fit_warn") as Warn:
+            Project._on_fit_requested()
+        Warn.assert_called_once_with(
+            "A fit is already running for this project.")
+        Project._scan_driven = True               # the scan aborts on it
+        with self.assertRaises(RuntimeError):
+            Project._on_fit_requested()
+        self.assertIs(Project._fit_worker, Running)
+
 
 # ── binning / merging ────────────────────────────────────────────────
 

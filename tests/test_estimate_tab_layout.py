@@ -23,6 +23,7 @@ Depends on: gui.estimate_tab (EstimateTab, GlobalParamsWidget,
 IsotopeListWidget, RunTab, PlotsTab, ISOTOPE_COLORS); PySide6.
 """
 
+import sys
 import unittest
 
 from PySide6.QtCore import QCoreApplication
@@ -1132,6 +1133,15 @@ class Wait_Cursor_Tests(unittest.TestCase):
                 self.assertEqual(cursor and cursor.shape(), shown)
                 shared_widgets.Wait_Cursor(False)
                 self.assertIsNone(QApplication.overrideCursor())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS-only remap")
+    def test_Matplotlib_Cursors_Native_On_macOS(self):
+        from PySide6.QtCore import Qt
+        from matplotlib.backends.backend_qt import cursord
+        import gui.shared_widgets  # noqa: F401  (applies the remap)
+        S = Qt.CursorShape
+        self.assertFalse({S.WaitCursor, S.BusyCursor, S.SizeAllCursor}
+                         & set(cursord.values()))
 
 if __name__ == "__main__":
     unittest.main()
