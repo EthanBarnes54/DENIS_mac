@@ -20,7 +20,19 @@ from the Systematics tab, taken as fully correlated between the lines,
 since one source moves both), the reference's own uncertainty (the common
 mu_ref or Q_ref, and each line's own A_ref or B_ref), and the anomaly.
 
-Depends on: numpy.
+Charge radii from isotope shifts (W. H. King, *Isotope Shifts in Atomic
+Spectra*, 1984), with dnu^{AA'} = nu^{A'} - nu^{A}:
+
+    dnu^{AA'} = K / mu_AA' + F dr2^{AA'},   mu_AA' = m_A m_A' / (m_A' - m_A),
+
+the masses being those of the species measured (DA4), so an isomer pair
+has no mass shift and dr2 = dnu / F. F and K are given, calibrated on
+isotopes of known dr2 (a straight line in the modified shifts mu dnu
+against mu dr2, fitted with errors in both by York et al. 2004, Am. J.
+Phys. 72, 367), or taken from a second line's shifts. Units are the
+caller's: MHz, fm^2, MHz/fm^2 and MHz u, say.
+
+Depends on: numpy, cls_estimations.mass_lookup.
 """
 
 from dataclasses import dataclass
@@ -156,3 +168,153 @@ def A_Ratio_Check(A_lower: Measured, A_upper: Measured, ref: Reference,
     return {"ratio": r, "sigma": float(np.hypot(stat, syst)),
             "ratio_ref": r_ref, "sigma_ref": float(sigma_ref),
             "pull": pull, "flag": bool(abs(pull) > limit)}
+
+
+# ── Charge radii and the King plot ──────────────────────────────────
+
+ELECTRON_MASS_U = 5.48579909065e-4       # u, CODATA 2018
+
+
+def Species_Mass(Z: int, A: int, charge: int = 0, table=None) -> float:
+    """The mass (u) of the species measured: the AME atomic mass less
+    ``charge`` electrons (a neutral atom after the CEC keeps them all)."""
+    from cls_estimations.mass_lookup import get_mass, load_mass_table
+    return get_mass(table or load_mass_table(), Z, A) - charge * ELECTRON_MASS_U
+
+
+def Inverse_Mass_Factor(m_A: float, m_A2: float) -> float:
+    """1/mu_AA' = (m_A' - m_A) / (m_A m_A'): zero for an isomer pair."""
+    return (m_A2 - m_A) / (m_A * m_A2)
+
+
+def Shift_Covariance(own_sigmas, ref_sigma: float = 0.0) -> np.ndarray:
+    """The covariance of shifts all taken against one reference isotope:
+    each its own variance, and the reference's variance shared by all."""
+    own = np.asarray(own_sigmas, dtype=float)
+    return np.diag(own**2) + ref_sigma**2
+
+
+def Radii_From_F_K(shifts, inv_mu, F: float, F_sigma: float, K: float,
+                   K_sigma: float, rho_FK: float = 0.0, cov_stat=None,
+                   cov_syst=None) -> dict:
+    """dr2 = (dnu - K / mu) / F for each pair, with ``cov_stat`` and
+    ``cov_syst`` the shifts' covariances (None: zero) and F, K correlated
+    by ``rho_FK``. Returns each pair's dr2 and its stat / syst / atomic /
+    total sigma, and the full covariance ``cov`` between the pairs."""
+    nu = np.asarray(shifts, dtype=float)
+    im = np.asarray(inv_mu, dtype=float)
+    zero = np.zeros((len(nu), len(nu)))
+    c_stat = zero if cov_stat is None else np.asarray(cov_stat, float)
+    c_syst = zero if cov_syst is None else np.asarray(cov_syst, float)
+    dr2 = (nu - K * im) / F
+    jac = np.column_stack((-dr2 / F, -im / F))          # d/dF, d/dK
+    c_fk = np.array([[F_sigma**2, rho_FK * F_sigma * K_sigma],
+                     [rho_FK * F_sigma * K_sigma, K_sigma**2]])
+    c_atomic = jac @ c_fk @ jac.T
+    cov = (c_stat + c_syst) / F**2 + c_atomic
+    return {"dr2": dr2, "stat": np.sqrt(np.diag(c_stat)) / abs(F),
+            "syst": np.sqrt(np.diag(c_syst)) / abs(F),
+            "atomic": np.sqrt(np.diag(c_atomic)),
+            "total": np.sqrt(np.diag(cov)), "cov": cov}
+
+
+def York_Fit(x, y, sx, sy, r=None, tol: float = 1e-15,
+             max_iter: int = 200) -> dict:
+    """The straight line y = intercept + slope x through points with errors
+    in both (sx, sy; their correlations r), by York et al. 2004. Also gives
+    the line's centre (the weighted mean of the fitted x), where its value
+    is uncorrelated with the slope, and chi^2 with n - 2 degrees of
+    freedom (chi2_red is NaN with none)."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    wx, wy = 1.0 / np.asarray(sx, float)**2, 1.0 / np.asarray(sy, float)**2
+    r = np.zeros_like(x) if r is None else np.asarray(r, float)
+    alpha = np.sqrt(wx * wy)
+    b = np.polyfit(x, y, 1)[0]
+    for _ in range(max_iter):
+        w = wx * wy / (wx + b * b * wy - 2 * b * r * alpha)
+        xb, yb = np.sum(w * x) / np.sum(w), np.sum(w * y) / np.sum(w)
+        u, v = x - xb, y - yb
+        beta = w * (u / wy + b * v / wx - (b * u + v) * r / alpha)
+        b_new = np.sum(w * beta * v) / np.sum(w * beta * u)
+        done = abs(b_new - b) <= tol * abs(b_new)
+        b = b_new
+        if done:
+            break
+    a = yb - b * xb
+    x_fit = xb + beta
+    centre = np.sum(w * x_fit) / np.sum(w)
+    sb2 = 1.0 / np.sum(w * (x_fit - centre)**2)
+    chi2 = float(np.sum(w * (y - b * x - a)**2))
+    dof = len(x) - 2
+    return {"slope": float(b), "intercept": float(a),
+            "slope_sigma": float(np.sqrt(sb2)),
+            "intercept_sigma": float(np.sqrt(1.0 / np.sum(w)
+                                             + centre**2 * sb2)),
+            "cov": float(-centre * sb2), "x_centre": float(centre),
+            "y_centre": float(a + b * centre),
+            "y_centre_sigma": float(np.sqrt(1.0 / np.sum(w))),
+            "chi2": chi2, "dof": dof,
+            "chi2_red": chi2 / dof if dof > 0 else float("nan")}
+
+
+def _Modified(inv_mu, y, sy, x, sx):
+    """The King plot's axes: each value and sigma times mu_AA'. Isomer
+    pairs (no mass shift) are refused."""
+    im = np.asarray(inv_mu, dtype=float)
+    if np.any(im == 0):
+        raise ValueError("An isomer pair has no mass shift: it is placed "
+                         "with F, never used to calibrate the King plot.")
+    if len(im) < 2:
+        raise ValueError("A King plot needs at least two isotope pairs.")
+    y, sy, x, sx = (np.asarray(v, dtype=float) for v in (y, sy, x, sx))
+    return y / im, np.abs(sy / im), x / im, np.abs(sx / im)
+
+
+def _F_K(F, F_sigma, K, K_sigma, cov, fit):
+    """The F, K record the calibrations return."""
+    rho = cov / (F_sigma * K_sigma) if F_sigma > 0 and K_sigma > 0 else 0.0
+    return {"F": F, "F_sigma": F_sigma, "K": K, "K_sigma": K_sigma,
+            "cov_FK": cov, "rho_FK": rho, "chi2": fit["chi2"],
+            "dof": fit["dof"], "chi2_red": fit["chi2_red"]}
+
+
+def King_Calibration(shifts, shift_sigma, dr2, dr2_sigma, inv_mu) -> dict:
+    """F and K from pairs of known dr2 (with their sigma): the modified
+    shifts mu dnu against mu dr2, fitted with errors in both. Also the
+    line's centre ``x_centre`` and ``K_centre`` (its value there), which is
+    uncorrelated with F. Exactly two pairs leave no degrees of freedom.
+
+    York's is the maximum-likelihood line, and like any errors-in-variables
+    fit it leans by a second-order amount when the dr2 errors dominate
+    (F sigma_dr2 well above sigma_dnu): about 0.1 sigma on F at 8 %
+    relative error on mu dr2, vanishing as they shrink."""
+    y, sy, x, sx = _Modified(inv_mu, shifts, shift_sigma, dr2, dr2_sigma)
+    fit = York_Fit(x, y, sx, sy)
+    out = _F_K(fit["slope"], fit["slope_sigma"], fit["intercept"],
+               fit["intercept_sigma"], fit["cov"], fit)
+    out.update(x_centre=fit["x_centre"], K_centre=fit["y_centre"],
+               K_centre_sigma=fit["y_centre_sigma"])
+    return out
+
+
+def Two_Line_King(shifts, shift_sigma, shifts2, shifts2_sigma, inv_mu,
+                  F2: float, F2_sigma: float, K2: float, K2_sigma: float,
+                  rho2: float = 0.0) -> dict:
+    """This line's F and K from a second line's shifts for the same pairs
+    and that line's F2, K2: mu dnu = (F/F2) mu dnu2 + (K - (F/F2) K2)."""
+    y, sy, x, sx = _Modified(inv_mu, shifts, shift_sigma, shifts2,
+                             shifts2_sigma)
+    fit = York_Fit(x, y, sx, sy)
+    s, c = fit["slope"], fit["intercept"]
+    jac = np.array([[0.0, F2, s, 0.0], [1.0, K2, 0.0, s]])  # d/d(c,s,F2,K2)
+    cin = np.zeros((4, 4))
+    cin[:2, :2] = [[fit["intercept_sigma"]**2, fit["cov"]],
+                   [fit["cov"], fit["slope_sigma"]**2]]
+    cin[2:, 2:] = [[F2_sigma**2, rho2 * F2_sigma * K2_sigma],
+                   [rho2 * F2_sigma * K2_sigma, K2_sigma**2]]
+    cov = jac @ cin @ jac.T
+    out = _F_K(s * F2, float(np.sqrt(cov[0, 0])), c + s * K2,
+               float(np.sqrt(cov[1, 1])), float(cov[0, 1]), fit)
+    out.update(F_ratio=s, F_ratio_sigma=fit["slope_sigma"], K_offset=c,
+               K_offset_sigma=fit["intercept_sigma"])
+    return out
