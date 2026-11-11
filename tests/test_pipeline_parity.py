@@ -169,5 +169,58 @@ class PrepareRunDataTests(unittest.TestCase):
         self.assertEqual(meta["date"], "2026-06-02")
 
 
+def All_Toggles_Off(cfg):
+    """``cfg`` with every upgrade switched off through UPGRADE_TOGGLES and
+    every systematic perturbation at zero (Analysis Upgrade, WP-V1). For
+    ``cooler_correction`` off means "not rolling": "mean" is an original
+    method and stays."""
+    from gui.analysis.pipeline import PERTURBATION_KEYS, UPGRADE_TOGGLES
+    out = dict(cfg)
+    for key, off in UPGRADE_TOGGLES:
+        if key != "cooler_correction" or out.get(key) == "rolling":
+            out[key] = off
+    out.update(dict.fromkeys(PERTURBATION_KEYS, 0.0))
+    return out
+
+
+class Upgrades_Off_Tests(unittest.TestCase):
+    """With every upgrade off, the pipeline is what it was: each fixture
+    above gives the same clstools calls, cooler/laser state, effective
+    config and run_metadata as with the keys absent."""
+
+    setUp, tearDown = PrepareRunDataTests.setUp, PrepareRunDataTests.tearDown
+
+    def test_Every_Toggle_Off_Is_The_Keys_Absent(self):
+        split = {"parent_path": "parent.asdf", "split_lo": 10.0,
+                 "split_hi": 20.0, "metadata_override": {}}
+        cases = [("run.asdf", _cfg(ref_shift=12.0), {}),
+                 ("run.asdf", _cfg(bin_mode="Raw Voltage"), {}),
+                 ("run.asdf", _cfg(cooler_correction="mean"), {}),
+                 ("run.asdf", _cfg(override_enabled=True,
+                                   cooler_override=30000.0), {}),
+                 ("run.asdf", _cfg(cooler_offset_v=-5.0), {}),
+                 ("child.vasdf", _cfg(v_gate=[5.0, 15.0]),
+                  {"split_descriptor": split})]
+        for path, cfg, kw in cases:
+            with self.subTest(cfg=cfg):
+                off = All_Toggles_Off(cfg)
+                self.assertGreater(len(off), len(cfg))
+                d0, e0, m0 = self.prepare(path, cfg, **kw)
+                d1, e1, m1 = self.prepare(path, off, **kw)
+                self.assertEqual(d0.calls, d1.calls)
+                for attr in ("VCoolDiv", "VCoolOffset", "Vcool_init",
+                             "Laser_set"):
+                    self.assertEqual(getattr(d0, attr), getattr(d1, attr))
+                self.assertEqual(e0, {k: v for k, v in e1.items()
+                                      if k in e0})
+                self.assertEqual(m0, m1)
+
+    def test_Mean_Stays_And_Rolling_Goes(self):
+        self.assertEqual(All_Toggles_Off(_cfg(cooler_correction="mean"))
+                         ["cooler_correction"], "mean")
+        self.assertEqual(All_Toggles_Off(_cfg(cooler_correction="rolling"))
+                         ["cooler_correction"], "pbp")
+
+
 if __name__ == "__main__":
     unittest.main()
