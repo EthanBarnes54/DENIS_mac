@@ -253,6 +253,7 @@ def clear_points_cache() -> None:
     """Drop the ASDF header caches (tests; also after a file is rewritten)."""
     _POINTS_CACHE.clear()
     _BEAM_CACHE.clear()
+    _ORACLE_CACHE.clear()
 
 
 # ── The fit ──────────────────────────────────────────────────────────
@@ -1114,6 +1115,7 @@ def _load_run_supports_filter(data) -> bool:
 def load_run_calibrated(data, path: str,
                         calibrations: Optional[Dict[str, dict]] = None, *,
                         cal_order: int = DEFAULT_ORDER,
+                        use_oracle_dividers: bool = False,
                         **load_kwargs) -> CalibrationResult:
     """``Load_Run`` followed immediately by ``apply_calibration``.
 
@@ -1129,11 +1131,87 @@ def load_run_calibrated(data, path: str,
     app has in fact removed nothing. A warning that contradicts what the
     app actually did is worse than no warning at all. It also skips a
     polyfit whose result we immediately discard.
+
+    ``use_oracle_dividers`` replaces clstools' divider defaults (1000,
+    10000) with the ratios the run recorded, where it recorded them: ORACLE
+    says readers scale by those, never by today's settings. They go in
+    before ``apply_calibration``, whose volts fit reads ``VAccDiv``.
     """
     if _load_run_supports_filter(data):
         load_kwargs.setdefault("filter_calibration", False)
     data.Load_Run(path, cal_order=cal_order, **load_kwargs)
+    if use_oracle_dividers:
+        recorded = (Oracle_Record(path) or {}).get("Dividers") or {}
+        for attr, which in (("VAccDiv", "Scan"), ("VCoolDiv", "Cooler")):
+            ratio = (recorded.get(which) or {}).get("ratio")
+            if ratio:
+                setattr(data, attr, float(ratio))
     return apply_calibration(data, path, calibrations, cal_order=cal_order)
+
+
+# ── ORACLE's record and the files beside its runs ────────────────────
+
+#: (kind, canonical path, mtime) -> what was read. Shared: read-only.
+_ORACLE_CACHE: Dict[Tuple[str, str, int], Any] = {}
+
+SIDECAR_KINDS = ("performance", "systematics")
+
+
+def _Cached(kind: str, path: str, read):
+    """``read(path)`` once per version of the file; None without one."""
+    try:
+        key = (kind, canonical_path(path), os.stat(path).st_mtime_ns)
+    except OSError:
+        return None
+    if key not in _ORACLE_CACHE:
+        _ORACLE_CACHE[key] = read(path)
+    return _ORACLE_CACHE[key]
+
+
+def _Detached(node):
+    """A plain copy of an ASDF subtree, whose arrays outlive the file."""
+    if isinstance(node, dict):
+        return {k: _Detached(v) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_Detached(v) for v in node]
+    if hasattr(node, "shape") and not isinstance(node, np.generic):
+        return np.array(node)
+    return node
+
+
+def Oracle_Record(path: str) -> Optional[dict]:
+    """The ``ORACLE`` record in a run's header, or None for a run without
+    one. Every key in it is optional: the record grew between versions."""
+    def read(p):
+        import asdf
+        with asdf.open(p, memmap=False) as af:
+            record = af.tree.get("ORACLE")
+            return _Detached(record) if isinstance(record, dict) else None
+    return _Cached("record", path, read)
+
+
+def Monitor_Of(path: str) -> Optional[Dict[str, np.ndarray]]:
+    """ORACLE's ``run_NNNN_monitor.csv`` (the rack every 0.1 s) as
+    column -> array, or None for a run without one."""
+    def read(p):
+        import pandas as pd
+        frame = pd.read_csv(p)
+        return {c: frame[c].to_numpy(dtype=float) for c in frame.columns}
+    return _Cached("monitor", os.path.splitext(path)[0] + "_monitor.csv",
+                   read)
+
+
+def Sidecar_Yaml(path: str, kind: str) -> Optional[dict]:
+    """ORACLE's ``run_NNNN_<kind>.yaml`` beside a run (``kind`` in
+    SIDECAR_KINDS), or None for a run without one."""
+    if kind not in SIDECAR_KINDS:
+        raise ValueError(f"kind must be one of {SIDECAR_KINDS}, not {kind!r}")
+
+    def read(p):
+        import yaml
+        with open(p, encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+    return _Cached(kind, os.path.splitext(path)[0] + f"_{kind}.yaml", read)
 
 
 # ── Registry ─────────────────────────────────────────────────────────

@@ -168,7 +168,10 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
 
     for fpath in file_paths:
         data = _cls.CLSDataFrame()
-        cal_res = _load_calibrated(data, fpath, cal_map, cal_order=cal_order)
+        cal_res = _load_calibrated(
+            data, fpath, cal_map, cal_order=cal_order,
+            use_oracle_dividers=bool(
+                source_config.get("use_oracle_dividers")))
         # The run's own cooler voltage in volts, before any override
         # touches VCoolDiv (as pipeline.prepare_run_data records it).
         header_cooler_v = float(getattr(data, "Vcool_init", 0) or 0) * float(
@@ -182,10 +185,14 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # every merge with a laser the run never used: whenever the run's
         # own setpoint differs from that default by thousands of cm^-1,
         # the merged axis lands hundreds of THz from the reference and no
-        # model can reach it.
+        # model can reach it. Below it, as in the fit, the run's own
+        # override (run_overrides); zero means none.
         _use_src_override = bool(source_config.get("override_enabled"))
-        cooler_override = (source_config.get("cooler_override", 0)
-                           if _use_src_override else 0)
+        own_md = (source_config.get("run_overrides") or {}).get(fpath) or {}
+        src_cooler = (source_config.get("cooler_override", 0)
+                      if _use_src_override else 0)
+        cooler_override = src_cooler if src_cooler > 0 else float(
+            own_md.get("cooler_v", 0) or 0)
         # The cooler OFFSET (Yb calibration) on top of the override, else
         # on top of the run's own recorded voltage -- exactly as
         # pipeline.prepare_run_data does for a run's fit. It was once
@@ -199,8 +206,10 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
                                      header_cooler_v,
                                      what=os.path.basename(fpath))
         apply_cooler(data, cooler_plan)
-        laser_override = (source_config.get("laser_override", 0)
-                          if _use_src_override else 0)
+        src_laser = (source_config.get("laser_override", 0)
+                     if _use_src_override else 0)
+        laser_override = src_laser if src_laser > 0 else float(
+            own_md.get("laser_sp", 0) or 0)
         if laser_override > 0:
             data.Laser_set = laser_override
 

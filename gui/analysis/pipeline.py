@@ -41,6 +41,14 @@ from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from gui.analysis.binning import effective_binning_config, intersect_v_gate
 
+#: Every upgrade toggle as (Source config key, its off value). Off, or the
+#: key absent as in every older session, is the original behaviour byte for
+#: byte, so switching them all off reproduces DENIS as it was.
+UPGRADE_TOGGLES = (
+    ("use_oracle_dividers", False),   # the run's recorded dividers
+    ("run_overrides", None),          # {path: {cooler_v, laser_sp}}
+)
+
 
 class CoolerPlan(NamedTuple):
     """How a run's cooler voltage is set (see resolve_cooler)."""
@@ -165,9 +173,11 @@ def prepare_run_data(
     # reads Cal/Cal_order/VAccDiv and nothing else. That ordering IS the
     # feature. A virtual split keys off the parent ASDF, since the calibration
     # belongs to the file the events came from.
+    use_dividers = bool(source_config.get("use_oracle_dividers"))
     cal_result = load_run_calibrated(
         data, data_path, calibrations,
-        cal_order=source_config.get("cal_order", 1))
+        cal_order=source_config.get("cal_order", 1),
+        use_oracle_dividers=use_dividers)
 
     # Per-run metadata captured BEFORE overrides (overrides change the cooler
     # value; the recorded value should be what the file actually held).
@@ -183,9 +193,16 @@ def prepare_run_data(
         "ts_stop": float(getattr(data, "TSstop", 0) or 0),
         "date": str(getattr(data, "Date", "") or ""),
     }
+    if use_dividers:
+        run_metadata["dividers"] = {"scan": float(data.VAccDiv),
+                                    "cooler": float(data.VCoolDiv)}
 
-    # Cooler/laser override precedence:
-    # SourceBlock global override > per-split metadata override > ASDF value.
+    # Cooler/laser override precedence: SourceBlock global override > the
+    # run's own (run_overrides) > per-split metadata override > ASDF value.
+    # The run's own outranks its split's, so it is laid over split_md; a
+    # zero is no override and leaves the split's value in force.
+    own_md = (source_config.get("run_overrides") or {}).get(run_file_path)
+    split_md = {**split_md, **{k: v for k, v in (own_md or {}).items() if v}}
     src_cooler = (source_config.get("cooler_override", 0)
                   if source_config.get("override_enabled") else 0)
     cooler_override = src_cooler if src_cooler > 0 else float(
