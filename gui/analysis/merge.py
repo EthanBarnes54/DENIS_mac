@@ -180,7 +180,9 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # them; the latter's run mean is the run's own voltage (the header
         # holds only the run-start value).
         from gui.analysis.pipeline import (
-            ROLLING_COOLER_POINTS, Rolling_Cooler, Wavemeter_Laser)
+            ROLLING_COOLER_POINTS, Dead_Time_Gate, Rolling_Cooler,
+            Wavemeter_Laser)
+        Dead_Time_Gate(data, source_config.get("dead_time_us"))
         if source_config.get("laser_source") == "wavemeter":
             Wavemeter_Laser(data, fpath)
         run_corr = cooler_corr

@@ -49,6 +49,7 @@ UPGRADE_TOGGLES = (
     ("run_overrides", None),          # {path: {cooler_v, laser_sp}}
     ("cooler_correction", "pbp"),     # off: anything but "rolling"
     ("laser_source", "header"),       # or "wavemeter"
+    ("dead_time_us", None),           # {channel: us}, never set by itself
 )
 
 #: The Systematics engine's perturbations (brief C3), set like
@@ -207,6 +208,79 @@ def Wavemeter_Laser(data, path):
         "drift_cm1": float(slope * (data.TSstop - data.TSstart))}}
 
 
+def Dead_Time_Gate(data, dead_time_us):
+    """Drop each count that follows a count on the same PMT, in the same
+    bunch, by no more than that PMT's dead time in us (ORACLE's definition,
+    cls_acquisition/detectors.py): afterpulses, and the real photons that
+    land as close. Before binning; with no dead time above 0 it touches
+    nothing. Returns the run_metadata it sets: per PMT the dead time, the
+    share of its counts removed, overall and at the strongest step, and
+    the share of its real photons taken there (of the photons, not of the
+    counts, which include the afterpulses), estimated from the other
+    PMTs' counts alone: how often one follows a single other PMT's within
+    the dead time. The light reaches each PMT alike (ORACLE's control);
+    afterpulses come after it, so they seldom precede another PMT's."""
+    import numpy as np
+    import dask.dataframe as dd
+
+    taus = {int(k): float(v) for k, v in (dead_time_us or {}).items()
+            if float(v) > 0}
+    if not taus:
+        return {}
+    frame = data.Run.compute()
+    b, c, t, dv = (frame[k].to_numpy() for k in ("Bunch", "TDC", "TOF", "DV"))
+    c = c.astype(int)
+    tau = np.zeros(len(c))
+    for ch, us in taus.items():
+        tau[c == ch] = us
+    order = np.lexsort((t, c, b))
+    gap = np.full(len(t), np.inf)
+    same = (b[order][1:] == b[order][:-1]) & (c[order][1:] == c[order][:-1])
+    gap[order[1:][same]] = np.diff(t[order])[same]
+    drop = (tau > 0) & (gap <= tau)
+    steps, counts = np.unique(dv, return_counts=True)
+    top = dv == steps[np.argmax(counts)]
+    key = b * 1e6 + t                    # its bunch above its time, in us
+
+    def Near(target, source, us):
+        """The share of ``target``'s counts at the strongest step with one
+        of ``source``'s no more than ``us`` before it, in its bunch."""
+        mine = key[(c == target) & top]
+        theirs = np.sort(key[(c == source) & top])
+        i = np.searchsorted(theirs, mine, side="left") - 1
+        prev = theirs[np.maximum(i, 0)]
+        return np.mean((i >= 0) & (np.floor(prev / 1e6) == np.floor(mine / 1e6))
+                       & (mine - prev <= us))
+
+    pmts = set(c[top].tolist())
+    report = {}
+    for ch, us in taus.items():
+        here = (c == ch) & top
+        if not (c == ch).any():
+            continue
+        loss = [Near(d, e, us) for d in pmts - {ch} for e in pmts - {d}]
+        report[ch] = {"dead_time_us": us,
+                      "removed": float(drop[c == ch].mean()),
+                      "removed_strongest": float(drop[here].mean())
+                      if here.any() else float("nan"),
+                      "real_loss_strongest": float(np.mean(loss))
+                      if loss else float("nan")}
+    data.Run = dd.from_pandas(frame[~drop].reset_index(drop=True),
+                              npartitions=data.Run.npartitions)
+    data.Size = int((~drop).sum())
+    return {"dead_time": report}
+
+
+def Suggested_Dead_Times(path):
+    """ORACLE's suggested dead time per PMT, from its performance report
+    beside the run; {} without one. Offered, never applied (D-3)."""
+    from gui.calibration import Sidecar_Yaml
+    found = (Sidecar_Yaml(path, "performance") or {}).get("detectors") or {}
+    return {int(name.split()[-1]): float(e["suggested_dead_time_us"])
+            for name, e in found.items()
+            if (e or {}).get("suggested_dead_time_us")}
+
+
 def prepare_run_data(
     run_file_path: str,
     source_config: Dict[str, Any],
@@ -293,6 +367,7 @@ def prepare_run_data(
                                     "cooler": float(data.VCoolDiv)}
     if any(shifts.values()):
         run_metadata["perturbations"] = {k: v for k, v in shifts.items() if v}
+    run_metadata.update(Dead_Time_Gate(data, source_config.get("dead_time_us")))
     if source_config.get("laser_source") == "wavemeter":
         run_metadata.update(Wavemeter_Laser(data, data_path))
     cooler_correction = source_config.get("cooler_correction", "pbp")
