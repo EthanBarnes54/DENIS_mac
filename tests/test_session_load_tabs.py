@@ -86,9 +86,9 @@ class SessionLoadTabTests(unittest.TestCase):
         w._restore_analysis(_analysis(["116Sn", "112Sn"]))
         _settle()
         w._restore_analysis(_analysis(["116Sn", "112Sn"]))
-        self.assertEqual(self._titles(w.analysis_tab)[-3:],
+        self.assertEqual(self._titles(w.analysis_tab)[-4:],
                          ["Isotope Shifts", "Reference Correction (GP)",
-                          "Systematics"])
+                          "Systematics", "Moments & Radii"])
 
     def test_the_permanent_tabs_are_the_same_objects_afterwards(self):
         """Not re-created: their state and every connection live on

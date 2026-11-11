@@ -535,6 +535,7 @@ class MainWindow(QMainWindow):
             "isotope_shifts": self.analysis_tab._is_tab.to_dict(),
             "cooler_calibration": self.analysis_tab._cal_tab.to_dict(),
             "systematics": self.analysis_tab._sys_tab.to_dict(),
+            "moments_radii": self.analysis_tab._mr_tab.to_dict(),
         }
 
     def _restore_estimate(self, data):
@@ -616,6 +617,7 @@ class MainWindow(QMainWindow):
         sys_data = data.get("systematics")
         if sys_data:
             at._sys_tab.from_dict(sys_data)
+        at._mr_tab.from_dict(data.get("moments_radii") or {})
         # Repopulate the Results tab with exactly the iterations this
         # save recorded (no whole-output-directory scan — that stays
         # behind the explicit "Refresh All" button).

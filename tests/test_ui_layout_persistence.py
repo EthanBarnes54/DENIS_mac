@@ -307,9 +307,9 @@ class AnalysisPermanentTabsTests(unittest.TestCase):
         t = self._tab()
         self.assertEqual(self._titles(t), [])
         t._add_project("116Sn")
-        self.assertEqual(self._titles(t)[-3:],
+        self.assertEqual(self._titles(t)[-4:],
                          ["Isotope Shifts", "Reference Correction (GP)",
-                          "Systematics"])
+                          "Systematics", "Moments & Radii"])
 
     def test_they_stay_to_the_right_of_new_projects(self):
         t = self._tab()
@@ -318,9 +318,9 @@ class AnalysisPermanentTabsTests(unittest.TestCase):
         t._add_project("114Sn")
         titles = self._titles(t)
         self.assertEqual(titles[:3], ["116Sn", "112Sn", "114Sn"])
-        self.assertEqual(titles[-3:],
+        self.assertEqual(titles[-4:],
                          ["Isotope Shifts", "Reference Correction (GP)",
-                          "Systematics"])
+                          "Systematics", "Moments & Radii"])
 
     def test_neither_is_treated_as_a_project(self):
         t = self._tab()
@@ -354,7 +354,7 @@ class AnalysisPermanentTabsTests(unittest.TestCase):
 
         t = self._tab()
         t._add_project("116Sn")
-        self.assertEqual(len(self._titles(t)), 4)
+        self.assertEqual(len(self._titles(t)), 5)
 
         original = tabmod.QMessageBox.question
         tabmod.QMessageBox.question = staticmethod(

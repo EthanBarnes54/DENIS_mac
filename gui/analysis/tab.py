@@ -114,6 +114,12 @@ class AnalysisTab(QWidget):
         self._sys_tab = SystematicsTab(analysis_tab=self)
         self._sys_tab.results_ready.connect(self.results_ready.emit)
         self.projects_changed.connect(self._sys_tab.refresh_projects)
+        # Moments & Radii: last, since it reads the projects' fits and the
+        # Systematics tab's budget for them.
+        from gui.analysis.moments_radii_tab import MomentsRadiiTab
+        self._mr_tab = MomentsRadiiTab(analysis_tab=self)
+        self._mr_tab.results_ready.connect(self.results_ready.emit)
+        self.projects_changed.connect(self._mr_tab.refresh_projects)
 
     def _create_project(self, is_reference=False, is_calibration=False):
         if is_calibration:
@@ -143,7 +149,7 @@ class AnalysisTab(QWidget):
         tabs = [self._is_tab, self._gp_tab]
         if self._cal_tab_visible:
             tabs.append(self._cal_tab)
-        tabs.append(self._sys_tab)
+        tabs += [self._sys_tab, self._mr_tab]
         return tuple(tabs)
 
     def _wants_cooler_tab(self):
@@ -179,7 +185,8 @@ class AnalysisTab(QWidget):
             for widget, title in ((self._is_tab, "Isotope Shifts"),
                                   (self._gp_tab,
                                    "Reference Correction (GP)"),
-                                  (self._sys_tab, "Systematics")):
+                                  (self._sys_tab, "Systematics"),
+                                  (self._mr_tab, "Moments & Radii")):
                 idx = self._project_tabs.addTab(widget, title)
                 # No close button: they are part of the workspace,
                 # not a project the user added.
@@ -405,6 +412,7 @@ class AnalysisTab(QWidget):
             "isotope_shifts": self._is_tab.to_dict(),
             "cooler_calibration": self._cal_tab.to_dict(),
             "systematics": self._sys_tab.to_dict(),
+            "moments_radii": self._mr_tab.to_dict(),
         }}
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(d, f, default_flow_style=False, sort_keys=False,
@@ -458,3 +466,4 @@ class AnalysisTab(QWidget):
         sys_data = cfg.get("systematics")
         if sys_data:
             self._sys_tab.from_dict(sys_data)
+        self._mr_tab.from_dict(cfg.get("moments_radii") or {})
