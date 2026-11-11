@@ -48,7 +48,14 @@ UPGRADE_TOGGLES = (
     ("use_oracle_dividers", False),   # the run's recorded dividers
     ("run_overrides", None),          # {path: {cooler_v, laser_sp}}
     ("cooler_correction", "pbp"),     # off: anything but "rolling"
+    ("laser_source", "header"),       # or "wavemeter"
 )
+
+#: The Systematics engine's perturbations (brief C3), set like
+#: cooler_offset_v through _config_overrides; each is a hypothesis about
+#: the apparatus, and zero leaves the run untouched.
+PERTURBATION_KEYS = ("cooler_div_ppm", "scan_div_ppm", "scan_axis_offset_v",
+                     "scan_axis_gain_ppm", "laser_offset_mhz")
 
 #: Readings in the rolling cooler's mean when the Source block names none.
 ROLLING_COOLER_POINTS = 100
@@ -173,6 +180,33 @@ def Rolling_Cooler(data, points=ROLLING_COOLER_POINTS):
                                "scatter_v": float(np.std(v - rolled) * div)}}
 
 
+def Wavemeter_Laser(data, path):
+    """Set ``Laser_set`` to the wavemeter's mean over the run's own time
+    span, from ORACLE's monitor record beside the run (unread rows left
+    out); a run without one keeps its header setpoint. Returns the
+    run_metadata it sets: the mean, its scatter, and its drift (the slope
+    over the readings times the run's duration)."""
+    import numpy as np
+    from gui.calibration import Monitor_Of
+
+    monitor = Monitor_Of(path)
+    if monitor is None:
+        return {"laser_wavemeter": None}
+    t, wn = monitor["time"], monitor["wavenumber_cm1"]
+    keep = (np.isfinite(wn) & (wn != 0)
+            & (t >= data.TSstart) & (t <= data.TSstop))
+    if not keep.any():
+        return {"laser_wavemeter": None}
+    t, wn = t[keep], wn[keep]
+    slope = np.polyfit(t - t[0], wn, 1)[0] if len(wn) > 1 else 0.0
+    header = float(data.Laser_set)
+    data.Laser_set = float(np.mean(wn))
+    return {"laser_set": data.Laser_set, "laser_wavemeter": {
+        "header_cm1": header, "readings": int(len(wn)),
+        "std_cm1": float(np.std(wn)),
+        "drift_cm1": float(slope * (data.TSstop - data.TSstart))}}
+
+
 def prepare_run_data(
     run_file_path: str,
     source_config: Dict[str, Any],
@@ -226,6 +260,19 @@ def prepare_run_data(
         data, data_path, calibrations,
         cal_order=source_config.get("cal_order", 1),
         use_oracle_dividers=use_dividers)
+    # Systematic perturbations, applied after the calibration so each acts
+    # on what it names: the dividers' ratios, then the calibrated scan axis
+    # (DV_cal = poly(Cal) * VAccDiv) by a gain and an offset in volts.
+    shifts = {k: float(source_config.get(k, 0) or 0)
+              for k in PERTURBATION_KEYS}
+    if shifts["cooler_div_ppm"]:
+        data.VCoolDiv *= 1 + shifts["cooler_div_ppm"] * 1e-6
+    if shifts["scan_div_ppm"]:
+        data.VAccDiv *= 1 + shifts["scan_div_ppm"] * 1e-6
+    if shifts["scan_axis_gain_ppm"] or shifts["scan_axis_offset_v"]:
+        data.Cal = [c * (1 + shifts["scan_axis_gain_ppm"] * 1e-6)
+                    for c in data.Cal]
+        data.Cal[0] += shifts["scan_axis_offset_v"] / data.VAccDiv
 
     # Per-run metadata captured BEFORE overrides (overrides change the cooler
     # value; the recorded value should be what the file actually held).
@@ -244,6 +291,10 @@ def prepare_run_data(
     if use_dividers:
         run_metadata["dividers"] = {"scan": float(data.VAccDiv),
                                     "cooler": float(data.VCoolDiv)}
+    if any(shifts.values()):
+        run_metadata["perturbations"] = {k: v for k, v in shifts.items() if v}
+    if source_config.get("laser_source") == "wavemeter":
+        run_metadata.update(Wavemeter_Laser(data, data_path))
     cooler_correction = source_config.get("cooler_correction", "pbp")
     if cooler_correction == "rolling":
         run_metadata.update(Rolling_Cooler(data, source_config.get(
@@ -285,6 +336,9 @@ def prepare_run_data(
         split_md.get("laser_sp", 0) or 0)
     if laser_override > 0:
         data.Laser_set = laser_override
+    if shifts["laser_offset_mhz"]:
+        from cls_estimations.constants import CM_TO_HZ
+        data.Laser_set += shifts["laser_offset_mhz"] * 1e6 / CM_TO_HZ
 
     noise_filter = source_config.get("noise_filter", 0)
     if noise_filter > 0:

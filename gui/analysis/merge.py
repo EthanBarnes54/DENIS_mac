@@ -176,12 +176,15 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # touches VCoolDiv (as pipeline.prepare_run_data records it).
         header_cooler_v = float(getattr(data, "Vcool_init", 0) or 0) * float(
             getattr(data, "VCoolDiv", 10000) or 10000)
-        # The rolling cooler as the fit takes it, and its run mean as the
-        # run's own voltage (the header holds only the run-start value).
+        # The wavemeter's laser and the rolling cooler as the fit takes
+        # them; the latter's run mean is the run's own voltage (the header
+        # holds only the run-start value).
+        from gui.analysis.pipeline import (
+            ROLLING_COOLER_POINTS, Rolling_Cooler, Wavemeter_Laser)
+        if source_config.get("laser_source") == "wavemeter":
+            Wavemeter_Laser(data, fpath)
         run_corr = cooler_corr
         if run_corr == "rolling":
-            from gui.analysis.pipeline import (
-                ROLLING_COOLER_POINTS, Rolling_Cooler)
             header_cooler_v = Rolling_Cooler(data, source_config.get(
                 "cooler_window_points", ROLLING_COOLER_POINTS))["cooler_v"]
             run_corr = "pbp"
