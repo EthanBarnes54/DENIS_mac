@@ -957,7 +957,7 @@ class MergeDialog(QDialog):
         pf.addRow("Bin step:", step_row)
 
         self._cooler_corr = QComboBox()
-        self._cooler_corr.addItems(["pbp", "mean"])
+        self._cooler_corr.addItems(["pbp", "mean", "rolling"])
         idx = self._cooler_corr.findText(
             source_config.get("cooler_correction", "pbp"))
         if idx >= 0:

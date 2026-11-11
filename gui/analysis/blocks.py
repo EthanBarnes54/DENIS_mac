@@ -1851,7 +1851,7 @@ class SourceBlock(AnalysisBlock):
 
         # Cooler correction mode (#42)
         self._cooler_corr = QComboBox()
-        self._cooler_corr.addItems(["pbp", "mean"])
+        self._cooler_corr.addItems(["pbp", "mean", "rolling"])
         self._cooler_corr.setToolTip(
             "How the cooler-voltage drift is subtracted from each event's\n"
             "post-deceleration voltage in clstools.Compute_Voltages:\n"
@@ -1863,8 +1863,36 @@ class SourceBlock(AnalysisBlock):
             "  mean = run-averaged cooler voltage for every event. Smooths\n"
             "         through cooler-readback noise but is blind to drift.\n"
             "         Pick this when the cooler is known stable and the\n"
-            "         readback is noisy.")
+            "         readback is noisy.\n\n"
+            "  rolling = each event takes the mean of the readings around\n"
+            "         it (one per bunch): the mains ripple each reading\n"
+            "         catches averages out, the slow drift is kept.")
         adv_form.addRow("Cooler corr.:", self._cooler_corr)
+        from gui.analysis.pipeline import ROLLING_COOLER_POINTS
+        self._Cooler_Points = _make_int(
+            ROLLING_COOLER_POINTS, 1, 100000,
+            tooltip="Cooler readings (one per bunch) averaged around each "
+                    "event; fewer at the run's ends.")
+        adv_form.addRow("Rolling points:", self._Cooler_Points)
+        adv_form.setRowVisible(self._Cooler_Points, False)
+        self._cooler_corr.currentTextChanged.connect(
+            lambda text: adv_form.setRowVisible(self._Cooler_Points,
+                                                text == "rolling"))
+        self._Laser_Source = QComboBox(toolTip=(
+            "header = each run's laser setpoint, as recorded.\n"
+            "wavemeter mean = ORACLE's wavemeter averaged over the run,\n"
+            "from its monitor record beside the run; a run without one\n"
+            "keeps its setpoint."))
+        self._Laser_Source.addItem("header", "header")
+        self._Laser_Source.addItem("wavemeter mean", "wavemeter")
+        adv_form.addRow("Laser:", self._Laser_Source)
+        self._Use_Dividers = QCheckBox(
+            "Use the run's recorded dividers", toolTip=(
+                "Scale the scan and cooler voltages by the divider ratios "
+                "ORACLE\nrecorded with the run, not clstools' 1000 and "
+                "10000.\nAvailable when a file records them."))
+        self._Use_Dividers.setEnabled(False)
+        adv_form.addRow("", self._Use_Dividers)
 
         # Reference shift (#37) — stored & displayed in MHz to match the
         # spectrum x-axis and the F-gate fields. clstools.Shift_Ref takes Hz,
@@ -2165,6 +2193,7 @@ class SourceBlock(AnalysisBlock):
         self._file_entries.append(entry)
         self._refresh_master_check_state()
         self._update_nav_label()
+        self._Refresh_Dividers_Tick()
 
     def _remove_file_entry(self, entry, widget):
         self._file_list_layout.removeWidget(widget)
@@ -2179,6 +2208,7 @@ class SourceBlock(AnalysisBlock):
             self._preview_index = 0
         self._refresh_master_check_state()
         self._update_nav_label()
+        self._Refresh_Dividers_Tick()
         self.block_changed.emit()
 
     def _on_master_check_clicked(self):
@@ -2338,6 +2368,7 @@ class SourceBlock(AnalysisBlock):
         if badge is None:
             return
         ovr = entry.get("binning_override") or {}
+        own = entry.get("run_override") or {}
 
         from gui.calibration import describe_spec, get_registry
         cal_path = (entry.get("parent_path") if entry.get("is_split")
@@ -2345,7 +2376,7 @@ class SourceBlock(AnalysisBlock):
         cal_spec = (get_registry().get(cal_path)
                     if cal_path and not entry.get("is_merged") else None)
 
-        if not ovr and not cal_spec:
+        if not ovr and not own and not cal_spec:
             badge.hide()
             badge.setToolTip("")
             return
@@ -2357,8 +2388,11 @@ class SourceBlock(AnalysisBlock):
             lines.append("Binning override:")
             for k in sorted(ovr.keys()):
                 lines.append(f"  {k} = {ovr[k]}")
+        if own:
+            lines.append("Cooler / laser for this run:")
+            lines += [f"  {k} = {own[k]}" for k in sorted(own)]
 
-        if cal_spec and ovr:
+        if cal_spec and (ovr or own):
             badge.setText("[cal+override]")
         elif cal_spec:
             badge.setText("[cal]")
@@ -2383,6 +2417,10 @@ class SourceBlock(AnalysisBlock):
         clear_act = menu.addAction("Clear Override")
         clear_act.setToolTip("Remove the override; this run inherits "
                              "from the Source block again.")
+        run_act = menu.addAction("Cooler / Laser for this run...")
+        run_act.setToolTip(
+            "This run's own cooler voltage and laser setpoint, in place of\n"
+            "its file's; the Source block's Override still comes first.")
         menu.addSeparator()
         show_act = menu.addAction("Show Effective Binning")
         diag_act = menu.addAction("Show Binning Diagnostics")
@@ -2431,7 +2469,7 @@ class SourceBlock(AnalysisBlock):
 
         if is_merged:
             for a in (edit_act, freeze_act, copy_chk_act, clear_act,
-                      diag_act, scan_act, cal_act):
+                      run_act, diag_act, scan_act, cal_act):
                 a.setEnabled(False)
             cal_act.setToolTip(
                 "Merged spectra are pre-binned; their voltage axis was fixed "
@@ -2461,6 +2499,8 @@ class SourceBlock(AnalysisBlock):
             self._copy_override_to_checked(entry)
         elif chosen is clear_act:
             self._clear_file_binning_override(entry)
+        elif chosen is run_act:
+            self._Edit_Run_Override(entry)
         elif chosen is show_act:
             self._show_effective_binning(entry)
         elif chosen is diag_act:
@@ -2489,6 +2529,35 @@ class SourceBlock(AnalysisBlock):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         entry["binning_override"] = dlg.get_override()
+        self._update_override_badge(entry)
+        self.block_changed.emit()
+
+    def _Edit_Run_Override(self, entry):
+        """This run's own cooler voltage and laser setpoint (0 = its
+        file's), kept as its ``run_override``."""
+        own = entry.get("run_override") or {}
+        rn = entry.get("run_number", "?")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Cooler / Laser — " + (
+            str(rn) if entry.get("is_split") else f"run_{rn}"))
+        form = QFormLayout(dialog)
+        cooler = _make_double(own.get("cooler_v", 0.0), 0, 1e6, 2, 1.0,
+                              tooltip="This run's cooler voltage [V]; "
+                                      "0 = its file's own.")
+        laser = _make_double(own.get("laser_sp", 0.0), 0, 1e6, 6, 0.0001,
+                             tooltip="This run's laser setpoint [cm⁻"
+                                     "¹]; 0 = its file's own.")
+        form.addRow("Cooler [V]:", cooler)
+        form.addRow("Laser [cm⁻¹]:", laser)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        form.addRow(btns)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        entry["run_override"] = {k: w.value() for k, w in (
+            ("cooler_v", cooler), ("laser_sp", laser)) if w.value() > 0}
         self._update_override_badge(entry)
         self.block_changed.emit()
 
@@ -3012,7 +3081,22 @@ class SourceBlock(AnalysisBlock):
                for e in self._file_entries if e.get("run_override")}
         if own:
             cfg["run_overrides"] = own
+        # The upgrades, present only when switched on (brief C2).
+        if cfg["cooler_correction"] == "rolling":
+            cfg["cooler_window_points"] = self._Cooler_Points.value()
+        if self._Laser_Source.currentData() == "wavemeter":
+            cfg["laser_source"] = "wavemeter"
+        if self._Use_Dividers.isChecked():
+            cfg["use_oracle_dividers"] = True
         return cfg
+
+    def _Refresh_Dividers_Tick(self):
+        """Offer the recorded dividers only when a file records them."""
+        from gui.calibration import Oracle_Record
+        self._Use_Dividers.setEnabled(any(
+            (Oracle_Record(e["parent_path"] if e.get("is_split")
+                           else e["path"]) or {}).get("Dividers")
+            for e in self._file_entries if not e.get("is_merged")))
 
     # ── Import from Pre-Analysis ──
 
@@ -3131,6 +3215,7 @@ class SourceBlock(AnalysisBlock):
                        if v is not None}
                 if own and fe.filepath in here:
                     here[fe.filepath]["run_override"] = own
+                    self._update_override_badge(here[fe.filepath])
 
         self.block_changed.emit()
 
@@ -3333,12 +3418,29 @@ class SourceBlock(AnalysisBlock):
         data_path = (entry["parent_path"] if is_split else filepath)
         split_md = (entry.get("metadata_override", {}) or {}
                     if is_split else {})
+        # The run's own override outranks its split's, as in the fit.
+        split_md = {**split_md, **{k: v for k, v in (
+            entry.get("run_override") or {}).items() if v}}
         try:
             from gui.analysis.binning import intersect_v_gate
             from gui.calibration import load_run_calibrated
+            from gui.analysis.pipeline import (
+                Rolling_Cooler, Wavemeter_Laser, apply_cooler,
+                resolve_cooler, stepsize_frame)
             data = _get_clstools().CLSDataFrame()
             load_run_calibrated(data, data_path, self._calibrations(),
-                                cal_order=self._cal_order.value())
+                                cal_order=self._cal_order.value(),
+                                use_oracle_dividers=(
+                                    self._Use_Dividers.isChecked()))
+            if self._Laser_Source.currentData() == "wavemeter":
+                Wavemeter_Laser(data, data_path)
+            own_cooler = (float(getattr(data, "Vcool_init", 0) or 0)
+                          * float(getattr(data, "VCoolDiv", 10000) or 10000))
+            corr = self._cooler_corr.currentText()
+            if corr == "rolling":
+                own_cooler = Rolling_Cooler(
+                    data, self._Cooler_Points.value())["cooler_v"]
+                corr = "pbp"
             # Override precedence:
             # SourceBlock global override > per-split metadata > ASDF.
             src_cooler = (self._cooler_spin.value()
@@ -3348,12 +3450,8 @@ class SourceBlock(AnalysisBlock):
             # Cooler offset with pipeline.prepare_run_data's own plan: on
             # top of the override, else on top of each event's own
             # readback. The preview used to ignore it altogether.
-            from gui.analysis.pipeline import (
-                apply_cooler, resolve_cooler, stepsize_frame)
             cooler_plan = resolve_cooler(
-                cooler_override, self._cooler_offset.value(),
-                float(getattr(data, "Vcool_init", 0) or 0)
-                * float(getattr(data, "VCoolDiv", 10000) or 10000),
+                cooler_override, self._cooler_offset.value(), own_cooler,
                 what=os.path.basename(str(data_path)))
             apply_cooler(data, cooler_plan)
             src_laser = (self._laser_spin.value()
@@ -3362,8 +3460,7 @@ class SourceBlock(AnalysisBlock):
                               else float(split_md.get("laser_sp", 0) or 0))
             if laser_override > 0:
                 data.Laser_set = laser_override
-            data.Compute_Voltages(
-                cooler_correction=self._cooler_corr.currentText())
+            data.Compute_Voltages(cooler_correction=corr)
             nf = self._noise_filter.value()
             if nf > 0:
                 data.apply_filter(filter_window=nf)
@@ -3471,9 +3568,12 @@ class SourceBlock(AnalysisBlock):
         cal_spec = cal_map.get(_cal_canon(load_path))
         data = _get_clstools().CLSDataFrame()
         cal_res = load_run_calibrated(
-            data, load_path, cal_map, cal_order=self._cal_order.value())
+            data, load_path, cal_map, cal_order=self._cal_order.value(),
+            use_oracle_dividers=self._Use_Dividers.isChecked())
+        # The header's values are shown; clstools has no "rolling".
+        corr = self._cooler_corr.currentText()
         data.Compute_Voltages(
-            cooler_correction=self._cooler_corr.currentText())
+            cooler_correction="pbp" if corr == "rolling" else corr)
         vcool = getattr(data, 'Vcool_init', None)
         vdiv = getattr(data, 'VCoolDiv', 1)
         vcool_v = f"{vcool * vdiv:.2f}" if vcool is not None else "?"
@@ -3870,11 +3970,15 @@ class SourceBlock(AnalysisBlock):
                 # cooler/laser are the ones the split is actually fitted with.
                 md = (e.get("metadata_override") or {}
                       if e.get("is_split") else {})
+                md = {**md, **{k: v for k, v in (
+                    e.get("run_override") or {}).items() if v}}
                 data_path = (e["parent_path"] if e.get("is_split")
                              else e["path"])
                 data = _get_clstools().CLSDataFrame()
                 load_run_calibrated(data, data_path, cal_map,
-                                    cal_order=self._cal_order.value())
+                                    cal_order=self._cal_order.value(),
+                                    use_oracle_dividers=(
+                                        self._Use_Dividers.isChecked()))
                 rn = e.get("run_number", "?")
                 runs.append(str(rn))
                 cooler_vs.append(
@@ -4001,6 +4105,9 @@ class SourceBlock(AnalysisBlock):
         d["laser_override"] = self._laser_spin.value()
         d["cal_order"] = self._cal_order.value()
         d["cooler_correction"] = self._cooler_corr.currentText()
+        cfg = self.get_source_config()      # the upgrades, only when on
+        d.update({k: cfg[k] for k in ("cooler_window_points", "laser_source",
+                                      "use_oracle_dividers") if k in cfg})
         d["ref_shift_mhz"] = self._ref_shift.value()
         # Merged entries
         merged_list = []
@@ -4106,7 +4213,9 @@ class SourceBlock(AnalysisBlock):
             if fd.get("run_override"):
                 self._file_entries[-1]["run_override"] = dict(
                     fd["run_override"])
+                self._update_override_badge(self._file_entries[-1])
         self._Pa_Import_Choice = d.get("pa_import")
+        self._Refresh_Dividers_Tick()
 
         self._z_number.setValue(d.get("Z", 1))
         self._a_number.setValue(d.get("A", 1))
@@ -4189,6 +4298,12 @@ class SourceBlock(AnalysisBlock):
         idx = self._cooler_corr.findText(d.get("cooler_correction", "pbp"))
         if idx >= 0:
             self._cooler_corr.setCurrentIndex(idx)
+        from gui.analysis.pipeline import ROLLING_COOLER_POINTS
+        self._Cooler_Points.setValue(
+            d.get("cooler_window_points", ROLLING_COOLER_POINTS))
+        self._Laser_Source.setCurrentIndex(max(0, self._Laser_Source.findData(
+            d.get("laser_source", "header"))))
+        self._Use_Dividers.setChecked(bool(d.get("use_oracle_dividers")))
         # ref_shift was originally stored in Hz; new saves use ref_shift_mhz.
         if "ref_shift_mhz" in d:
             self._ref_shift.setValue(float(d.get("ref_shift_mhz", 0.0)))
