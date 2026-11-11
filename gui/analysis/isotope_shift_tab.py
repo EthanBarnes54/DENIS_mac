@@ -109,6 +109,15 @@ def _pick_color(btn, parent):
 # ═══════════════════════════════════════════════════════════════════
 
 
+def Quality_Note(result):
+    """A run's quality for the run preview's title (WP-S5): its counts'
+    variance/mean, "!" when the fit flagged it; "" without one."""
+    q = (result.get("run_metadata") or {}).get("run_quality") or {}
+    if "dispersion" not in q:
+        return ""
+    return f"   var/mean {q['dispersion']:.2f}" + (" !" if q["flag"] else "")
+
+
 def _span_hours(meta):
     """A run's acquisition window (start, stop) in hours from its
     metadata, or None without a start time. A missing or bad stop is
@@ -971,6 +980,7 @@ class IsotopeShiftTab(QWidget):
                 title += f"   red. χ² = {float(redchi):.3f}"
             except (TypeError, ValueError):
                 pass
+        title += Quality_Note(r)
         ax.set_title(title, fontsize=8)
         ax.tick_params(labelsize=6)
         self._preview_canvas.draw_idle()

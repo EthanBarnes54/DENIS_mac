@@ -6601,6 +6601,27 @@ class OutputBlock(AnalysisBlock):
         cb_row.addWidget(self._band_samples)
         cb_row.addStretch()
         diag_lay.addLayout(cb_row)
+        self._Run_Quality = QCheckBox("Run quality")
+        self._Run_Quality.setToolTip(
+            "Variance/mean of each run's counts over its scans, per PMT\n"
+            "(afterpulsing told apart from the ions per bunch), ORACLE's\n"
+            "verdicts and the cooler scatter, in the fit report; ! when\n"
+            "variance/mean is above 1.2 or a timing check failed.")
+        diag_lay.addWidget(self._Run_Quality)
+        vf_row = QHBoxLayout()
+        self._Validate_Fit = QCheckBox("Validate fit")
+        self._Validate_Fit.setToolTip(
+            "After each fit, refit spectra drawn from its model: pull widths\n"
+            "near 1 and 68 % / 95 % coverage mean its errors can be trusted.\n"
+            "Not with emcee.")
+        vf_row.addWidget(self._Validate_Fit)
+        vf_row.addWidget(QLabel("Refits:"))
+        self._Validate_N = _make_int(
+            100, 10, 2000, tooltip="Spectra drawn and refitted per fit.")
+        self._Validate_N.setFixedWidth(70)
+        vf_row.addWidget(self._Validate_N)
+        vf_row.addStretch()
+        diag_lay.addLayout(vf_row)
 
         diag_lay.addWidget(QLabel("Parameters to plot:"))
         self._diag_param_tree = QTreeWidget()
@@ -6874,6 +6895,9 @@ class OutputBlock(AnalysisBlock):
             "walk_plot": self._walk_plot.isChecked(),
             "confidence_bands": self._confidence_bands.isChecked(),
             "band_samples": self._band_samples.value(),
+            "run_quality": self._Run_Quality.isChecked(),
+            "validate_fit": (self._Validate_N.value()
+                             if self._Validate_Fit.isChecked() else 0),
             "diag_params": self.get_diag_params(),
             "iter_mode": self._iter_mode.currentText(),
             "iter_label": self._iter_label.text(),
@@ -6918,6 +6942,10 @@ class OutputBlock(AnalysisBlock):
         self._walk_plot.setChecked(d.get("walk_plot", False))
         self._confidence_bands.setChecked(d.get("confidence_bands", False))
         self._band_samples.setValue(d.get("band_samples", 200))
+        self._Run_Quality.setChecked(bool(d.get("run_quality", False)))
+        n_validate = int(d.get("validate_fit", 0) or 0)
+        self._Validate_Fit.setChecked(n_validate > 0)
+        self._Validate_N.setValue(n_validate or 100)
         idx = self._iter_mode.findText(d.get("iter_mode", "Auto"))
         if idx >= 0:
             self._iter_mode.setCurrentIndex(idx)

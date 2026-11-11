@@ -1048,6 +1048,122 @@ def _build_models_on_source(source, model_configs, sat_module):
 #  Fit Worker (runs in subprocess for parallel fitting)
 # ══════════════════════════════════════════════════════════════════
 
+#: WP-S5: a run is flagged (!) when its counts vary this much more than
+#: Poisson's over its scans, or when one of ORACLE's timing checks failed.
+DISPERSION_FLAG = 1.2
+
+
+def _Run_Quality(data, data_path, eff_cfg, run_metadata):
+    """WP-S5, a run's quality: variance/mean of its gated counts over its
+    whole scans, for all PMTs and each (an afterpulsing PMT listed where
+    its own excess is past 3 sigma; cls_estimations.statistics), ORACLE's
+    verdict and failed checks from its performance report, and the cooler
+    readings' scatter about their rolling mean when that was used."""
+    from cls_estimations.statistics import Overdispersion
+    from gui.calibration import Sidecar_Yaml
+    from gui.scan_filter import bunches_per_scan, read_bunches_per_channel
+    frame = data.Run.compute()
+    tdc, bunch = frame["TDC"].to_numpy().astype(int), frame["Bunch"].to_numpy()
+    keep = np.isin(tdc, list(eff_cfg.get("pmt_gate") or [1, 2, 3, 4]))
+    gate = eff_cfg.get("tof_gate")
+    if gate:
+        keep &= frame["TOF"].between(min(gate), max(gate)).to_numpy()
+    bps = bunches_per_scan(data.ScanningRanges, data.Step_Size,
+                           read_bunches_per_channel(data_path))
+    scan = bunch // bps if bps else np.zeros(len(bunch), dtype=int)
+    whole = int((bunch.max() + 1) // bps) if bps and len(bunch) else 0
+    keep &= scan < whole                 # an unfinished last scan reads as 0s
+    out = {}
+    if whole >= 2 and keep.any():
+        od = Overdispersion(frame["DV"].to_numpy()[keep], scan[keep], tdc[keep])
+        out.update({k: od["all"][k] for k in ("dispersion", "sigma")})
+        out["pmt"] = {c: {k: p[k] for k in ("dispersion", "sigma", "common",
+                                            "afterpulse")}
+                      for c, p in od.get("pmt", {}).items()}
+        out["afterpulsing"] = [c for c, p in out["pmt"].items()
+                               if p["afterpulse"] > 3 * p["sigma"]]
+    report = Sidecar_Yaml(data_path, "performance") or {}
+    out["oracle_verdict"] = report.get("verdict")
+    out["failed_checks"] = [f"{section}: {c.get('check')}"
+                            for section, checks in (report.get("checks")
+                                                    or {}).items()
+                            for c in checks or [] if c.get("verdict") == "FAIL"]
+    if run_metadata.get("cooler_rolling"):
+        out["cooler_scatter_v"] = run_metadata["cooler_rolling"]["scatter_v"]
+    out["flag"] = bool(out.get("dispersion", 0.0) > DISPERSION_FLAG or any(
+        f.lower().startswith("timing") for f in out["failed_checks"]))
+    return out
+
+
+def _Quality_Text(q):
+    lines = ["[[Run quality]]"]
+    if "dispersion" in q:
+        lines.append(f"    variance/mean {q['dispersion']:.3f} +/- "
+                     f"{q['sigma']:.3f}" + ("   !" if q["flag"] else ""))
+        lines += [f"    PMT {c}: {p['dispersion']:.3f}, of its excess "
+                  f"{p['common']:+.3f} common, {p['afterpulse']:+.3f} its own"
+                  + ("   afterpulsing" if c in q["afterpulsing"] else "")
+                  for c, p in q["pmt"].items()]
+    if q.get("oracle_verdict"):
+        lines.append(f"    ORACLE: {q['oracle_verdict']}" + "".join(
+            f"; FAIL {f}" for f in q["failed_checks"]))
+    if "cooler_scatter_v" in q:
+        lines.append(f"    cooler scatter about its rolling mean "
+                     f"{q['cooler_scatter_v']:.3f} V")
+    return "\n".join(lines)
+
+
+def _Validate_Fit(fitter, source, fit_kwargs, expected, yerr_mode, n,
+                  dispersion=1.0):
+    """WP-S6, "Validate fit": ``n`` spectra drawn from this fit's model in
+    its bins (negative binomial at the run's measured variance/mean when
+    above 1), each refitted by this fitter from the best fit, with its
+    settings and error rule (cls_estimations.statistics.Pull_Coverage).
+    The fitter and its source are left at the best fit."""
+    from cls_estimations.statistics import Pull_Coverage
+    from gui.analysis.binning import _make_yerr
+    best = fitter.result.params.copy()
+    truth = {k: p.value for k, p in best.items() if p.vary and not p.expr}
+    kw = {k: v for k, v in fit_kwargs.items() if k != "iter_cb"}
+    y0, e0 = source.y, source.yerr_data
+
+    def Refit(y):
+        source.y = y
+        if not callable(e0):
+            source.yerr_data = _resolve_fit_yerr(_make_yerr(y, yerr_mode)[0],
+                                                 y, False)
+        fitter.setParameters(best)
+        try:
+            fitter.fit(**kw)
+        except Exception:                                # noqa: BLE001
+            return None
+        got = fitter.result.params
+        return {k: (got[k].value, got[k].stderr if got[k].stderr is not None
+                    else float("nan")) for k in truth}
+
+    try:
+        out = Pull_Coverage(expected, truth, Refit, n=n,
+                            dispersion=dispersion, seed=0)
+    finally:
+        source.y, source.yerr_data = y0, e0
+        fitter.setParameters(best)
+    out["params"] = {k.split("___")[-1]: v for k, v in out["params"].items()}
+    return out
+
+
+def _Validation_Text(v):
+    lines = [f"[[Validation]] {v['n']} refits of spectra drawn from this "
+             f"fit's model" + (f" at variance/mean {v['dispersion']:.2f}"
+                               if v["dispersion"] > 1 else "")
+             + f"; {v['failed']} failed"]
+    lines += [f"    {name:<14} pulls {p['pull_mean']:+.2f} +/- "
+              f"{p['pull_mean_sigma']:.2f}, width {p['pull_width']:.2f} +/- "
+              f"{p['pull_width_sigma']:.2f}; within 1 sigma "
+              f"{p['coverage_68']:.0%}, within 1.96 sigma "
+              f"{p['coverage_95']:.0%}" for name, p in v["params"].items()]
+    return "\n".join(lines)
+
+
 def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
                      output_config=None, merged_data=None,
                      split_descriptor=None,
@@ -1233,6 +1349,9 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
                 split_descriptor=split_descriptor,
                 calibrations=calibrations)
             bin_mode = eff_cfg.get("bin_mode", "Frequency")
+            if output_config.get("run_quality"):
+                run_metadata["run_quality"] = _Run_Quality(
+                    data, data_path, eff_cfg, run_metadata)
 
             # Phase D: apply the per-file GP correction post-binning
             # in MHz directly. Why not Shift_Ref like ref_shift above?
@@ -1714,6 +1833,20 @@ def _fit_single_run(run_file_path, source_config, model_configs, fitter_config,
                 del fitter.temp_y
             except Exception as exc:
                 diagnostics["chisq_error"] = f"{type(exc).__name__}: {exc}"
+
+        quality = (None if merged_data is not None
+                   else run_metadata.get("run_quality"))
+        if quality:
+            report += "\n\n" + _Quality_Text(quality)
+        # Last: its refits move the fitter, which nothing reads after this.
+        n_validate = int(output_config.get("validate_fit") or 0)
+        if n_validate > 0 and fitter_config["method"] != "emcee":
+            diagnostics["validation"] = _Validate_Fit(
+                fitter, source, fit_kwargs, y_fit,
+                (eff_cfg or source_config).get("yerr_mode",
+                                               "Poisson sqrt(y+1)"),
+                n_validate, (quality or {}).get("dispersion", 1.0))
+            report += "\n\n" + _Validation_Text(diagnostics["validation"])
 
         return {
             "success": True,
