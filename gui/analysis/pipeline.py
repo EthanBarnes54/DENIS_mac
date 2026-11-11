@@ -47,7 +47,11 @@ from gui.analysis.binning import effective_binning_config, intersect_v_gate
 UPGRADE_TOGGLES = (
     ("use_oracle_dividers", False),   # the run's recorded dividers
     ("run_overrides", None),          # {path: {cooler_v, laser_sp}}
+    ("cooler_correction", "pbp"),     # off: anything but "rolling"
 )
+
+#: Readings in the rolling cooler's mean when the Source block names none.
+ROLLING_COOLER_POINTS = 100
 
 
 class CoolerPlan(NamedTuple):
@@ -125,6 +129,50 @@ def stepsize_frame(data, plan):
     yield
 
 
+def Rolling_Cooler(data, points=ROLLING_COOLER_POINTS):
+    """Give every event the mean of ``points`` cooler readings centred on
+    its own (fewer at the run's ends) in place of its single reading.
+
+    The meter reads unsynchronised with the bunch, so each reading catches
+    the mains ripple at a random phase; point by point, every event is
+    scattered by it (decision D-1). A reading is one bunch's, as stamped on
+    its hits, so a busy bunch counts once; unread (0) or non-finite ones
+    are left out, and an event without one takes the last reading before
+    it. Call before the cooler plan, then ``Compute_Voltages('pbp')``.
+    Returns the run_metadata it sets: the run's mean cooler from the
+    readings (the header holds only the run-start value) and their scatter
+    about the rolling mean.
+    """
+    import numpy as np
+    import dask.dataframe as dd
+
+    points = int(points)
+    if points < 1:
+        raise ValueError(f"A rolling cooler needs at least 1 point, not {points}.")
+    frame = data.Run.compute()
+    ts = frame["TS"].to_numpy()
+    order = np.argsort(ts, kind="stable")
+    bunch = frame["Bunch"].to_numpy()[order]
+    own = frame["Vrfq"].to_numpy()[order]
+    first = np.flatnonzero(np.r_[True, bunch[1:] != bunch[:-1]])
+    first = first[np.isfinite(own[first]) & (own[first] != 0)]
+    if not len(first):
+        raise ValueError("The run holds no cooler readings to average.")
+    t, v = ts[order][first], own[first]
+    sums = np.concatenate(([0.0], np.cumsum(v - v[0])))
+    k = np.arange(len(v))
+    lo = np.maximum(k - (points - 1) // 2, 0)
+    hi = np.minimum(k + points // 2, len(v) - 1) + 1
+    rolled = (sums[hi] - sums[lo]) / (hi - lo) + v[0]
+    at = np.searchsorted(t, ts, side="right") - 1
+    frame["Vrfq"] = rolled[np.clip(at, 0, len(v) - 1)]
+    data.Run = dd.from_pandas(frame, npartitions=data.Run.npartitions)
+    div = float(data.VCoolDiv)
+    return {"cooler_v": float(np.mean(v) * div),
+            "cooler_rolling": {"points": points, "readings": int(len(v)),
+                               "scatter_v": float(np.std(v - rolled) * div)}}
+
+
 def prepare_run_data(
     run_file_path: str,
     source_config: Dict[str, Any],
@@ -196,6 +244,11 @@ def prepare_run_data(
     if use_dividers:
         run_metadata["dividers"] = {"scan": float(data.VAccDiv),
                                     "cooler": float(data.VCoolDiv)}
+    cooler_correction = source_config.get("cooler_correction", "pbp")
+    if cooler_correction == "rolling":
+        run_metadata.update(Rolling_Cooler(data, source_config.get(
+            "cooler_window_points", ROLLING_COOLER_POINTS)))
+        cooler_correction = "pbp"
 
     # Cooler/laser override precedence: SourceBlock global override > the
     # run's own (run_overrides) > per-split metadata override > ASDF value.
@@ -224,8 +277,7 @@ def prepare_run_data(
     run_metadata["cooler_mode"] = cooler_plan.mode
     run_metadata["cooler_v_effective"] = cooler_plan.effective
     apply_cooler(data, cooler_plan)
-    data.Compute_Voltages(
-        cooler_correction=source_config.get("cooler_correction", "pbp"))
+    data.Compute_Voltages(cooler_correction=cooler_correction)
 
     src_laser = (source_config.get("laser_override", 0)
                  if source_config.get("override_enabled") else 0)

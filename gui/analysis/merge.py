@@ -176,6 +176,15 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         # touches VCoolDiv (as pipeline.prepare_run_data records it).
         header_cooler_v = float(getattr(data, "Vcool_init", 0) or 0) * float(
             getattr(data, "VCoolDiv", 10000) or 10000)
+        # The rolling cooler as the fit takes it, and its run mean as the
+        # run's own voltage (the header holds only the run-start value).
+        run_corr = cooler_corr
+        if run_corr == "rolling":
+            from gui.analysis.pipeline import (
+                ROLLING_COOLER_POINTS, Rolling_Cooler)
+            header_cooler_v = Rolling_Cooler(data, source_config.get(
+                "cooler_window_points", ROLLING_COOLER_POINTS))["cooler_v"]
+            run_corr = "pbp"
 
         # Honor the SourceBlock's "Cooler / Laser Override" TICK, not just
         # the spinbox values -- prepare_run_data (the fit/preview path)
@@ -213,7 +222,7 @@ def compute_merged_spectrum(file_paths, source_config, merge_params,
         if laser_override > 0:
             data.Laser_set = laser_override
 
-        data.Compute_Voltages(cooler_correction=cooler_corr)
+        data.Compute_Voltages(cooler_correction=run_corr)
 
         nf = source_config.get("noise_filter", 0)
         if nf > 0:
