@@ -1893,6 +1893,29 @@ class SourceBlock(AnalysisBlock):
                 "10000.\nAvailable when a file records them."))
         self._Use_Dividers.setEnabled(False)
         adv_form.addRow("", self._Use_Dividers)
+        # A dead time per PMT (D-3): 0 is off, and nothing fills it in by
+        # itself; "Suggested" takes ORACLE's only when pressed.
+        dead_row = QHBoxLayout()
+        self._Dead_Times = {}
+        for ch in (1, 2, 3, 4):
+            self._Dead_Times[ch] = _make_double(
+                0.0, 0.0, 100.0, 1, 1.0,
+                tooltip=f"PMT {ch}'s dead time [µs]; 0 = off.")
+            self._Dead_Times[ch].setButtonSymbols(
+                QDoubleSpinBox.ButtonSymbols.NoButtons)
+            dead_row.addWidget(self._Dead_Times[ch])
+        dead_label = QLabel("Dead time [µs]:")
+        dead_label.setToolTip(
+            "PMTs 1-4: drop a count that follows one on the same PMT, in its\n"
+            "bunch, within this time. It takes the PMT's afterpulses, and\n"
+            "real photons as close: in bunched mode it flattens the peaks.")
+        adv_form.addRow(dead_label, dead_row)
+        self._Dead_Suggest = QPushButton("Suggested dead times", toolTip=(
+            "Fill in the dead times ORACLE suggests in the files' performance"
+            "\nreports (the largest any file gives a PMT)."))
+        self._Dead_Suggest.setEnabled(False)
+        self._Dead_Suggest.clicked.connect(self._Use_Suggested_Dead_Times)
+        adv_form.addRow("", self._Dead_Suggest)
 
         # Reference shift (#37) — stored & displayed in MHz to match the
         # spectrum x-axis and the F-gate fields. clstools.Shift_Ref takes Hz,
@@ -3088,15 +3111,38 @@ class SourceBlock(AnalysisBlock):
             cfg["laser_source"] = "wavemeter"
         if self._Use_Dividers.isChecked():
             cfg["use_oracle_dividers"] = True
+        dead = {ch: box.value() for ch, box in self._Dead_Times.items()
+                if box.value() > 0}
+        if dead:
+            cfg["dead_time_us"] = dead
         return cfg
 
     def _Refresh_Dividers_Tick(self):
-        """Offer the recorded dividers only when a file records them."""
+        """Offer the recorded dividers, and ORACLE's suggested dead times,
+        only when a file has them."""
         from gui.calibration import Oracle_Record
         self._Use_Dividers.setEnabled(any(
             (Oracle_Record(e["parent_path"] if e.get("is_split")
                            else e["path"]) or {}).get("Dividers")
             for e in self._file_entries if not e.get("is_merged")))
+        self._Dead_Suggest.setEnabled(bool(self._Suggested_Dead_Times()))
+
+    def _Suggested_Dead_Times(self):
+        """ORACLE's suggestion per PMT over the files: the largest given."""
+        from gui.analysis.pipeline import Suggested_Dead_Times
+        out = {}
+        for e in self._file_entries:
+            if e.get("is_merged"):
+                continue
+            path = e["parent_path"] if e.get("is_split") else e["path"]
+            for ch, us in Suggested_Dead_Times(path).items():
+                out[ch] = max(us, out.get(ch, 0.0))
+        return out
+
+    def _Use_Suggested_Dead_Times(self):
+        for ch, us in self._Suggested_Dead_Times().items():
+            if ch in self._Dead_Times:
+                self._Dead_Times[ch].setValue(us)
 
     # ── Import from Pre-Analysis ──
 
@@ -3425,13 +3471,15 @@ class SourceBlock(AnalysisBlock):
             from gui.analysis.binning import intersect_v_gate
             from gui.calibration import load_run_calibrated
             from gui.analysis.pipeline import (
-                Rolling_Cooler, Wavemeter_Laser, apply_cooler,
-                resolve_cooler, stepsize_frame)
+                Dead_Time_Gate, Rolling_Cooler, Wavemeter_Laser,
+                apply_cooler, resolve_cooler, stepsize_frame)
             data = _get_clstools().CLSDataFrame()
             load_run_calibrated(data, data_path, self._calibrations(),
                                 cal_order=self._cal_order.value(),
                                 use_oracle_dividers=(
                                     self._Use_Dividers.isChecked()))
+            Dead_Time_Gate(data, {ch: box.value()
+                                  for ch, box in self._Dead_Times.items()})
             if self._Laser_Source.currentData() == "wavemeter":
                 Wavemeter_Laser(data, data_path)
             own_cooler = (float(getattr(data, "Vcool_init", 0) or 0)
@@ -4107,7 +4155,8 @@ class SourceBlock(AnalysisBlock):
         d["cooler_correction"] = self._cooler_corr.currentText()
         cfg = self.get_source_config()      # the upgrades, only when on
         d.update({k: cfg[k] for k in ("cooler_window_points", "laser_source",
-                                      "use_oracle_dividers") if k in cfg})
+                                      "use_oracle_dividers", "dead_time_us")
+                  if k in cfg})
         d["ref_shift_mhz"] = self._ref_shift.value()
         # Merged entries
         merged_list = []
@@ -4304,6 +4353,9 @@ class SourceBlock(AnalysisBlock):
         self._Laser_Source.setCurrentIndex(max(0, self._Laser_Source.findData(
             d.get("laser_source", "header"))))
         self._Use_Dividers.setChecked(bool(d.get("use_oracle_dividers")))
+        dead = {int(k): v for k, v in (d.get("dead_time_us") or {}).items()}
+        for ch, box in self._Dead_Times.items():
+            box.setValue(float(dead.get(ch, 0.0)))
         # ref_shift was originally stored in Hz; new saves use ref_shift_mhz.
         if "ref_shift_mhz" in d:
             self._ref_shift.setValue(float(d.get("ref_shift_mhz", 0.0)))
