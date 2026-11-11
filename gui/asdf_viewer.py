@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 
 from cls_estimations.asdf_contents import (  # noqa: F401 (re-exported)
     COLUMN_DOCS, FIELD_DOCS, MAX_LISTED_VALUES, cell_note, column_stats,
-    number_text, read_asdf_file, type_text, value_text,
+    Oracle_Summary, number_text, read_asdf_file, type_text, value_text,
 )
 
 FILE_FILTER = "ASDF run files (*.asdf *.vasdf);;All files (*)"
@@ -69,6 +69,8 @@ _NOTES = {
     "LaserSetpoint": lambda v: "cm⁻¹",
     "MassAMU": lambda v: "u (the Source block's isotope mass is used "
                          "for the Doppler shift)",
+    "ORACLE": lambda v: ", ".join(t for k, t in Oracle_Summary(v)
+                                  if k in ("Version", "Rack", "Scan")),
 }
 
 

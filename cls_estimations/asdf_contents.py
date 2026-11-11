@@ -51,6 +51,20 @@ FIELD_DOCS = {
         "The scanned setpoint ranges [start, stop] in V, in the order "
         "scanned: the values the 'voltage' column steps through."),
     "SortingUtilities": "Software that sorted the raw data into this file.",
+    "DacCorrectionApplied": (
+        "ORACLE's record of whether the DAC's measured non-linearity "
+        "corrected this run's setpoints: 1 if it did, 0 if it did not. "
+        "DENIS does not use it."),
+    "DacCorrection": (
+        "ORACLE's description of that correction: what was measured and "
+        "the polynomial and INL tables used, or 'none: both channels "
+        "identity, uncorrected'. DENIS does not use it."),
+    "ORACLE": (
+        "ORACLE's record of how the run was taken: version, commit, rack, "
+        "scan type, the calibration's checks and every other setting it "
+        "locked for the scan. The Source block can read its dividers, "
+        "laser and the cooler's rolling mean from it; Meta summarises it. "
+        "Absent from runs not taken with ORACLE."),
     "CalSet": (
         "Voltage-calibration points: the scan-voltage setpoints in V."),
     "CalReadback": (
@@ -216,3 +230,45 @@ def column_stats(data):
         out.append((float(finite.min()), float(finite.max()),
                     float(finite.mean()), distinct))
     return out
+
+
+def Oracle_Summary(record):
+    """ORACLE's record as ``(label, text)`` rows: version, commit, rack,
+    scan type, region, reference flag, the calibration's verdict with the
+    checks that did not pass, and the bench-table fit. Every key is
+    optional (the record grew between versions) and a missing one has no
+    row; no record, no rows."""
+    if not isinstance(record, dict):
+        return []
+    rows, commit = [], record.get("Commit")
+    if record.get("Version"):
+        rows.append(("Version", str(record["Version"])))
+    if isinstance(commit, dict) and commit.get("Hash"):
+        rows.append(("Commit", str(commit["Hash"])[:10] + (
+            "  (files changed since)" if commit.get("Dirty") else "")))
+    if record.get("Rack"):
+        rows.append(("Rack", str(record["Rack"])))
+    if record.get("ScanType"):
+        rounds = record.get("Rounds")
+        rows.append(("Scan", str(record["ScanType"]) + (
+            f", {rounds} rounds" if rounds else "")))
+    if record.get("InteractionRegion"):
+        rows.append(("Region", str(record["InteractionRegion"])))
+    if record.get("ReferenceRun"):
+        rows.append(("Reference run", "yes"))
+    cal = record.get("Calibration")
+    if isinstance(cal, dict) and cal.get("Verdict"):
+        rest = [f"{c.get('Check')}: {c.get('Message')}"
+                for c in cal.get("Checks") or [] if c.get("Verdict") != "PASS"]
+        rms = cal.get("FitResidualRmsV")
+        rows.append(("Calibration", "; ".join(
+            [str(cal["Verdict"])]
+            + ([f"fit rms {rms:.3f} V"] if isinstance(rms, float) else [])
+            + rest)))
+    fit = record.get("TableFit")
+    if isinstance(fit, dict) and {"A_V", "B"} <= fit.keys():
+        rows.append(("Table fit", f"{str(fit.get('Table', ''))[:8]}: "
+                     f"V = {fit['A_V']:.4g} + {fit['B']:.6g} T"))
+    elif fit:
+        rows.append(("Table fit", str(fit)))
+    return rows

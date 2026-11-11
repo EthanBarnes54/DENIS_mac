@@ -273,6 +273,7 @@ class AnalysisProject(QWidget):
     # -- hears this instead, once the worker has stopped.
     fit_cancelled = Signal(str)              # project_name
     fit_progress = Signal(int, int, str)     # current, total, status
+    reference_runs_added = Signal(list)      # paths ORACLE tagged as reference
 
     def __init__(self, name="Project", is_reference=False, parent=None,
                  is_calibration=False):
@@ -478,6 +479,7 @@ class AnalysisProject(QWidget):
 
         if block_type == "Source":
             block = SourceBlock(default_name)
+            block.reference_runs_added.connect(self.reference_runs_added)
         elif block_type == "Model":
             block = ModelBlock(default_name)
         elif block_type == "Fitter":

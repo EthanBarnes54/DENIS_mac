@@ -15,6 +15,8 @@ gui.analysis.isotope_shift_tab (IsotopeShiftTab), and gui.shared_widgets
 (last-directory helpers, imported lazily).
 """
 
+import os
+
 import yaml
 
 from PySide6.QtWidgets import (
@@ -210,6 +212,8 @@ class AnalysisTab(QWidget):
         if config:
             project.from_dict(config)
         project.results_ready.connect(self.results_ready.emit)
+        project.reference_runs_added.connect(
+            lambda paths, p=project: self._offer_reference_runs(p, paths))
         if hasattr(project, 'fit_progress'):
             project.fit_progress.connect(self.fit_progress.emit)
         self._projects.append(project)
@@ -220,6 +224,38 @@ class AnalysisTab(QWidget):
         style_project_tab_bar(self._project_tabs)
         self.projects_changed.emit()
         return project
+
+    def _offer_reference_runs(self, project, paths):
+        """WP-O2. Files just added to a Sample project that ORACLE tagged as
+        reference runs: ask once whether to move them to a Reference
+        project (an existing one, or a new one). Never moves on its own."""
+        if project.is_reference or project.is_calibration:
+            return
+        from gui.analysis.blocks import SourceBlock
+        refs = [p for p in self._projects if p.is_reference]
+        new = f"New Reference project (Reference_{len(self._projects) + 1})"
+        names = [p.project_name for p in refs]
+        name, ok = QInputDialog.getItem(
+            self, "Reference runs",
+            f"{len(paths)} of the files you added are tagged as reference "
+            f"runs in ORACLE's record:\n"
+            + "".join(f"  {os.path.basename(p)}\n" for p in paths)
+            + "\nMove them to a Reference project? OK moves them to the "
+            "one chosen; Cancel keeps them here.", names + [new], 0, False)
+        if not ok:
+            return
+        target = (refs[names.index(name)] if name in names else
+                  self._add_project(f"Reference_{len(self._projects) + 1}",
+                                    is_reference=True))
+        source_of = lambda proj: next(
+            b for b in proj._blocks if isinstance(b, SourceBlock))
+        mine, there = source_of(project), source_of(target)
+        for path in paths:
+            for e in [e for e in mine._file_entries if e.get("path") == path]:
+                mine._remove_file_entry(e, e["widget"])
+            if not any(e.get("path") == path for e in there._file_entries):
+                there._add_file_entry(path)
+        there.block_changed.emit()
 
     def _tab_text(self, project):
         """Tab title, with what kind of project it is after the name."""

@@ -1358,6 +1358,8 @@ class SourceBlock(AnalysisBlock):
     # Width is persisted per project, so saved blocks keep their
     # stored width; this is the width a NEW Source block starts at.
     BLOCK_WIDTH = 504
+    #: Files just added whose ORACLE record tags them as reference runs.
+    reference_runs_added = Signal(list)
 
     def __init__(self, name="Source_1", parent=None):
         super().__init__(name, parent)
@@ -2074,6 +2076,11 @@ class SourceBlock(AnalysisBlock):
         for p in paths:
             self._add_file_entry(p)
         self.block_changed.emit()
+        from gui.calibration import Oracle_Record
+        tagged = [p for p in paths if p.lower().endswith(".asdf")
+                  and (Oracle_Record(p) or {}).get("ReferenceRun")]
+        if tagged:
+            self.reference_runs_added.emit(tagged)
 
     def _add_file_entry(self, filepath):
         # Branch on extension. .vasdf files carry split metadata that
@@ -3608,8 +3615,10 @@ class SourceBlock(AnalysisBlock):
         a small Virtual Split header to the output so the user sees
         the gate and per-side metadata too.
         """
+        from cls_estimations.asdf_contents import Oracle_Summary
         from gui.calibration import (
-            canonical_path as _cal_canon, describe_spec, load_run_calibrated)
+            Oracle_Record, canonical_path as _cal_canon, describe_spec,
+            load_run_calibrated)
         load_path = (split_info["parent_path"]
                      if split_info else filepath)
         cal_map = self._calibrations()
@@ -3688,6 +3697,10 @@ class SourceBlock(AnalysisBlock):
             f"Start TS:       {getattr(data, 'TSstart', '?')}\n"
             f"Stop TS:        {getattr(data, 'TSstop', '?')}\n"
         )
+        oracle = Oracle_Summary(Oracle_Record(load_path))
+        if oracle:
+            info_text += "\n--- ORACLE ---\n" + "".join(
+                f"{k + ':':<16}{v}\n" for k, v in oracle)
         return f"<pre>{info_text}</pre>"
 
     def _build_merged_meta_html(self, merged_data):
