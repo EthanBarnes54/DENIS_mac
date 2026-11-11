@@ -1716,6 +1716,9 @@ class ResultsTab(QWidget):
             self._render_isotope_shift_plot(fig, data)
         elif plot_type == "gp_reference":
             self._render_gp_reference_plot(fig, data)
+        elif plot_type == "king_plot":
+            from gui.analysis.moments_radii_tab import Draw_King_Plot
+            Draw_King_Plot(fig, data["payload"].item())
 
         # Hug the canvas; re-fits automatically on resize via
         # _on_plot_canvas_resize.

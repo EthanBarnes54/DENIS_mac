@@ -316,5 +316,5 @@ def Two_Line_King(shifts, shift_sigma, shifts2, shifts2_sigma, inv_mu,
     out = _F_K(s * F2, float(np.sqrt(cov[0, 0])), c + s * K2,
                float(np.sqrt(cov[1, 1])), float(cov[0, 1]), fit)
     out.update(F_ratio=s, F_ratio_sigma=fit["slope_sigma"], K_offset=c,
-               K_offset_sigma=fit["intercept_sigma"])
+               K_offset_sigma=fit["intercept_sigma"], ratio_offset_cov=fit["cov"])
     return out
