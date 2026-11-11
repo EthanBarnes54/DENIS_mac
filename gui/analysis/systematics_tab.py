@@ -36,12 +36,14 @@ from PySide6.QtWidgets import (
 
 from cls_estimations.systematics import (
     ALL, COMBINATIONS, DEFAULT_DEFINITION, DEFINITIONS, MAX_DEV,
-    QUADRATURE, ExtraSystematic, ParameterBand, ScanValue, budget,
+    CORRELATIONS, QUADRATURE, ExtraSystematic, ParameterBand, ScanValue,
+    Systematic_Source, budget,
     mean_over_runs, quality_flag, scan_offsets, summarise,
     trend_outliers,
 )
 from gui.analysis.systematic_scan import (
-    Baseline, SEED_CONTINUATION, SEED_MODES, ScanTarget, SystematicScan,
+    Baseline, SEED_CONTINUATION, SEED_MODES, ScanTarget, Source_Budget_Scan,
+    SystematicScan,
     config_differences, read_baseline, split_key, value_key,
 )
 
@@ -64,6 +66,13 @@ SUMMARY_COLS = ("Project", "Run", "Parameter", "N", "Value", "stat",
 #: Columns of the extra-systematics table.
 EXTRA_COLS = ("Use", "Name", "Project", "Run / isotope", "Parameter",
               "Value (MHz)")
+#: A source row's own columns (brief C4), after those: what it drives
+#: (a perturbation the whole chain is refitted at +/-1 sigma of), its
+#: width and unit, how it correlates and what it is. Hidden until a row
+#: is a source, so a typed-MHz budget looks as it did.
+SOURCE_COLS = ("Drives", "Width", "Unit", "Correlation", "Kind")
+SOURCE_CHOICES = {7: (), 8: ("V", "mV", "ppm", "MHz"), 9: CORRELATIONS,
+                  10: ("measured", "declared", "unknown")}
 
 
 def _wrap(text, width=54):
@@ -355,6 +364,12 @@ class SystematicsTab(QGroupBox):
         super().__init__("Cooler-voltage systematics", parent)
         self._analysis_tab = analysis_tab
         self._scan = SystematicScan(self)
+        self._Budget_Engine = Source_Budget_Scan(self)
+        self._Budget_Engine.progress.connect(self._append_log)
+        self._Budget_Engine.finished.connect(self._On_Budget)
+        self._Budget_Engine.failed.connect(lambda m: (self._append_log(m),
+                                               self._busy(False)))
+        self._Budget_Rows = []
         self._scan.progress.connect(self._on_progress)
         self._scan.step_done.connect(self._on_step_done)
         self._scan.step_failed.connect(self._on_step_failed)
@@ -689,35 +704,69 @@ class SystematicsTab(QGroupBox):
             "cooler-offset term as set under Systematic on the left.")
         bnote.setWordWrap(True)
         bl.addWidget(bnote)
-        self._extra_table = QTableWidget(0, len(EXTRA_COLS))
-        self._extra_table.setHorizontalHeaderLabels(list(EXTRA_COLS))
+        self._extra_table = QTableWidget(0, len(EXTRA_COLS + SOURCE_COLS))
+        self._extra_table.setHorizontalHeaderLabels(
+            list(EXTRA_COLS + SOURCE_COLS))
         self._extra_table.verticalHeader().setVisible(False)
         hh = self._extra_table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for c, w in ((0, 44), (2, 170), (3, 150), (4, 150), (5, 110)):
+        for c, w in ((0, 44), (2, 170), (3, 150), (4, 150), (5, 110),
+                     (6, 160)):
             self._extra_table.setColumnWidth(c, w)
         self._extra_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows)
         self._extra_delegate = _ChoiceDelegate(self._extra_choices,
                                                self._extra_table)
-        for c in (2, 3, 4):
+        for c in (2, 3, 4, 6, 8, 9, 10):
             self._extra_table.setItemDelegateForColumn(
                 c, self._extra_delegate)
         self._extra_table.itemChanged.connect(self._on_extra_changed)
+        self._Show_Source_Cols()
         bl.addWidget(self._extra_table, 1)
         brow = QHBoxLayout()
         add = QPushButton("Add")
         add.setToolTip("Add a systematic contribution.")
         add.clicked.connect(lambda: self._add_extra())
         brow.addWidget(add)
+        add_src = QPushButton("Add source")
+        add_src.setToolTip(_wrap(
+            "Add a source the whole chain is refitted at -1 and +1 sigma "
+            "of: a divider, the scan axis, the laser or the beam offset."))
+        add_src.clicked.connect(lambda: self._Add_Source())
+        brow.addWidget(add_src)
         rem = QPushButton("Remove")
         rem.setToolTip("Remove the selected rows.")
         rem.clicked.connect(self._remove_extras)
         brow.addWidget(rem)
         brow.addStretch()
+        brow.addWidget(QLabel("Monte Carlo draws:"))
+        self._Mc_Draws = QSpinBox()
+        self._Mc_Draws.setRange(0, 1000)
+        self._Mc_Draws.setToolTip(_wrap(
+            "After the +/-1 sigma refits, refit the chain this many times "
+            "with the shared sources drawn together: a check of their "
+            "linearity and total. 0 = none."))
+        brow.addWidget(self._Mc_Draws)
+        self._Propagate = QPushButton("Propagate sources")
+        self._Propagate.setToolTip(_wrap(
+            "Refit the ticked projects' whole chain at -1 and +1 sigma of "
+            "each source and fill the Sources tab with their effects."))
+        self._Propagate.clicked.connect(self._Run_Budget)
+        brow.addWidget(self._Propagate)
         bl.addLayout(brow)
         right.addTab(budget_page, "Budget")
+
+        self._Source_Table = QTableWidget(0, 0)
+        self._Source_Table.verticalHeader().setVisible(False)
+        self._Source_Table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self._Source_Table.setToolTip(_wrap(
+            "Each source's effect on the weighted mean over runs (shared "
+            "sources linearly, per-run ones in quadrature), the total in "
+            "quadrature and the statistical error; for the shifts, shared "
+            "sources cancel through the chain."))
+        right.addTab(self._Source_Table, "Sources")
 
         self._grid_table = QTableWidget(0, 1)
         self._grid_table.verticalHeader().setVisible(False)
@@ -1500,7 +1549,7 @@ class SystematicsTab(QGroupBox):
         t = self._extra_table
         for r in range(t.rowCount()):
             cells = [t.item(r, c) for c in range(len(EXTRA_COLS))]
-            if any(c is None for c in cells):
+            if any(c is None for c in cells) or self._Drives(r):
                 continue
             try:
                 value = float(cells[5].text().strip())
@@ -1514,6 +1563,118 @@ class SystematicsTab(QGroupBox):
                 parameter=cells[4].text().strip() or ALL,
                 use=cells[0].checkState() == Qt.CheckState.Checked))
         return out
+
+    def _Drives(self, r):
+        """What row ``r`` drives: its perturbation, or "" for a typed row."""
+        item = self._extra_table.item(r, len(EXTRA_COLS))
+        return item.text().strip() if item is not None else ""
+
+    def sources(self):
+        """The Budget rows that drive a perturbation, as Systematic_Source.
+        An "unknown" one is listed but never propagated (nor read as 0)."""
+        t, out = self._extra_table, []
+        for r in range(t.rowCount()):
+            if not self._Drives(r):
+                continue
+            cells = [(t.item(r, c).text().strip() if t.item(r, c) else "")
+                     for c in range(len(EXTRA_COLS + SOURCE_COLS))]
+            try:
+                width = float(cells[7])
+            except ValueError:
+                width = float("nan")
+            kind = cells[10] or "declared"
+            out.append(Systematic_Source(
+                name=cells[1] or f"row {r + 1}", width=width, key=cells[6],
+                unit=cells[8] or "V", correlation=cells[9] or "campaign",
+                kind=kind, enabled=(kind != "unknown" and t.item(r, 0)
+                                    .checkState() == Qt.CheckState.Checked)))
+        return out
+
+    def _Add_Source(self, src=None):
+        from gui.analysis.pipeline import PERTURBATION_KEYS
+        src = src or Systematic_Source("", 0.0, key=PERTURBATION_KEYS[0],
+                                       unit="ppm")
+        self._add_extra(ExtraSystematic(name=src.name, value=float("nan"),
+                                        use=src.enabled or src.kind
+                                        == "unknown"))
+        t, r = self._extra_table, self._extra_table.rowCount() - 1
+        blocked = t.blockSignals(True)
+        width = f"{src.width:g}" if math.isfinite(src.width) else ""
+        for c, text in zip(range(6, 11), (src.key, width, src.unit,
+                                          src.correlation, src.kind)):
+            t.setItem(r, c, QTableWidgetItem(text))
+        for c in range(2, 6):       # a typed row's filters and MHz value
+            item = QTableWidgetItem("—")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            t.setItem(r, c, item)
+        if src.kind == "unknown":
+            for c in range(t.columnCount()):
+                if t.item(r, c) is not None:
+                    t.item(r, c).setForeground(Qt.GlobalColor.gray)
+        t.blockSignals(blocked)
+        self._Show_Source_Cols()
+
+    def _Show_Source_Cols(self):
+        shown = any(self._Drives(r) for r in range(self._extra_table.rowCount()))
+        for c in range(len(EXTRA_COLS), len(EXTRA_COLS + SOURCE_COLS)):
+            self._extra_table.setColumnHidden(c, not shown)
+
+    def _Shift_Projects(self):
+        """Each isotope's project and the reference's, from the Isotope
+        Shifts tab: what a per-run source on a shift needs."""
+        entries = list(getattr(getattr(self._analysis_tab, "_is_tab", None),
+                               "_entries", []) or [])
+        ref = next((e.project_combo.currentText() for e in entries
+                    if e.ref_radio.isChecked()), None)
+        return ({e.label_edit.text(): (e.project_combo.currentText(), ref)
+                 for e in entries} if ref else None)
+
+    def _Run_Budget(self):
+        if self._scan.busy:
+            return
+        targets, sources = self._selected_targets(), [
+            s for s in self.sources() if s.enabled]
+        if not targets or not sources:
+            QMessageBox.warning(self, "Systematics",
+                                "Tick a project and add an enabled source.")
+            return
+        if not self._confirm_chain():
+            return
+        self._busy(True)
+        self._append_log(f"propagating {len(sources)} source(s) over "
+                         f"{len(targets)} project(s)")
+        self._Budget_Engine.start(
+            targets, sources, mc_draws=self._Mc_Draws.value(),
+            shift_projects=self._Shift_Projects(),
+            label=self._label.text().strip() or "sys_001",
+            seed_mode=self._seed_mode.currentText(), gp=self._gp_panel(),
+            is_tab=self._is_tab(), light_output=self._light.isChecked())
+
+    def _On_Budget(self, result):
+        self._busy(False)
+        if result["failed"]:
+            self._append_log("not propagated (a step did not fit): "
+                             + ", ".join(result["failed"]))
+        self._Budget_Rows = result["table"]
+        self._Fill_Source_Table()
+
+    def _Fill_Source_Table(self):
+        rows, t = self._Budget_Rows, self._Source_Table
+        names = list(dict.fromkeys(n for r in rows for n in r["sources"]))
+        extra = [k for k in ("mc_shared", "mc_total") if rows and k in rows[0]]
+        head = (["Project", "Run / isotope", "Parameter"] + names
+                + ["total", "statistical"] + extra)
+        t.setColumnCount(len(head))
+        t.setHorizontalHeaderLabels(head)
+        t.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            cells = [row["project"], row["run"], row["parameter"]] + [
+                f"{v:.6g}" for v in ([row["sources"].get(n, float("nan"))
+                                      for n in names]
+                                     + [row[k] for k in ["total",
+                                        "statistical"] + extra])]
+            for c, text in enumerate(cells):
+                t.setItem(i, c, QTableWidgetItem(text))
 
     def _extra_choices(self, column):
         """What a filter cell offers: the names the scan has seen."""
@@ -1529,7 +1690,10 @@ class SystematicsTab(QGroupBox):
             return sorted(runs | {"<weighted mean>"})
         if column == 4:
             return sorted({k[3] for k in keys})
-        return []
+        if column == 6:
+            from gui.analysis.pipeline import PERTURBATION_KEYS
+            return ["cooler_offset_v"] + list(PERTURBATION_KEYS)
+        return list(SOURCE_CHOICES.get(column, ()))
 
     def _add_extra(self, entry=None):
         e = entry or ExtraSystematic(name="", value=0.0)
@@ -1783,6 +1947,8 @@ class SystematicsTab(QGroupBox):
             "combine_total": self._combine_total.currentText(),
             "birge": self._birge.isChecked(),
             "extras": [e.to_dict() for e in self.extras()],
+            "sources": [s.to_dict() for s in self.sources()],
+            "source_budget": self._Budget_Rows,
             "seed_mode": self._seed_mode.currentText(),
             "label": self._label.text(),
             "light": self._light.isChecked(),
@@ -1827,6 +1993,11 @@ class SystematicsTab(QGroupBox):
         for e in d.get("extras") or []:
             if isinstance(e, dict):
                 self._add_extra(ExtraSystematic.from_dict(e))
+        for s in d.get("sources") or []:
+            self._Add_Source(Systematic_Source.from_dict(s))
+        self._Show_Source_Cols()
+        self._Budget_Rows = list(d.get("source_budget") or [])
+        self._Fill_Source_Table()
         self._dv_min.setValue(float(d.get("dv_min", -10.0)))
         self._dv_max.setValue(float(d.get("dv_max", 10.0)))
         self._steps.setValue(int(d.get("steps", 10)))
