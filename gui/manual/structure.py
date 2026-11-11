@@ -87,6 +87,7 @@ TOC = [
         {'id': 'an-reference-gp', 'title': 'Reference Correction (GP) Panel'},
         {'id': 'an-running-fits', 'title': 'Running, Monitoring, Reverting Fits and Output Artifacts'},
         {'id': 'an-save-load', 'title': 'Save / Load (Analysis)'},
+        {'id': 'an-upgrades', 'title': 'Analysis Upgrades: Toggles and Their Originals'},
     ]},
     {'id': 'tab-results', 'title': 'Results Tab', 'children': [
         {'id': 'res-layout', 'title': 'Layout and Panels'},
@@ -142,6 +143,8 @@ TOC = [
         {'id': 'physics-isotope-shift', 'title': 'Isotope Shift and Uncertainty Propagation'},
         {'id': 'physics-gp', 'title': 'Reference Centroid Drift Correction (Gaussian Process)'},
         {'id': 'physics-fit-objectives', 'title': 'Fit Objectives (Chi-Square / Poisson / Gaussian LLH)'},
+        {'id': 'physics-statistics-systematics', 'title': 'Statistical Methods and Systematics'},
+        {'id': 'physics-moments-radii', 'title': 'Nuclear Moments and Charge Radii'},
     ]},
     {'id': 'troubleshooting', 'title': 'Troubleshooting', 'children': [
         {'id': 'troubleshooting-common', 'title': 'Common Problems and Fixes'},
@@ -152,6 +155,9 @@ TOC = [
 
 # Flat per-node content plan: id -> metadata used to render planned pages.
 PLAN = {
+    'an-upgrades': {'kind': 'subsection', 'parent': 'tab-analysis', 'title': 'Analysis Upgrades: Toggles and Their Originals', 'summary': 'The 2026-11 upgrades, each off by default: rolling cooler, wavemeter laser, recorded dividers, dead-time gate, per-run overrides, Run quality, Validate fit, the source budget and the Moments & Radii tab.'},
+    'physics-statistics-systematics': {'kind': 'subsection', 'parent': 'physics-reference', 'title': 'Statistical Methods and Systematics', 'summary': 'Fit statistics, overdispersion, Birge ratio, the parametric bootstrap of Validate fit, and the generalised systematic budget.'},
+    'physics-moments-radii': {'kind': 'subsection', 'parent': 'physics-reference', 'title': 'Nuclear Moments and Charge Radii', 'summary': 'The ratio method for mu and Q, the King plot and the three ways to F and K, the mass factor, isomer shifts.'},
     'getting-started': {'kind': 'section', 'title': 'Getting Started', 'summary': 'Introduction to DENIS, installation via uv, an end-to-end quick start across all four tabs, and the four-tab tour. DENIS (Doppler Estimation and Numerical Inference for Spectroscopy) is a PySide6 + matplotlib desktop app for collinear laser spectroscopy: planning beam time, pre-analysing ASDF spectra, satlas2 HFS fitting, and reporting.'},
     'introduction': {'kind': 'subsection', 'parent': 'getting-started', 'title': 'What DENIS Is', 'summary': 'DENIS v1.0.0 is a single desktop tool spanning the full CLS experiment cycle. The name is a backronym (Doppler Estimation and Numerical Inference for Spectroscopy). It reads only IGISOL-style ASDF files via clstools and fits with satlas2; the Estimate tab has no on-disk data dependency. Built on PySide6 (Qt6) + matplotlib.', 'keyTopics': ['Backronym D-E-N-I-S and version 1.0.0', 'Scope: estimate, pre-analyse, fit, report', 'Framework stack PySide6 + matplotlib + satlas2 + clstools', 'ASDF-only data format via clstools', 'About dialog credits and developer contact'], 'crossLinks': ['four-tab-tour', 'help-about', 'tab-estimate', 'tab-analysis'], 'figures': ['DENIS main window on launch with the four top tabs and the menu bar', 'Help > About dialog showing logo, version, satlas2/cls_tools links and developer contact']},
     'installation': {'kind': 'subsection', 'parent': 'getting-started', 'title': 'Installation', 'summary': 'Recommended scripted install with uv: run install.bat (Windows) or ./install.sh (Linux/macOS). full does uv-bootstrap + uv sync + desktop shortcut in one step; no-arg shows a 3-choice menu (full / uv / shortcut). uv downloads a compatible Python, creates .venv, and installs everything pinned in uv.lock. Manual install and updating are also covered.', 'keyTopics': ['install.bat / install.sh subcommands full|uv|shortcut', 'uv auto-install via Astral installer', 'uv sync into .venv from uv.lock', 'Desktop shortcut creation per OS (.lnk/.desktop/.app)', 'Manual flow: uv sync then uv run python gui.py', 'clstools fetched from GitHub via [tool.uv.sources] (not on PyPI)', 'Updating: git pull + uv sync; IDE interpreter at .venv'], 'codeSnippets': ['install.bat full / ./install.sh full one-step install; subcommands full | uv | shortcut', 'Repoint clstools to a local clone in pyproject.toml [tool.uv.sources] then re-run uv sync'], 'crossLinks': ['launching-denis', 'troubleshooting', 'citation-license'], 'figures': ['Interactive install menu of install.bat / install.sh with the three choices', 'DENIS desktop shortcut created by the installer (Windows .lnk; Linux .desktop; macOS DENIS.app)']},

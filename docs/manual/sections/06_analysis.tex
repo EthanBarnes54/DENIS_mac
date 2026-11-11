@@ -379,3 +379,34 @@ back to a pure-Python evaluation path. The result is identical; only
 the runtime changes, by roughly one to two orders of magnitude.
 Installing MSVC Build Tools (Windows) or \texttt{m2w64-toolchain}
 restores the compiled path.
+
+\subsection{Analysis upgrades: toggles and their originals}
+
+Each upgrade is off by default; off, or absent from an older session,
+gives the original method byte for byte.
+
+\begin{description}
+    \item[Cooler correction \code{rolling}] (Source block, with its
+        number of points, default 100): each bunch's cooler voltage is
+        the mean of the readings around it. Off: \code{pbp} or
+        \code{mean}.
+    \item[Laser \code{wavemeter mean}:] the wavemeter averaged over the
+        run, from ORACLE's monitor record. Off: the recorded setpoint.
+    \item[Use the run's recorded dividers:] ORACLE's divider ratios.
+        Off: clstools' fixed dividers.
+    \item[Dead time {[$\mu$s]}] per PMT: drops a count that follows a
+        count on the same PMT, in the same bunch, within that time.
+        \app{Suggested dead times} fills in ORACLE's suggestion, never by
+        itself. Suited to PMTs that see well under one photon a bunch.
+    \item[Per-run override] (right-click a file): that run's cooler or
+        laser value replaces its header's.
+    \item[Run quality, Validate fit] (Output block): variance/mean per
+        run and PMT with ORACLE's checks; and pulls and coverage from
+        refits of spectra drawn from the fit.
+    \item[Sources and Propagate sources] (Systematics tab), and the
+        \app{Moments \& Radii} tab: see the physics reference.
+\end{description}
+
+The Source block's \app{Meta} ends with ORACLE's record of the run when
+it has one, and \app{Add files} offers, once, to move runs ORACLE tagged
+as reference runs to a Reference project.

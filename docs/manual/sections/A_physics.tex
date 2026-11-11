@@ -95,3 +95,70 @@ The \app{Fitter} block exposes three statistics:
 post-fit covariance matrix by the reduced $\chi^2$, recovering the
 standard errors when the input $\sigma_i$ are known to be
 mis-scaled.
+
+\subsection{Statistical methods and systematics}
+
+\paragraph{Fit statistics.} $\chi^2$ with $\sqrt{y_i+1}$ errors is
+biased at low counts; the Poisson likelihood is not~\cite{baker1984}.
+Its numerical error bars come out $\sqrt{2}$ too large unless the
+\app{Fitter} block's correction is ticked.
+
+\paragraph{Overdispersion.} For Poisson counts the variance of a step's
+counts over the scans equals their mean. \app{Run quality} reports
+variance/mean $D$ from each step's repeats, with the significance of
+$D-1$ from the Poisson null, and splits a PMT's excess into the part all
+PMTs share (the ions per bunch) and its own (afterpulsing), which the
+dead-time gate removes.
+
+\paragraph{Weighted means.} Runs are averaged with weights $1/\sigma^2$
+and the error scaled by $\max(1, \sqrt{\chi^2_\nu})$, the Birge
+ratio~\cite{birge1932}.
+
+\paragraph{Validate fit.} A parametric bootstrap: spectra drawn from the
+best fit (at the run's measured $D$ when \app{Run quality} ran) and
+refitted with the same settings. Each parameter's pull
+$(\hat\theta-\theta)/\sigma$ should have mean 0 and width 1, and the
+$\pm1\sigma$ / $\pm2\sigma$ intervals should cover the truth 68\,\% /
+95\,\% of the time.
+
+\paragraph{The systematic budget.} Each source in the Systematics tab's
+\app{Sources} table is a $1\sigma$ width on one perturbation of the
+apparatus (cooler offset or divider, scan divider, scan-axis offset or
+gain, laser offset), with a kind (measured, declared, unknown) and a
+correlation class (\code{run}, \code{campaign}, \code{region},
+\code{table}). \app{Propagate sources} refits the whole chain with each
+source at $\pm1\sigma$. A source that moves every run at once enters a
+weighted mean as the weighted mean of the run responses, sign kept; a
+per-run source as their weighted quadrature sum. On request, Monte Carlo
+draws the shared sources together from $N(0,\sigma)$; per-run sources
+still enter from their $\pm1\sigma$ responses. The method follows
+A.~Raggio's review of the analysis (November 2026); the drift correction
+follows~\cite{vandenborne2025}.
+
+\subsection{Nuclear moments and charge radii}
+
+\paragraph{Ratio method.} Against a reference isotope on the same line,
+\begin{equation}
+    \mu = \mu_\mathrm{ref}\,\frac{I}{I_\mathrm{ref}}\,\frac{A}{A_\mathrm{ref}},
+    \qquad
+    Q = Q_\mathrm{ref}\,\frac{B}{B_\mathrm{ref}},
+\end{equation}
+from each level where measured and their mean, with the fit's
+correlation of $A_l$ and $A_u$. The hyperfine anomaly is neglected
+unless a percentage is given, which enters as an error.
+
+\paragraph{Charge radii.} With
+$1/\mu_{AA'} = (m_{A'}-m_A)/(m_A m_{A'})$ from the ions' masses in the
+charge state measured,
+\begin{equation}
+    \delta\nu^{AA'} = F\,\delta\langle r^2\rangle^{AA'} + K/\mu_{AA'},
+    \qquad
+    \delta\langle r^2\rangle = (\delta\nu - K/\mu)/F .
+\end{equation}
+$F$ and $K$ are given, calibrated by a York fit~\cite{york2004} of the
+modified shifts $\mu\,\delta\nu$ against $\mu\,\delta\langle r^2\rangle$
+for pairs of known radii, or taken from a second line's
+shifts~\cite{king1984}. Shifts against one reference share its error,
+and the tab keeps the full covariance. An isomer pair has $1/\mu = 0$:
+its shift is $F\,\delta\langle r^2\rangle$ alone, and it is left off the
+King plot.

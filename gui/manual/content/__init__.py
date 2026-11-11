@@ -21,10 +21,11 @@ from gui.manual.structure import PLAN, TOC
 
 # Merge order: `generated` (data-driven pages) is applied first so the
 # hand-authored modules listed after it can override any of its page ids.
-from gui.manual.content import generated, getting_started, physics, estimate
+from gui.manual.content import (
+    analysis_upgrade, generated, getting_started, physics, estimate)
 
 _AUTHORED = {}
-for _mod in (generated, getting_started, physics, estimate):
+for _mod in (generated, getting_started, physics, estimate, analysis_upgrade):
     _AUTHORED.update(_mod.PAGES)
 
 
