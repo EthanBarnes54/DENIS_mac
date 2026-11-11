@@ -131,3 +131,66 @@ def estimate_isotope_timing(
             scan_result=scan,
         ))
     return results
+
+
+# ── Overdispersion of a run's counts (Analysis Upgrade, WP-S1) ───────
+
+def _Dispersion(d, m, scans):
+    """Pooled variance over mean: ``d`` the (step, scan) deviations from
+    each step's mean ``m``; the steps with counts only. sigma is the Poisson
+    null's by the delta method on the ratio, valid at low counts: a
+    squared deviation varies by 2 m^2 + m, but its m-term largely cancels
+    against the mean's, which the same counts give (2 m^2 + m / scans)."""
+    import numpy as np
+    use = m > 0
+    den = (scans - 1) * m[use].sum()
+    return {"dispersion": float((d[use]**2).sum() / den),
+            "sigma": float(np.sqrt(((scans - 1) * (
+                2 * m[use]**2 + m[use] / scans)).sum()) / den),
+            "dof": int((scans - 1) * use.sum())}
+
+
+def Overdispersion(step, scan, channel=None):
+    """Variance over mean of a run's counts, from each step's repeats over
+    the scans: 1 for Poisson counts, and (D - 1) / sigma the excess's
+    significance. ``step``, ``scan`` and ``channel`` label each event; pass
+    whole scans (an unfinished last one reads as zeros).
+
+    Returns ``{"all": {dispersion, sigma, dof}}`` and, given two or more
+    channels, ``"pmt"``: each PMT's own, with the excess split as ORACLE's
+    WP7 does. ``common`` is its share of what the PMTs vary by together
+    (their covariance: the ions per bunch, of relative variance
+    ``common_rel_var``); ``afterpulse`` is the rest, its own.
+    """
+    import numpy as np
+    channel = np.zeros(len(step), int) if channel is None else channel
+    (_, si), (scans, ki), (chans, ci) = (
+        np.unique(np.asarray(a), return_inverse=True)
+        for a in (step, scan, channel))
+    k = len(scans)
+    if k < 2:
+        raise ValueError("Overdispersion needs at least two scans.")
+    n = np.zeros((si.max() + 1, k, len(chans)))
+    np.add.at(n, (si, ki, ci), 1)
+    m = n.mean(axis=1)
+    d = n - m[:, None, :]
+    tot = n.sum(axis=2)
+    out = {"all": _Dispersion(tot - tot.mean(axis=1, keepdims=True),
+                              tot.mean(axis=1), k)}
+    if len(chans) < 2:
+        return out
+    pairs = [(a, b) for a in range(len(chans)) for b in range(a + 1,
+                                                                len(chans))]
+    prod = sum(d[:, :, a] * d[:, :, b] for a, b in pairs)
+    den = (k - 1) * sum((m[:, a] * m[:, b]).sum() for a, b in pairs)
+    v = prod.sum() / den
+    out.update(common_rel_var=float(v),
+               common_rel_var_sigma=float(np.sqrt(prod.size * prod.var())
+                                          / den), pmt={})
+    for c, ch in enumerate(chans):
+        r = _Dispersion(d[:, :, c], m[:, c], k)
+        mc = m[:, c][m[:, c] > 0]
+        r["common"] = float(v * (mc**2).sum() / mc.sum())
+        r["afterpulse"] = r["dispersion"] - 1.0 - r["common"]
+        out["pmt"][ch.item()] = r
+    return out
