@@ -16,6 +16,9 @@ Sawtooth and Triangle (odd rounds run backwards) scans, bunched.
   line with is smaller and the centroid the same within errors. Compared
   per event: a stepped scan binned in frequency is a comb, and a line
   fitted to bins finer than its teeth depends on how they meet.
+* Afterpulsing (VAL2), at ORACLE's own rates: a PMT that afterpulses
+  lifts the run's variance/mean above 1, is named by the run quality, and
+  the dead-time gate on it brings both back to 1.
 
 Run from the project root:
     .venv/bin/python -m pytest tests/test_end_to_end_truth.py -q
@@ -48,8 +51,12 @@ SETPOINTS = np.arange(20.0, 85.001, 0.05)
 MASS, LASER, HARMONIC = 100.0, 16956.17, 2
 
 
-def Write_Oracle_Run(path, scan_type, rounds, bunches, seed):
-    """One simulated run in ORACLE's format; returns its path."""
+def Write_Oracle_Run(path, scan_type, rounds, bunches, seed, afterpulse=None,
+                     per_bunch=(PEAK_PER_BUNCH, BACKGROUND_PER_BUNCH)):
+    """One simulated run in ORACLE's format; returns its path.
+    ``afterpulse``, {PMT: chance}: each count there may bring a second
+    2-5 us later, as ORACLE's AFTERPULSE does. ``per_bunch``: the counts a
+    bunch at the top of the strongest line and of background."""
     import asdf
     rng = np.random.default_rng(seed)
     order = [SETPOINTS[::-1] if scan_type == "Triangle" and k % 2
@@ -64,17 +71,22 @@ def Write_Oracle_Run(path, scan_type, rounds, bunches, seed):
                 + rng.normal(0.0, COOLER_NOISE_V, len(t_read)))
     shape = sum(h / (1.0 + ((steps - c) / (0.5 * FWHM_V))**2)
                 for c, h in RESONANCES)
-    n_ion = rng.poisson(PEAK_PER_BUNCH * shape)
-    n_bg = rng.poisson(BACKGROUND_PER_BUNCH, len(steps))
+    n_ion = rng.poisson(per_bunch[0] * shape)
+    n_bg = rng.poisson(per_bunch[1], len(steps))
     bunch = np.concatenate([np.repeat(np.arange(len(steps)), n_ion),
                             np.repeat(np.arange(len(steps)), n_bg)])
     tof = np.concatenate([rng.normal(TOF_US, TOF_WIDTH_US, n_ion.sum()),
                           rng.uniform(0.0, GATE_US, n_bg.sum())])
+    pmt = rng.integers(1, 5, len(tof))
+    for ch, chance in (afterpulse or {}).items():
+        parents = (pmt == ch) & (rng.random(len(tof)) < chance)
+        bunch, pmt = np.r_[bunch, bunch[parents]], np.r_[pmt, pmt[parents]]
+        tof = np.r_[tof, tof[parents] + rng.uniform(2.0, 5.0, parents.sum())]
     ts = t_bunch[bunch] + tof * 1e-6
     cooler = readings[np.searchsorted(t_read, t_bunch[bunch], "right") - 1]
     order = np.argsort(ts, kind="stable")
-    raw = np.column_stack([ts, steps[bunch], bunch, rng.integers(1, 5, len(ts)),
-                           tof, cooler / 10000.0])[order]
+    raw = np.column_stack([ts, steps[bunch], bunch, pmt, tof,
+                           cooler / 10000.0])[order]
     cal = np.linspace(0.0, 100.0, 21)
     asdf.AsdfFile({
         "Run": 1, "Experiment": "simulated", "Date": "2026-11-11",
@@ -165,6 +177,36 @@ class End_To_End_Truth_Tests(unittest.TestCase):
         self.assertGreater(w_p, 3.0)
         self.assertLess(w_r, w_p / 2.0)
         self.assertLess(abs(c_r - c_p), 2 * np.sqrt(2) * w_p / np.sqrt(n_p))
+
+    def test_Dead_Time_Gate_Takes_Out_Afterpulsing(self):
+        """ORACLE's rates (60 Hz at the top and 5 Hz of background, at
+        200 Hz bunches), PMT 3 afterpulsing at its test's 0.5; the gate at
+        5 us, the longest delay. At the raised rates above the gate would
+        also take most real photons at the peaks, where a PMT sees several
+        a bunch, and so leave them below Poisson."""
+        from gui.analysis.fitting import _Run_Quality
+        for i, kind in enumerate(("Sawtooth", "Triangle")):
+            path = Write_Oracle_Run(
+                os.path.join(self.tmp, f"run_{i + 11:04d}.asdf"), kind,
+                rounds=4, bunches=25, seed=40 + i, afterpulse={3: 0.5},
+                per_bunch=(0.3, 0.025))
+            q = {}
+            for name, gate in (("off", None), ("gated", {3: 5.0})):
+                data, eff, meta = prepare_run_data(path, dict(
+                    self.cfg, bin_mode="Raw Voltage", dead_time_us=gate))
+                q[name] = _Run_Quality(data, path, eff, meta)
+            with self.subTest(scan=kind):
+                off, gated = q["off"], q["gated"]
+                self.assertGreater(off["dispersion"] - 1, 3 * off["sigma"])
+                self.assertEqual(off["afterpulsing"], [3])
+                self.assertLess(abs(gated["dispersion"] - 1),
+                                3 * gated["sigma"])
+                self.assertEqual(gated["afterpulsing"], [])
+                own = gated["pmt"][3]
+                self.assertLess(abs(own["dispersion"] - 1), 3 * own["sigma"])
+                # What it takes is the afterpulses, 0.5 in 1.5 of PMT 3's.
+                self.assertLess(abs(meta["dead_time"][3]["removed"] - 1 / 3),
+                                0.03)
 
 
 if __name__ == "__main__":
