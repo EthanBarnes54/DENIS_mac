@@ -278,6 +278,25 @@ def _choose_pa_project(parent_widget):
     return projects[names.index(name)]
 
 
+#: What "Import from Pre-Analysis" can take: (key, tick label, ticked by
+#: default, tooltip). The defaults are the import as it always was.
+PA_IMPORT_SECTIONS = (
+    ("files", "Files (the ticked runs)", True,
+     "The runs ticked in the Pre-Analysis project."),
+    ("merged", "Merged spectra", True,
+     "The project's ticked merged spectra."),
+    ("physics", "Physics (Z, A, mass, harmonic, levels)", True,
+     "Z, A, mass, harmonic and the transition's energy levels."),
+    ("gates", "Gates (ToF, PMT)", True, "The ToF gate and the PMTs."),
+    ("main_override", "Main cooler / laser as the Override", False,
+     "The main cooler voltage and laser setpoint are copied either way;\n"
+     "ticked, the Cooler / Laser Override is switched on so they apply."),
+    ("run_overrides", "Each run's own cooler / laser", False,
+     "A run whose Pre-Analysis card ticks its own cooler voltage or laser\n"
+     "setpoint gets them here as that file's override."),
+)
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Block Base Class
 # ══════════════════════════════════════════════════════════════════
@@ -1367,9 +1386,11 @@ class SourceBlock(AnalysisBlock):
         btn_row.addWidget(self._add_files_btn)
         self._pull_files_btn = QPushButton("Import from Pre-Analysis")
         self._pull_files_btn.setToolTip(
-            "Pick a Pre-Analysis project and import everything at once:\n"
-            "files, physics parameters, gates, and cooler/laser overrides.")
-        self._pull_files_btn.clicked.connect(self._import_all_from_preanalysis)
+            "Pick what to import from a Pre-Analysis project: files,\n"
+            "merged spectra, physics, gates, and cooler/laser values.")
+        self._Pa_Import_Choice = None   # the last ticks, saved with the session
+        self._pull_files_btn.clicked.connect(
+            self._Import_From_Preanalysis_Dialog)
         btn_row.addWidget(self._pull_files_btn)
         self._merge_btn = QPushButton("Merge Selected")
         self._merge_btn.setToolTip("Merge checked files into a single spectrum")
@@ -2954,7 +2975,7 @@ class SourceBlock(AnalysisBlock):
         self._step_mult_spin.setEnabled(defn == "Per scan step")
 
     def get_source_config(self):
-        return {
+        cfg = {
             "Z": self._z_number.value(),
             "A": self._a_number.value(),
             "mass": self._mass_spin.value(),
@@ -2985,13 +3006,48 @@ class SourceBlock(AnalysisBlock):
             # Hz; the UI shows MHz to match the spectrum axis.
             "ref_shift": self._ref_shift.value() * 1e6,
         }
+        # Each file's own cooler/laser override, by its path (absent when
+        # none has one, so the config is what it always was).
+        own = {e["path"]: dict(e["run_override"])
+               for e in self._file_entries if e.get("run_override")}
+        if own:
+            cfg["run_overrides"] = own
+        return cfg
 
     # ── Import from Pre-Analysis ──
 
-    def _import_all_from_preanalysis(self):
-        """Single-button import: pick a Pre-Analysis project once, then
-        pull files, physics, gates, and cooler/laser overrides.
+    def _Import_From_Preanalysis_Dialog(self):
+        """Ask which parts to import (ticked as last time, else as the
+        import always was), then import them."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Import from Pre-Analysis")
+        layout = QVBoxLayout(dialog)
+        box = QGroupBox("Import")
+        box_layout = QVBoxLayout(box)
+        last = self._Pa_Import_Choice or {}
+        ticks = {}
+        for key, label, default, tip in PA_IMPORT_SECTIONS:
+            ticks[key] = QCheckBox(label, toolTip=tip)
+            ticks[key].setChecked(last.get(key, default))
+            box_layout.addWidget(ticks[key])
+        layout.addWidget(box)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._Pa_Import_Choice = {k: cb.isChecked() for k, cb in ticks.items()}
+        self._import_all_from_preanalysis(dict(self._Pa_Import_Choice))
+
+    def _import_all_from_preanalysis(self, sections=None):
+        """Pick a Pre-Analysis project once, then pull the ``sections``
+        (keys of PA_IMPORT_SECTIONS; those not given take their defaults,
+        which are the import as it always was).
         """
+        take = {key: default for key, _l, default, _t in PA_IMPORT_SECTIONS}
+        take.update(sections or {})
         pa = _choose_pa_project(self)
         if pa is None:
             return
@@ -3007,61 +3063,78 @@ class SourceBlock(AnalysisBlock):
                 fe for fe in all_entries
                 if getattr(fe, 'check', None) is None or fe.check.isChecked()
             ]
-        if all_entries and not ticked:
+        if (take["files"] or take["merged"]) and all_entries and not ticked:
             QMessageBox.warning(
                 self, "Import from Pre-Analysis",
                 "No files are ticked in the selected Pre-Analysis project. "
                 "Nothing was imported.")
             return
 
-        self._import_files_from_preanalysis(pa)
+        self._import_files_from_preanalysis(pa, runs=take["files"],
+                                            merged=take["merged"])
         self._update_nav_label()
 
         # Physics parameters
-        if hasattr(pa, '_e_lower'):
-            self._e_lower_spin.setValue(pa._e_lower.value())
-            self._e_upper_spin.setValue(pa._e_upper.value())
-        elif hasattr(pa, '_offset'):
-            # Legacy: pre-analysis stored a single "Transition" field
-            # = (E_up - E_low) / harmonic. Convert back.
-            harmonic = pa._harmonic.value() if hasattr(pa, '_harmonic') else 4
-            transition_full = pa._offset.value() * harmonic
-            self._e_lower_spin.setValue(0.0)
-            self._e_upper_spin.setValue(transition_full)
-        if hasattr(pa, '_harmonic'):
-            self._harmonic_spin.setValue(pa._harmonic.value())
-        if hasattr(pa, '_z_spin'):
-            self._z_number.setValue(pa._z_spin.value())
-        if hasattr(pa, '_a_spin'):
-            self._a_number.setValue(pa._a_spin.value())
-        if hasattr(pa, '_mass_override'):
-            self._mass_override.setChecked(pa._mass_override.isChecked())
-            if pa._mass_override.isChecked() and hasattr(pa, '_mass_spin'):
-                self._mass_spin.blockSignals(True)
-                self._mass_spin.setValue(pa._mass_spin.value())
-                self._mass_spin.blockSignals(False)
+        if take["physics"]:
+            if hasattr(pa, '_e_lower'):
+                self._e_lower_spin.setValue(pa._e_lower.value())
+                self._e_upper_spin.setValue(pa._e_upper.value())
+            elif hasattr(pa, '_offset'):
+                # Legacy: pre-analysis stored a single "Transition" field
+                # = (E_up - E_low) / harmonic. Convert back.
+                harmonic = (pa._harmonic.value()
+                            if hasattr(pa, '_harmonic') else 4)
+                transition_full = pa._offset.value() * harmonic
+                self._e_lower_spin.setValue(0.0)
+                self._e_upper_spin.setValue(transition_full)
+            if hasattr(pa, '_harmonic'):
+                self._harmonic_spin.setValue(pa._harmonic.value())
+            if hasattr(pa, '_z_spin'):
+                self._z_number.setValue(pa._z_spin.value())
+            if hasattr(pa, '_a_spin'):
+                self._a_number.setValue(pa._a_spin.value())
+            if hasattr(pa, '_mass_override'):
+                self._mass_override.setChecked(pa._mass_override.isChecked())
+                if pa._mass_override.isChecked() and hasattr(pa, '_mass_spin'):
+                    self._mass_spin.blockSignals(True)
+                    self._mass_spin.setValue(pa._mass_spin.value())
+                    self._mass_spin.blockSignals(False)
 
         # Gates
-        if hasattr(pa, '_tof_enable'):
-            self._tof_enable.setChecked(pa._tof_enable.isChecked())
-        if hasattr(pa, '_tof_lo'):
-            self._tof_lo.setValue(pa._tof_lo.value())
-        if hasattr(pa, '_tof_hi'):
-            self._tof_hi.setValue(pa._tof_hi.value())
-        if hasattr(pa, '_channels'):
-            for i, cb in enumerate(pa._channels):
-                if i < len(self._pmt_checks):
-                    self._pmt_checks[i].setChecked(cb.isChecked())
+        if take["gates"]:
+            if hasattr(pa, '_tof_enable'):
+                self._tof_enable.setChecked(pa._tof_enable.isChecked())
+            if hasattr(pa, '_tof_lo'):
+                self._tof_lo.setValue(pa._tof_lo.value())
+            if hasattr(pa, '_tof_hi'):
+                self._tof_hi.setValue(pa._tof_hi.value())
+            if hasattr(pa, '_channels'):
+                for i, cb in enumerate(pa._channels):
+                    if i < len(self._pmt_checks):
+                        self._pmt_checks[i].setChecked(cb.isChecked())
 
-        # Cooler / Laser overrides
+        # Cooler / Laser: the main values are copied either way; the tick
+        # puts them in force (they did nothing with the Override off).
         if hasattr(pa, '_cooler_override'):
             self._cooler_spin.setValue(pa._cooler_override.value())
         if hasattr(pa, '_laser_override'):
             self._laser_spin.setValue(pa._laser_override.value())
+        if take["main_override"]:
+            self._ovr_enable.setChecked(True)
+
+        # A run's own cooler / laser (its card's tick) as its override here.
+        if take["run_overrides"]:
+            here = {e["path"]: e for e in self._file_entries}
+            for fe in ticked:
+                own = {k: v for k, v in (("cooler_v", fe.Cooler_Override),
+                                         ("laser_sp", fe.Laser_Override))
+                       if v is not None}
+                if own and fe.filepath in here:
+                    here[fe.filepath]["run_override"] = own
 
         self.block_changed.emit()
 
-    def _import_files_from_preanalysis(self, pa):
+    def _import_files_from_preanalysis(self, pa, runs=True, merged=True):
         """Copy Pre-Analysis file entries into this Source block.
 
         Regular FileEntry / SplitFileEntry go through ``_add_file_entry``
@@ -3107,8 +3180,9 @@ class SourceBlock(AnalysisBlock):
             if chk is not None and not chk.isChecked():
                 continue
             if isinstance(fe, MergedFileEntry):
-                self._add_merged_from_preanalysis(fe, transition_mhz)
-            else:
+                if merged:
+                    self._add_merged_from_preanalysis(fe, transition_mhz)
+            elif runs:
                 already = any(
                     e.get("path") == fe.filepath
                     for e in self._file_entries
@@ -3888,8 +3962,12 @@ class SourceBlock(AnalysisBlock):
             ovr = e.get("binning_override") or {}
             if ovr:
                 fd["binning_override"] = dict(ovr)
+            if e.get("run_override"):
+                fd["run_override"] = dict(e["run_override"])
             files_out.append(fd)
         d["files"] = files_out
+        if self._Pa_Import_Choice is not None:
+            d["pa_import"] = dict(self._Pa_Import_Choice)
         d["Z"] = self._z_number.value()
         d["A"] = self._a_number.value()
         d["mass"] = self._mass_spin.value()
@@ -4025,6 +4103,10 @@ class SourceBlock(AnalysisBlock):
                     k: v for k, v in ovr.items()
                     if k in BINNING_OVERRIDE_KEYS}
                 self._update_override_badge(self._file_entries[-1])
+            if fd.get("run_override"):
+                self._file_entries[-1]["run_override"] = dict(
+                    fd["run_override"])
+        self._Pa_Import_Choice = d.get("pa_import")
 
         self._z_number.setValue(d.get("Z", 1))
         self._a_number.setValue(d.get("A", 1))
