@@ -598,6 +598,10 @@ def Draw_King_Plot(fig, d):
                     lw=0, label="1σ band")
     ax.plot(grid, y, color="#1f77b4", lw=1.2, label=line.get("label", ""))
     named = set()          # a calibration pair that is also measured: once
+    ys = [v for key in ("points", "measured")
+          for v in (d.get(key) or {}).get("y", [])]
+    span = ((max(xs) - min(xs)) or 1.0, (max(ys) - min(ys)) or 1.0)
+    placed = []            # pairs that coincide (55Fe, 53mFe): labels stack
     for key, fmt, color, label in (("points", "s", "#c0392b", "fitted pairs"),
                                    ("measured", "o", "#222222", "measured")):
         p = d.get(key) or {}
@@ -609,8 +613,11 @@ def Draw_King_Plot(fig, d):
             if text in named:
                 continue
             named.add(text)
+            near = sum(abs(x - px) < 0.02 * span[0]
+                       and abs(yv - py) < 0.02 * span[1] for px, py in placed)
+            placed.append((x, yv))
             ax.annotate(text, (x, yv), textcoords="offset points",
-                        xytext=(4, 4), fontsize=8)
+                        xytext=(4, 4 + 10 * near), fontsize=8)
     ax.set_xlabel(d.get("xlabel", ""))
     ax.set_ylabel(d.get("ylabel", ""))
     ax.legend(fontsize=8)

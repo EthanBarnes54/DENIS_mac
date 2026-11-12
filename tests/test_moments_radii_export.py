@@ -223,6 +223,21 @@ class King_Plot_Label_Tests(unittest.TestCase):
         names = [t.get_text() for t in fig.axes[0].texts]
         self.assertEqual(sorted(names), ["52Fe", "55Fe", "56Fe"])
 
+    def test_Labels_Of_Coinciding_Pairs_Stack(self):
+        from matplotlib.figure import Figure
+        from gui.analysis.moments_radii_tab import Draw_King_Plot
+        fig = Figure()
+        Draw_King_Plot(fig, {
+            "line": {"slope": 1.0, "intercept": 0.0, "slope_sigma": 0.0,
+                     "intercept_sigma": 0.0, "cov": 0.0, "label": "F, K"},
+            "measured": {"x": [1.0, 3.0, 3.001], "y": [1.0, 3.0, 3.001],
+                         "sx": [0.1] * 3, "sy": [0.1] * 3,
+                         "labels": ["52Fe", "55Fe", "53mFe"]},
+            "xlabel": "x", "ylabel": "y"})
+        offsets = {t.get_text(): t.xyann for t in fig.axes[0].texts}
+        self.assertEqual(offsets["52Fe"], offsets["55Fe"])
+        self.assertNotEqual(offsets["55Fe"], offsets["53mFe"])
+
 
 if __name__ == "__main__":
     unittest.main()
