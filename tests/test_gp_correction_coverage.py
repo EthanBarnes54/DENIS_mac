@@ -1293,6 +1293,14 @@ class CorrectedCentroidPanelTests(unittest.TestCase):
         self.assertEqual(d["raw"], [-139.0])
         self.assertEqual(d["fly"], [False])
 
+    def test_A_Cooler_Calibration_Project_Is_Not_Drawn(self):
+        cal = self._P("171Yb", [_centroid_result(1482.0, 3600.0 * 101.0)])
+        cal.is_calibration = True
+        s = self._panel([
+            self._P("116Sn", [_centroid_result(-139.0, 3600.0 * 101.0)]),
+            cal])._corrected_centroids()
+        self.assertEqual(sorted(s), ["116Sn"])
+
     def test_runs_without_a_timestamp_are_dropped(self):
         s = self._panel([self._P("116Sn", [
             _centroid_result(1.0, 0.0),

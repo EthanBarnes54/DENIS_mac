@@ -1516,6 +1516,10 @@ class ReferenceCorrectionPanel(QGroupBox):
         t0_h = float(getattr(rc, "_t0", 0.0))
         out: dict[str, dict] = {}
         for p in getattr(self._analysis_tab, "_projects", []) or []:
+            # Not in the drift-free frame, as in the lists (a cooler
+            # calibration from another beam time also stretched the axis).
+            if getattr(p, "is_calibration", False):
+                continue
             label = p.project_name
             if (not getattr(p, "_last_results", None)
                     and hasattr(p, "load_results_from_disk")):
