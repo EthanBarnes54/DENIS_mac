@@ -441,5 +441,7 @@ class PopupPlotWindow(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         canvas = FigureCanvasQTAgg(figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(canvas)
         layout.addWidget(canvas, 1)
         figure.tight_layout()

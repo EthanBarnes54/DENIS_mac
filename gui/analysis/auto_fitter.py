@@ -816,6 +816,8 @@ class AutoFitterDialog(QDialog):
             left=0.06, right=0.99, top=0.92, bottom=0.16)
         self._ax = self._fig.add_subplot(111)
         self._canvas = FigureCanvasQTAgg(self._fig)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._canvas)
         self._canvas.setMinimumHeight(360)
         root.addWidget(self._canvas, 1)
 

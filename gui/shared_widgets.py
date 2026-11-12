@@ -3643,6 +3643,75 @@ def scroll_zoom(event):
     ax.figure.canvas.draw_idle()
 
 
+def Enable_Plot_Navigation(canvas):
+    """Scroll to zoom about the cursor (scroll_zoom), drag to pan,
+    double-click for the view as drawn: the Estimate tab's and ORACLE's
+    gestures, for a canvas with no mouse handlers of its own.
+
+    Light by design: a gesture only moves axis limits and asks for
+    draw_idle, which Qt folds into one redraw per event-loop pass, so a
+    fast drag or a trackpad swipe redraws once a frame, not once an
+    event; nothing is recomputed or replotted. Panning is matplotlib's
+    own (Axes.start_pan / drag_pan) without the toolbar's pan mode, so no
+    cursor is set (image cursors crash Qt on macOS, see Wait_Cursor).
+    Stands aside while a toolbar's own pan or zoom tool is on.
+    """
+    import weakref
+    homes = weakref.WeakKeyDictionary()    # axes -> (its patch, xlim, ylim)
+    held = []                              # the axes being dragged
+
+    def _Free(event):
+        ax, tb = event.inaxes, getattr(canvas, "toolbar", None)
+        if ax is None or not ax.get_navigate() or (tb is not None
+                                                   and tb.mode):
+            return None
+        return ax
+
+    def _Remember(ax):
+        # The view as drawn, kept at the first gesture. A redraw makes
+        # new axes (fig.clear) or a new patch (ax.clear), so the next
+        # gesture keeps the new view instead.
+        home = homes.get(ax)
+        if home is None or home[0]() is not ax.patch:
+            homes[ax] = (weakref.ref(ax.patch), ax.get_xlim(), ax.get_ylim())
+
+    def _Scroll(event):
+        ax = _Free(event)
+        if ax is not None:
+            _Remember(ax)
+            scroll_zoom(event)
+
+    def _Press(event):
+        ax = _Free(event)
+        if ax is None or event.button != 1:
+            return
+        if event.dblclick:
+            home = homes.pop(ax, None)
+            if home is not None and home[0]() is ax.patch:
+                ax.set_xlim(home[1])
+                ax.set_ylim(home[2])
+                canvas.draw_idle()
+            return
+        _Remember(ax)
+        ax.start_pan(event.x, event.y, 1)
+        held[:] = [ax]
+
+    def _Drag(event):
+        if held:
+            held[0].drag_pan(1, None, event.x, event.y)
+            canvas.draw_idle()
+
+    def _Release(event):
+        if held:
+            held.pop().end_pan()
+
+    for name, slot in (("scroll_event", _Scroll),
+                       ("button_press_event", _Press),
+                       ("motion_notify_event", _Drag),
+                       ("button_release_event", _Release)):
+        canvas.mpl_connect(name, slot)
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Worker Thread
 # ══════════════════════════════════════════════════════════════════

@@ -48,7 +48,7 @@ from PySide6.QtGui import QFont, QPixmap, QIcon, QBrush, QColor
 
 from gui.shared_widgets import (
     PlotEditorDialog, get_plot_type_settings,
-    fit_plot_settings_for_counts, lucide_icon,
+    fit_plot_settings_for_counts, lucide_icon, Enable_Plot_Navigation,
 )
 
 
@@ -935,6 +935,7 @@ class ResultsTab(QWidget):
         self._plot_figure.subplots_adjust(
             left=0.06, right=0.99, top=0.96, bottom=0.10)
         self._plot_canvas = FigureCanvasQTAgg(self._plot_figure)
+        Enable_Plot_Navigation(self._plot_canvas)
         # Right-click "Edit plot…" routes through the Results
         # editor (style.json persistence), not a bare dialog.
         self._plot_canvas._plot_editor_opener = self._edit_plot

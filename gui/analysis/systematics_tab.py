@@ -662,6 +662,8 @@ class SystematicsTab(QGroupBox):
         pl.addLayout(prow)
         self._figure = Figure(figsize=(7.0, 5.0))
         self._canvas = FigureCanvasQTAgg(self._figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._canvas)
         self._canvas.setMinimumHeight(300)
         pl.addWidget(self._canvas, 1)
         right.addTab(plot_page, "Plot")

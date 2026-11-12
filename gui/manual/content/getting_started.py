@@ -382,7 +382,9 @@ re-style, and export everything it produced &mdash; and the
       <b>Fit Report</b>, <b>Parameters</b>, <b>Metadata</b>, and plot items.</li>
   <li>Click an item to view it: text reports in a monospace box, parameter
       tables as a grid, and plots as live matplotlib figures (including the
-      reduced &chi;&sup2; fit-quality summary).</li>
+      reduced &chi;&sup2; fit-quality summary). On these and on every
+      Analysis plot, scroll to zoom about the cursor, drag to pan, and
+      double-click to return to the view as drawn.</li>
   <li>Click <b>Edit Plot</b> to adjust styling (fonts, colours, limits); the
       changes are saved next to the plot data as a <code>.style.json</code> so
       they survive reloading. Use <b>Export</b> (or <b>Export All</b>) to save

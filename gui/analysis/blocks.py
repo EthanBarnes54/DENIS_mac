@@ -69,7 +69,8 @@ from gui.analysis.expr_validation import (
 from gui.analysis.naming import NON_FIT_PARAMS, full_param_name
 from gui.analysis.vasdf import is_vasdf_path, read_vasdf
 from gui.dialog_style import make_plot_card, style_dialog
-from gui.shared_widgets import _load_settings, _save_settings, Wait_Cursor
+from gui.shared_widgets import (_load_settings, _save_settings, Wait_Cursor,
+                                Enable_Plot_Navigation)
 
 
 # Constraint-mode dropdown values for the ModelBlock parameter table.
@@ -1025,6 +1026,7 @@ class BinningDialog(QDialog):
 
         self._diag_fig = Figure(figsize=(8.0, 4.5))
         self._diag_canvas = FigureCanvasQTAgg(self._diag_fig)
+        Enable_Plot_Navigation(self._diag_canvas)
         lay.addWidget(make_plot_card(
             "Bin edges over the spectrum", self._diag_canvas,
             NavToolbar(self._diag_canvas, self), parent=self,
@@ -1268,6 +1270,7 @@ class BinningDialog(QDialog):
 
         self._cmp_fig = Figure(figsize=(8.0, 4.5))
         self._cmp_canvas = FigureCanvasQTAgg(self._cmp_fig)
+        Enable_Plot_Navigation(self._cmp_canvas)
         lay.addWidget(make_plot_card(
             "Run comparison", self._cmp_canvas,
             NavToolbar(self._cmp_canvas, self), parent=self,

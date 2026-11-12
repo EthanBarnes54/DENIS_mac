@@ -532,6 +532,8 @@ class ReferenceCorrectionPanel(QGroupBox):
         plots.addLayout(view_row)
         self._figure = Figure(figsize=(6.5, 6.0))
         self._canvas = FigureCanvasQTAgg(self._figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._canvas)
         self._canvas.setMinimumHeight(340)
         self._canvas.setMouseTracking(True)
         self._canvas.mpl_connect("motion_notify_event", self._on_plot_hover)

@@ -180,6 +180,8 @@ class MomentsRadiiTab(QGroupBox):
         king_box = QGroupBox("King plot")
         self._Figure = Figure(figsize=(6.0, 4.0))
         self._Canvas = FigureCanvasQTAgg(self._Figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._Canvas)
         self._Canvas.setMinimumHeight(260)
         QVBoxLayout(king_box).addWidget(self._Canvas)
         rcol.addWidget(king_box, 2)

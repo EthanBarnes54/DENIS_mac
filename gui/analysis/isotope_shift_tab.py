@@ -296,6 +296,8 @@ class IsotopeShiftTab(QWidget):
         self._preview_fig = Figure(dpi=100, constrained_layout=True)
         self._preview_ax = self._preview_fig.add_subplot(111)
         self._preview_canvas = FigureCanvasQTAgg(self._preview_fig)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._preview_canvas)
         self._preview_canvas.setFixedHeight(150)
         _pv_lay.addWidget(self._preview_canvas)
         self._preview_box.toggled.connect(
@@ -442,6 +444,8 @@ class IsotopeShiftTab(QWidget):
         plot_lay2.setContentsMargins(2, 2, 2, 2)
         self._figure = Figure(figsize=(10, 8))
         self._canvas = FigureCanvasQTAgg(self._figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._canvas)
         # Right-click editor must carry the δν arrow registry.
         self._canvas._plot_editor_opener = self._edit_plot
         self._toolbar = NavigationToolbar2QT(self._canvas, plot_widget)

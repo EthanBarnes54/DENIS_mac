@@ -304,6 +304,8 @@ class CoolerCalibrationTab(QGroupBox):
         self._main_splitter.addWidget(right)
         self._figure = Figure(figsize=(7.0, 5.0))
         self._canvas = FigureCanvasQTAgg(self._figure)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(self._canvas)
         self._canvas.setMinimumHeight(300)
         right.addTab(self._canvas, "Plot")
 

@@ -1449,6 +1449,8 @@ class MergeViewDialog(QDialog):
         ax.legend(fontsize=8)
         spec_fig.tight_layout()
         spec_canvas = FigureCanvasQTAgg(spec_fig)
+        from gui.shared_widgets import Enable_Plot_Navigation
+        Enable_Plot_Navigation(spec_canvas)
         tabs.addTab(spec_canvas, "Spectrum")
 
         # ── TOF tab ──
@@ -1466,6 +1468,7 @@ class MergeViewDialog(QDialog):
         ax_tof.legend(fontsize=8)
         tof_fig.tight_layout()
         tof_canvas = FigureCanvasQTAgg(tof_fig)
+        Enable_Plot_Navigation(tof_canvas)
         tabs.addTab(tof_canvas, "TOF")
 
         # ── Info tab ──
