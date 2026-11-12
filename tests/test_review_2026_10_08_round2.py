@@ -207,6 +207,29 @@ class TiedCentroidTests(unittest.TestCase):
                          ["Run_0___M___centroid"])
         shutil.rmtree(root, ignore_errors=True)
 
+    def test_A_Reload_Counts_A_Shared_Centroid_Once(self):
+        from gui.analysis.project import AnalysisProject
+        from cls_estimations.isotope_shift import tie_groups
+        root = tempfile.mkdtemp()
+        d = os.path.join(root, "analysis", "P", "iter_001")
+        os.makedirs(d)
+        pd.DataFrame({"run_number": ["0", "1"],
+                      "Parameter": ["centroid", "centroid"],
+                      "Value": [1.0, 1.0], "Error": [0.1, 0.1],
+                      "Source": ["Run_0", "Run_1"], "Model": ["M", "M"],
+                      "Expression": [float("nan"), "Run_0___M___centroid"]}
+                     ).to_csv(os.path.join(d, "parameters.csv"),
+                              index=False)
+        p = AnalysisProject("P")
+        p._session_iterations = ["iter_001"]
+        with mock.patch("gui.shared_widgets.get_analysis_dir",
+                        return_value=os.path.join(root, "analysis")):
+            p.load_results_from_disk()
+        self.assertEqual([r["source_name"] for r in p._last_results],
+                         ["Run_0", "Run_1"])
+        self.assertEqual(len(tie_groups(p._last_results)), 1)
+        shutil.rmtree(root, ignore_errors=True)
+
 
 # ── Auto-Fitter data preparation ─────────────────────────────────────
 

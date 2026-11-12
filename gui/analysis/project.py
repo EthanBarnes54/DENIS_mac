@@ -2717,9 +2717,14 @@ class AnalysisProject(QWidget):
             for col in ("Source", "Model", "Expression"):
                 if col in grp.columns:
                     pdf[col] = grp[col].tolist()
+            # The source name too: tie_groups finds a shared centroid's
+            # head by it; without it the head and its tied runs counted
+            # as two measurements (the shared error shrunk by sqrt 2).
+            sources = [s for s in pdf.get("Source", []) if isinstance(s, str)]
             result = {
                 "success": True,
                 "run_number": str(run_num),
+                "source_name": sources[0] if sources else None,
                 "run_file": "",
                 "report": "",
                 "params_df": pdf,
