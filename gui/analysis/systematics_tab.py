@@ -1655,6 +1655,10 @@ class SystematicsTab(QGroupBox):
         if result["failed"]:
             self._append_log("not propagated (a step did not fit): "
                              + ", ".join(result["failed"]))
+        for name, keys in (result.get("dropped") or {}).items():
+            self._append_log(f"{name}: {len(keys)} refit(s) ran off and were "
+                             f"left out: " + ", ".join(keys[:6])
+                             + (" ..." if len(keys) > 6 else ""))
         self._Budget_Rows = result["table"]
         self._Fill_Source_Table()
 

@@ -28,6 +28,7 @@ from cls_estimations.systematics import (  # noqa: E402
     Combine_Runs, Draw_Sources, Systematic_Source)
 from gui.analysis.systematic_scan import (  # noqa: E402
     Baseline, ScanTarget, Source_Budget_Scan, Source_Budget_Table,
+    _Step_Responses,
     SystematicScan, value_key)
 
 SHIFTS = "Isotope shifts"
@@ -139,6 +140,32 @@ class Library_Tests(unittest.TestCase):
         spread = math.sqrt(sum(d["cooler_div_ppm"]**2 for d in draws) / 4000)
         self.assertAlmostEqual(spread, math.sqrt(5.0), delta=0.1)
         self.assertEqual(draws[:3], Draw_Sources(sources, 3, seed=1))
+
+
+class Divergence_Tests(unittest.TestCase):
+
+    def test_A_Refit_That_Ran_Off_Is_Left_Out(self):
+        """The I324 example's case: one run's -1 sigma refit at -7.5e7 MHz
+        with sigma 1.3e19; the other runs' responses are kept."""
+        minus = {"a": {"value": -1100.0, "sigma": 6.0},
+                 "b": {"value": -7.5e7, "sigma": 1.3e19},
+                 "c": {"value": 5.0, "sigma": float("nan")}}
+        plus = {"a": {"value": -1054.0, "sigma": 6.2},
+                "b": {"value": -1050.0, "sigma": 6.3},
+                "c": {"value": 6.0, "sigma": 0.1}}
+        deltas, sigmas, dropped = _Step_Responses(minus, plus)
+        self.assertEqual(deltas, {"a": 23.0})
+        self.assertAlmostEqual(sigmas["a"], 6.1)
+        self.assertEqual(sorted(dropped), ["b", "c"])
+
+    def test_The_Table_Combines_The_Runs_That_Fitted(self):
+        src = Systematic_Source("Cooler divider", 100.0, key="cooler_div_ppm",
+                                unit="ppm")
+        sigmas = {"P|7001|M|centroid": 2.0, "P|7002|M|centroid": 2.0}
+        deltas = {"Cooler divider": {"P|7001|M|centroid": 4.0}}
+        (row,) = [r for r in Source_Budget_Table(deltas, sigmas, [src])
+                  if r["parameter"] == "centroid"]
+        self.assertAlmostEqual(row["sources"]["Cooler divider"], 4.0)
 
 
 class Engine_Tests(unittest.TestCase):

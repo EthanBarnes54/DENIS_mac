@@ -1040,6 +1040,38 @@ def _Shifted(values, project):
     return out
 
 
+#: A run's +/-1 sigma refits are compared only when both fitted: finite
+#: values and errors, neither error SIGMA_JUMP times the other. A refit
+#: that ran off (a sparse run's centroid at -7.5e7 MHz, sigma 1e19, in the
+#: I324 example) would otherwise be propagated as the source's effect.
+SIGMA_JUMP = 10.0
+
+
+def _Step_Responses(minus, plus):
+    """``(deltas, sigmas, dropped)`` from the -1 and +1 sigma steps' values
+    ({key: {"value", "sigma"}}): each kept key's response (half the
+    difference, sign kept) and mean sigma; the keys whose refits did not
+    both fit, by SIGMA_JUMP, in ``dropped``."""
+    import math
+    deltas, sigmas, dropped = {}, {}, []
+    for k, b in plus.items():
+        a = minus.get(k)
+        if a is None:
+            continue
+        vals = (a.get("value"), b.get("value"))
+        errs = [e for e in (a.get("sigma"), b.get("sigma")) if e]
+        ok = all(v is not None and math.isfinite(v) for v in vals) and all(
+            math.isfinite(e) for e in errs)
+        if ok and len(errs) == 2:
+            ok = max(errs) <= SIGMA_JUMP * min(errs)
+        if not ok:
+            dropped.append(k)
+            continue
+        deltas[k] = 0.5 * (b["value"] - a["value"])
+        sigmas[k] = 0.5 * ((a.get("sigma") or 0.0) + (b.get("sigma") or 0.0))
+    return deltas, sigmas, dropped
+
+
 class Source_Budget_Scan(QObject):
     """The generalised propagation (WP-S3, DA3), on SystematicScan's chain.
 
@@ -1074,6 +1106,7 @@ class Source_Budget_Scan(QObject):
                          if s.enabled and s.key and s.sigma > 0]
         self._queue = list(self._sources)
         self._deltas, self._sigmas, self._failed = {}, {}, []
+        self._dropped = {}
         self._draws = (Draw_Sources(self._sources, mc_draws, seed)
                        if mc_draws else None)
         self._mc, self._shift_projects = None, shift_projects
@@ -1101,6 +1134,7 @@ class Source_Budget_Scan(QObject):
             self.finished.emit({
                 "deltas": self._deltas, "sigmas": self._sigmas,
                 "mc": self._mc, "failed": self._failed,
+                "dropped": self._dropped,
                 "table": Source_Budget_Table(
                     self._deltas, self._sigmas, self._sources, self._mc,
                     shift_projects=self._shift_projects)})
@@ -1111,13 +1145,12 @@ class Source_Budget_Scan(QObject):
         else:
             ok = {r["dv"]: r["values"] for r in records if r["status"] == "ok"}
             if len(ok) == 2:
-                minus, plus = ok[min(ok)], ok[max(ok)]
-                self._deltas[self._current] = {
-                    k: 0.5 * (v["value"] - minus[k]["value"])
-                    for k, v in plus.items() if k in minus}
-                self._sigmas.update(
-                    {k: 0.5 * (v["sigma"] + minus[k]["sigma"])
-                     for k, v in plus.items() if k in minus})
+                deltas, sigmas, dropped = _Step_Responses(ok[min(ok)],
+                                                          ok[max(ok)])
+                self._deltas[self._current] = deltas
+                self._sigmas.update(sigmas)
+                if dropped:
+                    self._dropped[self._current] = dropped
             else:
                 self._failed.append(self._current)
         self._Next()
@@ -1146,7 +1179,8 @@ def Source_Budget_Table(deltas, sigmas, sources, mc=None,
 
     def Effect(keys, src, correlation):
         d = deltas.get(src.name, {})
-        if not keys or any(k not in d for k in keys):
+        keys = [k for k in keys if k in d]   # a dropped refit: the rest
+        if not keys:
             return float("nan")
         return Combine_Runs([d[k] for k in keys], [sigmas[k] for k in keys],
                             correlation)
