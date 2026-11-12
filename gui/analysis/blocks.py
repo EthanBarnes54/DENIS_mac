@@ -1376,7 +1376,7 @@ class SourceBlock(AnalysisBlock):
         # destroyed.
         from gui.scan_filter import get_registry as _get_sf_registry
         _get_sf_registry().filters_changed.connect(
-            self.block_changed.emit)
+            self._Relay_Filters_Changed)
 
         # ── Files section ──
         files_grp = QGroupBox("Files")
@@ -2305,6 +2305,12 @@ class SourceBlock(AnalysisBlock):
         """
         from gui.calibration import get_registry
         return get_registry().to_dict()
+
+    def _Relay_Filters_Changed(self):
+        # A slot of the block, not ``block_changed.emit``: Qt drops the
+        # connection with the block, where a bare signal's emit stayed
+        # behind and raised on every later load.
+        self.block_changed.emit()
 
     def _refresh_calibration_badges(self):
         for entry in self._file_entries:
