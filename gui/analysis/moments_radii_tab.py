@@ -597,6 +597,7 @@ def Draw_King_Plot(fig, d):
     ax.fill_between(grid, y - band, y + band, color="#1f77b4", alpha=0.15,
                     lw=0, label="1σ band")
     ax.plot(grid, y, color="#1f77b4", lw=1.2, label=line.get("label", ""))
+    named = set()          # a calibration pair that is also measured: once
     for key, fmt, color, label in (("points", "s", "#c0392b", "fitted pairs"),
                                    ("measured", "o", "#222222", "measured")):
         p = d.get(key) or {}
@@ -605,6 +606,9 @@ def Draw_King_Plot(fig, d):
         ax.errorbar(p["x"], p["y"], xerr=p.get("sx"), yerr=p.get("sy"),
                     fmt=fmt, ms=5, capsize=2, color=color, label=label)
         for x, yv, text in zip(p["x"], p["y"], p.get("labels", [])):
+            if text in named:
+                continue
+            named.add(text)
             ax.annotate(text, (x, yv), textcoords="offset points",
                         xytext=(4, 4), fontsize=8)
     ax.set_xlabel(d.get("xlabel", ""))

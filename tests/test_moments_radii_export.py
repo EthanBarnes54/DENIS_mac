@@ -205,5 +205,24 @@ class Radii_Tab_Tests(unittest.TestCase):
         self.assertEqual(sent[0][0], "Moments_Radii")
 
 
+class King_Plot_Label_Tests(unittest.TestCase):
+
+    def test_A_Pair_Both_Fitted_And_Measured_Is_Named_Once(self):
+        from matplotlib.figure import Figure
+        from gui.analysis.moments_radii_tab import Draw_King_Plot
+        fig = Figure()
+        Draw_King_Plot(fig, {
+            "line": {"slope": 1.0, "intercept": 0.0, "slope_sigma": 0.0,
+                     "intercept_sigma": 0.0, "cov": 0.0,
+                     "label": "York fit"},
+            "points": {"x": [1.0, 2.0], "y": [1.0, 2.0], "sx": [0.1, 0.1],
+                       "sy": [0.1, 0.1], "labels": ["52Fe", "56Fe"]},
+            "measured": {"x": [1.1, 3.0], "y": [1.0, 3.0], "sx": [0.1, 0.1],
+                         "sy": [0.1, 0.1], "labels": ["52Fe", "55Fe"]},
+            "xlabel": "x", "ylabel": "y"})
+        names = [t.get_text() for t in fig.axes[0].texts]
+        self.assertEqual(sorted(names), ["52Fe", "55Fe", "56Fe"])
+
+
 if __name__ == "__main__":
     unittest.main()
